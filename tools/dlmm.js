@@ -446,6 +446,29 @@ export async function getWalletPositions({ wallet_address }) {
   }
 }
 
+// ─── Search Pools by Query ─────────────────────────────────────
+export async function searchPools({ query, limit = 10 }) {
+  const url = `https://dlmm.datapi.meteora.ag/pools?query=${encodeURIComponent(query)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Pool search API error: ${res.status} ${res.statusText}`);
+  const data = await res.json();
+  const pools = (Array.isArray(data) ? data : data.data || []).slice(0, limit);
+  return {
+    query,
+    total: pools.length,
+    pools: pools.map((p) => ({
+      pool: p.address || p.pool_address,
+      name: p.name,
+      bin_step: p.bin_step ?? p.dlmm_params?.bin_step,
+      fee_pct: p.base_fee_percentage ?? p.fee_pct,
+      tvl: p.liquidity,
+      volume_24h: p.trade_volume_24h,
+      token_x: { symbol: p.mint_x_symbol ?? p.token_x?.symbol, mint: p.mint_x ?? p.token_x?.address },
+      token_y: { symbol: p.mint_y_symbol ?? p.token_y?.symbol, mint: p.mint_y ?? p.token_y?.address },
+    })),
+  };
+}
+
 // ─── Claim Fees ────────────────────────────────────────────────
 export async function claimFees({ position_address }) {
   position_address = normalizeMint(position_address);

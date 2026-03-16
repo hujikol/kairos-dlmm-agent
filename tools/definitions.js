@@ -390,6 +390,34 @@ Always provide a reason. This is logged as a lesson and visible in future cycles
   {
     type: "function",
     function: {
+      name: "search_pools",
+      description: `Search for DLMM pools by token symbol, ticker, or contract address (CA).
+Use this when the user asks to deploy into a specific token or pool by name/CA,
+or when you want to find pools for a specific token outside of the normal screening flow.
+
+Examples: "find pools for ROSIE", "search BONK pools", "look up pool for CA abc123..."
+
+Returns pool address, name, bin_step, fee %, TVL, volume, and token mints.`,
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Token symbol, ticker name, or contract address to search for"
+          },
+          limit: {
+            type: "number",
+            description: "Max results to return (default 10)"
+          }
+        },
+        required: ["query"]
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
       name: "get_top_lpers",
       description: `Get the top LPers for a pool by address — quick read-only lookup.
 Use this when the user asks "who are the top LPers in this pool?" or wants to

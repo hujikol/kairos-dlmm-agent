@@ -7,6 +7,7 @@ import {
   getPositionPnl,
   claimFees,
   closePosition,
+  searchPools,
 } from "./dlmm.js";
 import { getWalletBalances, swapToken } from "./wallet.js";
 import { studyTopLPers } from "./study.js";
@@ -36,6 +37,7 @@ const toolMap = {
   deploy_position: deployPosition,
   get_my_positions: getMyPositions,
   get_wallet_positions: getWalletPositions,
+  search_pools: searchPools,
   claim_fees: claimFees,
   close_position: closePosition,
   get_wallet_balance: getWalletBalances,
