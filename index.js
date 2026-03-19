@@ -191,8 +191,9 @@ REPORT FORMAT (one per position):
         log("cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
         return;
       }
-      if (preBalance.sol < config.management.minSolToOpen) {
-        log("cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${config.management.minSolToOpen})`);
+      const minRequired = config.management.deployAmountSol + config.management.gasReserve;
+      if (preBalance.sol < minRequired) {
+        log("cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
         return;
       }
     } catch (e) {
