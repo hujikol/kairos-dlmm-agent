@@ -137,6 +137,9 @@ const toolMap = {
       timeframe: ["screening", "timeframe"],
       category: ["screening", "category"],
       minTokenFeesSol: ["screening", "minTokenFeesSol"],
+      maxBundlersPct: ["screening", "maxBundlersPct"],
+      maxTop10Pct: ["screening", "maxTop10Pct"],
+      minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],
       autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
