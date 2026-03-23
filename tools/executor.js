@@ -389,6 +389,12 @@ async function runSafetyChecks(name, args) {
         }
       }
 
+      // Force tokenX-only if bins_above > 0 and bins_below = 0 (sell-side position)
+      if ((args.bins_below === 0 || args.bins_below == null) && args.bins_above > 0 && args.amount_x > 0) {
+        args.amount_y = 0;
+        args.amount_sol = 0;
+      }
+
       // Check amount limits
       const amountY = args.amount_y ?? args.amount_sol ?? 0;
       if (amountY <= 0 && (!args.amount_x || args.amount_x <= 0)) {
