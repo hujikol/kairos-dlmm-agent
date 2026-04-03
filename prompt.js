@@ -10,6 +10,8 @@
  * @returns {string} - Complete system prompt
  */
 import { config } from "./config.js";
+import { getStrategyStats } from "./lessons.js";
+import { getRulesForPrompt } from "./postmortem.js";
 
 export function buildSystemPrompt(agentType, portfolio, positions, stateSummary = null, lessons = null, perfSummary = null) {
   const s = config.screening;
@@ -111,6 +113,14 @@ TOKEN TAGS: dev_sold_all=BULLISH, dev_buying_more=BULLISH, smart_money_buy=BULLI
 IMPORTANT: fee_active_tvl_ratio values are ALREADY in percentage form. Do NOT multiply by 100.
 Current screening timeframe: ${config.screening.timeframe}
 
+${(() => {
+  const stats = getStrategyStats();
+  const stratKeys = Object.keys(stats);
+  return stratKeys.length > 0
+    ? `STRATEGY PERFORMANCE (from your history):\n${stratKeys.map(s => `  ${s}: win_rate=${stats[s].win_rate}%, avg_pnl=${stats[s].avg_pnl}%, samples=${stats[s].sample_size}`).join("\n")}\nPrefer strategies with higher win rates. Avoid strategies that consistently lose.\n`
+    : "";
+})()}
+${(() => { const pm = getRulesForPrompt(); return pm ? pm + "\n" : ""; })()}
 ${lessons ? `LESSONS LEARNED:\n${lessons}\n` : ""}Timestamp: ${new Date().toISOString()}
 `;
   } else if (agentType === "MANAGER") {

@@ -96,8 +96,25 @@ export function recordPoolDeploy(poolAddress, deployData) {
     entry.base_mint = deployData.base_mint;
   }
 
-  // Set cooldown for low yield closes — pool wasn't profitable enough, don't redeploy soon
-  if (deploy.close_reason === "low yield") {
+  // ── Smart cooldown: learn from repeat losses ───────────────────
+  const recentDeploys = entry.deploys.slice(-5);
+  const recentLosses = recentDeploys.filter(d => (d.pnl_pct ?? 0) < -5);
+
+  if (recentLosses.length >= 2) {
+    // 2+ losses in last 5 deploys → escalating cooldown
+    const cooldownHours = recentLosses.length >= 3 ? 48 : 12;
+    entry.cooldown_until = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
+    entry.notes.push({
+      note: `Auto-blacklisted for ${cooldownHours}h: ${recentLosses.length} losses in last ${recentDeploys.length} deploys`,
+      added_at: new Date().toISOString(),
+    });
+    log("pool-memory", `Extended cooldown for ${entry.name}: ${cooldownHours}h (${recentLosses.length} recent losses)`);
+  } else if ((deploy.pnl_pct ?? 0) < -15) {
+    // Single large loss → 8h cooldown
+    const cooldownHours = 8;
+    entry.cooldown_until = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
+    log("pool-memory", `${cooldownHours}h cooldown for ${entry.name}: large loss (${deploy.pnl_pct}%)`);
+  } else if (deploy.close_reason === "low yield") {
     const cooldownHours = 4;
     entry.cooldown_until = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
     log("pool-memory", `Cooldown set for ${entry.name} until ${entry.cooldown_until} (low yield close)`);
@@ -113,6 +130,29 @@ export function isPoolOnCooldown(poolAddress) {
   const entry = db[poolAddress];
   if (!entry?.cooldown_until) return false;
   return new Date(entry.cooldown_until) > new Date();
+}
+
+/**
+ * Check if a base token is "toxic" — consistently losing across pools.
+ * Returns true if the token has 3+ deploys with >66% loss rate.
+ * Used in screening pipeline to avoid repeat losers.
+ */
+export function isTokenToxic(baseMint) {
+  if (!baseMint) return false;
+  const db = load();
+
+  let totalDeploys = 0;
+  let totalLosses = 0;
+
+  for (const entry of Object.values(db)) {
+    if (entry.base_mint !== baseMint) continue;
+    for (const d of entry.deploys) {
+      totalDeploys++;
+      if ((d.pnl_pct ?? 0) < -5) totalLosses++;
+    }
+  }
+
+  return totalDeploys >= 3 && (totalLosses / totalDeploys) > 0.66;
 }
 
 // ─── Read ──────────────────────────────────────────────────────

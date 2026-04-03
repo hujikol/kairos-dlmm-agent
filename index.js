@@ -13,7 +13,7 @@ import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isE
 import { generateBriefing } from "./briefing.js";
 import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
-import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
+import { recordPositionSnapshot, recallForPool, addPoolNote, isTokenToxic } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
 
@@ -362,7 +362,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
       };
     }));
 
-    // Hard filters after token recon — block launchpads and excessive Jupiter bot holders
+    // Hard filters after token recon — block launchpads, excessive bots, and toxic tokens
     const passing = allCandidates.filter(({ pool, ti }) => {
       const launchpad = ti?.launchpad ?? null;
       if (launchpad && config.screening.blockedLaunchpads.includes(launchpad)) {
@@ -373,6 +373,12 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const maxBotHoldersPct = config.screening.maxBotHoldersPct;
       if (botPct != null && maxBotHoldersPct != null && botPct > maxBotHoldersPct) {
         log("screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
+        return false;
+      }
+      // Token toxicity check — skip tokens that consistently lose across pools
+      const baseMint = pool.base?.mint;
+      if (baseMint && isTokenToxic(baseMint)) {
+        log("screening", `Toxic token filter: dropped ${pool.name} — base token has >66% loss rate across 3+ deploys`);
         return false;
       }
       return true;
@@ -528,7 +534,7 @@ export function startCronJobs() {
     }
   }, 30_000);
 
-  _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog];
+  _cronTasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
   // Store interval ref so stopCronJobs can clear it
   _cronTasks._pnlPollInterval = pnlPollInterval;
   log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);

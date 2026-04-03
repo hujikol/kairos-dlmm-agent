@@ -69,6 +69,7 @@ export function trackPosition({
   organic_score,
   initial_value_usd,
   signal_snapshot = null,
+  base_mint = null,
 }) {
   const state = load();
   state.positions[position] = {
@@ -87,6 +88,7 @@ export function trackPosition({
     organic_score,
     initial_value_usd,
     signal_snapshot: signal_snapshot || null,
+    base_mint: base_mint || null,
     deployed_at: new Date().toISOString(),
     out_of_range_since: null,
     last_claim_at: null,
@@ -305,6 +307,19 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
 
   if (changed) save(state);
 
+  // ── Volatility-adaptive adjustments ────────────────────────────
+  // Higher volatility → less patience for OOR, wider trailing to avoid whipsaws
+  const vol = pos.volatility ?? 3;
+  const oorWait = vol >= 7
+    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * 0.5)   // very volatile: half patience
+    : vol >= 4
+    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * 0.75)  // moderate: 75% patience
+    : mgmtConfig.outOfRangeWaitMinutes;                     // low vol: full patience
+
+  const adaptiveTrailingDrop = vol >= 7
+    ? mgmtConfig.trailingDropPct * 1.5    // volatile: wider trailing to avoid whipsaws
+    : mgmtConfig.trailingDropPct;
+
   // ── Stop loss ──────────────────────────────────────────────────
   if (currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
     return {
@@ -316,10 +331,10 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   // ── Trailing TP ────────────────────────────────────────────────
   if (pos.trailing_active) {
     const dropFromPeak = pos.peak_pnl_pct - currentPnlPct;
-    if (dropFromPeak >= mgmtConfig.trailingDropPct) {
+    if (dropFromPeak >= adaptiveTrailingDrop) {
       return {
         action: "TRAILING_TP",
-        reason: `Trailing TP: peak ${pos.peak_pnl_pct.toFixed(2)}% → current ${currentPnlPct.toFixed(2)}% (dropped ${dropFromPeak.toFixed(2)}% >= ${mgmtConfig.trailingDropPct}%)`,
+        reason: `Trailing TP: peak ${pos.peak_pnl_pct.toFixed(2)}% → current ${currentPnlPct.toFixed(2)}% (dropped ${dropFromPeak.toFixed(2)}% >= ${adaptiveTrailingDrop.toFixed(1)}%${vol >= 7 ? " [vol-adaptive]" : ""})`,
       };
     }
   }
@@ -327,10 +342,10 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   // ── Out of range too long ──────────────────────────────────────
   if (pos.out_of_range_since) {
     const minutesOOR = Math.floor((Date.now() - new Date(pos.out_of_range_since).getTime()) / 60000);
-    if (minutesOOR >= mgmtConfig.outOfRangeWaitMinutes) {
+    if (minutesOOR >= oorWait) {
       return {
         action: "OUT_OF_RANGE",
-        reason: `Out of range for ${minutesOOR}m (limit: ${mgmtConfig.outOfRangeWaitMinutes}m)`,
+        reason: `Out of range for ${minutesOOR}m (limit: ${oorWait}m${vol >= 4 ? ` [vol-adaptive from ${mgmtConfig.outOfRangeWaitMinutes}m]` : ""})`,
       };
     }
   }

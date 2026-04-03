@@ -121,6 +121,14 @@ export async function recordPerformance(perf) {
     });
   }
 
+  // Post-mortem analysis — generates hard rules from losing patterns
+  try {
+    const { analyzeClose } = await import("./postmortem.js");
+    analyzeClose(entry, data.performance);
+  } catch (e) {
+    log("postmortem_error", `Post-mortem analysis failed: ${e.message}`);
+  }
+
   // Evolve thresholds every 5 closed positions
   if (data.performance.length % MIN_EVOLVE_POSITIONS === 0) {
     const { config, reloadScreeningThresholds } = await import("./config.js");
@@ -229,37 +237,34 @@ export function evolveThresholds(perfData, config) {
   const changes   = {};
   const rationale = {};
 
-  // ── 1. maxVolatility ─────────────────────────────────────────
-  // If losers tend to cluster at higher volatility → tighten the ceiling.
-  // If winners span higher volatility safely → we can loosen a bit.
+  // ── 1. maxBinStep ─────────────────────────────────────────
+  // If losers cluster at higher bin steps → tighten the ceiling.
+  // If winners span higher bin steps safely → loosen a bit.
   {
-    const winnerVols = winners.map((p) => p.volatility).filter(isFiniteNum);
-    const loserVols  = losers.map((p) => p.volatility).filter(isFiniteNum);
-    const current    = config.screening.maxVolatility;
+    const winnerBinSteps = winners.map((p) => p.bin_step).filter(isFiniteNum);
+    const loserBinSteps  = losers.map((p) => p.bin_step).filter(isFiniteNum);
+    const current        = config.screening.maxBinStep;
 
-    if (loserVols.length >= 2) {
-      // 25th percentile of loser volatilities — this is where things start going wrong
-      const loserP25 = percentile(loserVols, 25);
+    if (loserBinSteps.length >= 2) {
+      const loserP25 = percentile(loserBinSteps, 25);
       if (loserP25 < current) {
-        // Tighten: new ceiling = loserP25 + a small buffer
-        const target  = loserP25 * 1.15;
-        const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 1.0, 20.0);
-        const rounded = Number(newVal.toFixed(1));
+        const target  = loserP25 * 1.05;
+        const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 60, 200);
+        const rounded = Math.round(newVal);
         if (rounded < current) {
-          changes.maxVolatility = rounded;
-          rationale.maxVolatility = `Losers clustered at volatility ~${loserP25.toFixed(1)} — tightened from ${current} → ${rounded}`;
+          changes.maxBinStep = rounded;
+          rationale.maxBinStep = `Losers clustered at bin_step ~${loserP25.toFixed(0)} — tightened from ${current} → ${rounded}`;
         }
       }
-    } else if (winnerVols.length >= 3 && losers.length === 0) {
-      // All winners so far — loosen conservatively so we don't miss good pools
-      const winnerP75 = percentile(winnerVols, 75);
-      if (winnerP75 > current * 1.1) {
-        const target  = winnerP75 * 1.1;
-        const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 1.0, 20.0);
-        const rounded = Number(newVal.toFixed(1));
+    } else if (winnerBinSteps.length >= 3 && losers.length === 0) {
+      const winnerP75 = percentile(winnerBinSteps, 75);
+      if (winnerP75 > current * 1.05) {
+        const target  = winnerP75 * 1.05;
+        const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 60, 200);
+        const rounded = Math.round(newVal);
         if (rounded > current) {
-          changes.maxVolatility = rounded;
-          rationale.maxVolatility = `All ${winners.length} positions profitable — loosened from ${current} → ${rounded}`;
+          changes.maxBinStep = rounded;
+          rationale.maxBinStep = `All ${winners.length} positions profitable — loosened from ${current} → ${rounded}`;
         }
       }
     }
@@ -273,10 +278,9 @@ export function evolveThresholds(perfData, config) {
     const current    = config.screening.minFeeActiveTvlRatio;
 
     if (winnerFees.length >= 2) {
-      // Minimum fee/TVL among winners — we know pools below this don't work for us
       const minWinnerFee = Math.min(...winnerFees);
       if (minWinnerFee > current * 1.2) {
-        const target  = minWinnerFee * 0.85; // stay slightly below min winner
+        const target  = minWinnerFee * 0.85;
         const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 0.05, 10.0);
         const rounded = Number(newVal.toFixed(2));
         if (rounded > current) {
@@ -287,8 +291,6 @@ export function evolveThresholds(perfData, config) {
     }
 
     if (loserFees.length >= 2) {
-      // If losers all had high fee/TVL, that's noise (pumps then crash) — don't raise min
-      // But if losers had low fee/TVL, raise min
       const maxLoserFee = Math.max(...loserFees);
       if (maxLoserFee < current * 1.5 && winnerFees.length > 0) {
         const minWinnerFee = Math.min(...winnerFees);
@@ -306,7 +308,6 @@ export function evolveThresholds(perfData, config) {
   }
 
   // ── 3. minOrganic ─────────────────────────────────────────────
-  // Raise organic floor if low-organic tokens consistently failed.
   {
     const loserOrganics  = losers.map((p) => p.organic_score).filter(isFiniteNum);
     const winnerOrganics = winners.map((p) => p.organic_score).filter(isFiniteNum);
@@ -315,9 +316,7 @@ export function evolveThresholds(perfData, config) {
     if (loserOrganics.length >= 2 && winnerOrganics.length >= 1) {
       const avgLoserOrganic  = avg(loserOrganics);
       const avgWinnerOrganic = avg(winnerOrganics);
-      // Only raise if there's a clear gap (winners consistently more organic)
       if (avgWinnerOrganic - avgLoserOrganic >= 10) {
-        // Set floor just below worst winner
         const minWinnerOrganic = Math.min(...winnerOrganics);
         const target = Math.max(minWinnerOrganic - 3, current);
         const newVal = clamp(Math.round(nudge(current, target, MAX_CHANGE_PER_STEP)), 60, 90);
@@ -329,7 +328,33 @@ export function evolveThresholds(perfData, config) {
     }
   }
 
-  if (Object.keys(changes).length === 0) return { changes: {}, rationale: {} };
+  // ── 4. Hold duration analysis by volatility bucket ───────────
+  // Informational — surfaces insights as rationale even if no threshold changes
+  {
+    const buckets = { low: [], medium: [], high: [] };
+    for (const p of perfData) {
+      if (!isFiniteNum(p.volatility) || !isFiniteNum(p.minutes_held)) continue;
+      const bucket = p.volatility < 3 ? "low" : p.volatility < 7 ? "medium" : "high";
+      buckets[bucket].push(p);
+    }
+
+    for (const [bucket, positions] of Object.entries(buckets)) {
+      if (positions.length < 3) continue;
+      const bWinners = positions.filter(p => p.pnl_pct > 0);
+      const bLosers = positions.filter(p => p.pnl_pct < -5);
+
+      if (bWinners.length > 0 && bLosers.length > 0) {
+        const avgWinHold = avg(bWinners.map(p => p.minutes_held));
+        const avgLossHold = avg(bLosers.map(p => p.minutes_held));
+
+        if (avgLossHold > avgWinHold * 1.5) {
+          rationale[`hold_${bucket}`] = `${bucket}-vol: winners held ~${Math.round(avgWinHold)}m vs losers ~${Math.round(avgLossHold)}m — holding losers too long`;
+        }
+      }
+    }
+  }
+
+  if (Object.keys(changes).length === 0) return { changes: {}, rationale };
 
   // ── Persist changes to user-config.json ───────────────────────
   let userConfig = {};
@@ -345,9 +370,9 @@ export function evolveThresholds(perfData, config) {
 
   // Apply to live config object immediately
   const s = config.screening;
-  if (changes.maxVolatility    != null) s.maxVolatility    = changes.maxVolatility;
-  if (changes.minFeeActiveTvlRatio   != null) s.minFeeActiveTvlRatio   = changes.minFeeActiveTvlRatio;
-  if (changes.minOrganic       != null) s.minOrganic       = changes.minOrganic;
+  if (changes.maxBinStep           != null) s.maxBinStep         = changes.maxBinStep;
+  if (changes.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = changes.minFeeActiveTvlRatio;
+  if (changes.minOrganic           != null) s.minOrganic         = changes.minOrganic;
 
   // Log a lesson summarizing the evolution
   const data = load();
@@ -361,6 +386,38 @@ export function evolveThresholds(perfData, config) {
   save(data);
 
   return { changes, rationale };
+}
+
+// ─── Strategy Performance Stats ────────────────────────────────
+
+/**
+ * Compute per-strategy win rate, avg PnL, and range efficiency
+ * from closed position history. Injected into SCREENER prompt.
+ */
+export function getStrategyStats() {
+  const data = load();
+  const byStrategy = {};
+
+  for (const p of data.performance) {
+    const key = p.strategy || "unknown";
+    if (!byStrategy[key]) {
+      byStrategy[key] = { wins: 0, losses: 0, total_pnl: 0, total_range_eff: 0, count: 0 };
+    }
+    const s = byStrategy[key];
+    s.count++;
+    if (p.pnl_pct > 0) s.wins++; else s.losses++;
+    s.total_pnl += p.pnl_pct;
+    s.total_range_eff += p.range_efficiency;
+  }
+
+  return Object.fromEntries(
+    Object.entries(byStrategy).map(([strat, s]) => [strat, {
+      win_rate: Math.round((s.wins / s.count) * 100),
+      avg_pnl: Math.round((s.total_pnl / s.count) * 100) / 100,
+      avg_range_efficiency: Math.round((s.total_range_eff / s.count) * 10) / 10,
+      sample_size: s.count,
+    }])
+  );
 }
 
 // ─── Helpers ───────────────────────────────────────────────────

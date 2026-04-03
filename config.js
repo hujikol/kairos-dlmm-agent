@@ -104,23 +104,30 @@ export const config = {
 
 /**
  * Compute the optimal deploy amount for a given wallet balance.
- * Scales position size with wallet growth (compounding).
+ * Scales position size with wallet growth (compounding) and conviction level.
  *
- * Formula: clamp(deployable × positionSizePct, floor=deployAmountSol, ceil=maxDeployAmount)
+ * @param {number} walletSol - Current wallet SOL balance
+ * @param {string} conviction - "low" | "medium" | "high" — scales position size
+ *
+ * Formula: clamp(deployable × positionSizePct × convictionMult, floor=deployAmountSol, ceil=maxDeployAmount)
  *
  * Examples (defaults: gasReserve=0.2, positionSizePct=0.35, floor=0.5):
- *   0.8 SOL wallet → 0.6 SOL deploy  (floor)
- *   2.0 SOL wallet → 0.63 SOL deploy
- *   3.0 SOL wallet → 0.98 SOL deploy
- *   4.0 SOL wallet → 1.33 SOL deploy
+ *   0.8 SOL wallet, medium → 0.6 SOL deploy  (floor)
+ *   2.0 SOL wallet, medium → 0.63 SOL deploy
+ *   3.0 SOL wallet, high   → 1.27 SOL deploy  (1.3× boost)
+ *   4.0 SOL wallet, low    → 0.80 SOL deploy  (0.6× reduction)
  */
-export function computeDeployAmount(walletSol) {
+export function computeDeployAmount(walletSol, conviction = "medium") {
   const reserve  = config.management.gasReserve      ?? 0.2;
   const pct      = config.management.positionSizePct ?? 0.35;
   const floor    = config.management.deployAmountSol;
   const ceil     = config.risk.maxDeployAmount;
+
+  // Conviction scaling: low=0.6x, medium=1.0x, high=1.3x
+  const convictionMultiplier = { low: 0.6, medium: 1.0, high: 1.3 }[conviction] || 1.0;
+
   const deployable = Math.max(0, walletSol - reserve);
-  const dynamic    = deployable * pct;
+  const dynamic    = deployable * pct * convictionMultiplier;
   const result     = Math.min(ceil, Math.max(floor, dynamic));
   return parseFloat(result.toFixed(2));
 }
