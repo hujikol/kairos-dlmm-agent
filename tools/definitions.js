@@ -6,21 +6,7 @@ export const tools = [
     type: "function",
     function: {
       name: "discover_pools",
-      description: `Fetch top DLMM pools from the Meteora Pool Discovery API.
-Pools are pre-filtered for safety:
-- No critical warnings on base/quote tokens
-- No high single ownership on base token
-- Base token market cap >= $150k
-- Base token holders >= 100
-- Volume >= $1k (in timeframe)
-- Active TVL >= $10k
-- Fee/Active TVL ratio >= 0.01 (in timeframe)
-- Both tokens organic score >= 60
-
-Returns condensed pool data: address, name, tokens, bin_step, fee_pct,
-active_tvl, fee_window, volume_window, fee_tvl_ratio, volatility, organic_score,
-holders, mcap, active_positions, price_change_pct, warning count.
-
+      description: `Fetch top DLMM pools from Meteora. Returns safe candidates pre-filtered by fees, volume, liquidity, etc.
 Use this as the primary tool for finding new LP opportunities.`,
       parameters: {
         type: "object",
@@ -100,13 +86,7 @@ IMPORTANT: Only call this with a real pool address from get_my_positions or get_
     type: "function",
     function: {
       name: "get_active_bin",
-      description: `Get the current active bin and price for a DLMM pool.
-This is an on-chain call via the SDK. Returns:
-- binId: the current active bin number
-- price: human-readable price (token X per token Y)
-- pricePerLamport: raw price in lamports
-
-Only call this if you need the current price to calculate a specific bin range (e.g. user requested a % range). Do NOT call before every deploy — deploy_position fetches the active bin internally.`,
+      description: `Get the current active bin and price. Do NOT call before every deploy — deploy_position fetches the active bin internally.`,
       parameters: {
         type: "object",
         properties: {
@@ -124,22 +104,7 @@ Only call this if you need the current price to calculate a specific bin range (
     type: "function",
     function: {
       name: "deploy_position",
-      description: `Open a new DLMM liquidity position.
-
-PRIORITY ORDER for strategy and bins:
-1. User explicitly specifies → always follow exactly (user override is absolute)
-2. No user spec → use active strategy's lp_strategy and choose bins based on volatility
-
-HARD RULES:
-- Never use 'curve'.
-- Bin Step: Only deploy in pools with bin_step between 80 and 125.
-
-Guidelines (only when user hasn't specified):
-- Strategy: use the active strategy's lp_strategy field (bid_ask or spot)
-- Bins: choose 35–69 for standard volatility; up to 350 for wide-range strategies. Max 1400 total.
-- Deposit: Can be single-sided (SOL only or Base only) or dual-sided.
-
-WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
+      description: `Open a new DLMM position. Executes on-chain. Rules for strategy/bins are in the system prompt.`,
       parameters: {
         type: "object",
         properties: {
@@ -496,16 +461,7 @@ Returns: organic score, holder count, mcap, liquidity, audit flags (mint/freeze 
     type: "function",
     function: {
       name: "get_token_holders",
-      description: `Get holder distribution for a token by mint address.
-Fetches top 100 holders — use limit to control how many to display (default 20).
-Each holder includes: address, amount, % of supply, SOL balance, tags (Pool/AMM/etc), and funding info (who funded this wallet, amount, slot).
-is_pool=true means it's a liquidity pool address, not a real holder — filter these out when analyzing concentration.
-
-Also returns global_fees_sol — total priority/jito tips paid by ALL traders on this token (NOT Meteora LP fees).
-This is a key signal: low global_fees_sol means transactions are bundled or the token is a scam.
-HARD GATE: if global_fees_sol < config.screening.minTokenFeesSol (default 30), do NOT deploy.
-
-NOTE: Requires mint address. If you only have a symbol/name, call get_token_info first to resolve the mint.`,
+      description: `Get holder distribution. Returns top holders, global_fees_sol (tips/bribes paid on token), and supply %. Requires mint string.`,
       parameters: {
         type: "object",
         properties: {
@@ -521,21 +477,7 @@ NOTE: Requires mint address. If you only have a symbol/name, call get_token_info
     type: "function",
     function: {
       name: "get_token_narrative",
-      description: `Get the narrative or story behind a token from Jupiter ChainInsight.
-Returns a plain-text description of what the token is about — its origin, theme, community, and activity.
-Use during token evaluation to understand if there is a real catalyst driving attention and volume.
-
-GOOD narrative signals (proceed with more confidence):
-- Specific origin story: tied to a real-world event, viral moment, person, animal, place, or cultural reference
-- Active community: mentions contests, donations, real-world actions, organized activities
-- Trending catalyst: references something currently viral on X/CT (KOL call, news event, meme wave)
-- Named entities: real identifiable subjects (a specific animal, person, project, game, etc.)
-
-BAD narrative signals (caution or skip):
-- Empty or null — no story at all
-- Pure hype/financial language only: "next 100x", "to the moon", "fair launch gem" with no substance
-- Completely generic: "community-driven token", "meme coin" with zero specific context
-- Copy-paste of another token's narrative`,
+      description: `Get the plain-text narrative/story of a token from Jupiter ChainInsight. Use to evaluate catalysts. Narrative judgment rules are in the system prompt.`,
       parameters: {
         type: "object",
         properties: {

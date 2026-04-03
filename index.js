@@ -267,16 +267,16 @@ RULES:
 
 Execute the required actions. Do NOT re-evaluate CLOSE/CLAIM — rules already applied. Just execute.
 After executing, write a brief one-line result per position.
-      `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, 2048);
+      `, Math.min(config.llm.maxSteps, 5), [], "MANAGER", config.llm.managementModel, 2048, { positions: livePositions });
 
       mgmtReport += `\n\n${content}`;
     } else {
       log("cron", "Management: all positions STAY — skipping LLM");
     }
 
-    // Trigger screening after management
-    const afterPositions = await getMyPositions({ force: true }).catch(() => null);
-    const afterCount = afterPositions?.positions?.length ?? 0;
+    // Trigger screening after management if we expect to be under max positions
+    const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
+    const afterCount = Math.max(0, positions.length - closesAttempted);
     if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > screeningCooldownMs) {
       log("cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
       runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
@@ -345,23 +345,22 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const topCandidates = await getTopCandidates({ limit: 10 }).catch(() => null);
     const candidates = (topCandidates?.candidates || topCandidates?.pools || []).slice(0, 10);
 
-    const allCandidates = [];
-    for (const pool of candidates) {
+    const allCandidates = await Promise.all(candidates.map(async (pool, idx) => {
+      await new Promise(r => setTimeout(r, idx * 100)); // staggered parallel execution
       const mint = pool.base?.mint;
       const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
         checkSmartWalletsOnPool({ pool_address: pool.pool }),
         mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
         mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
       ]);
-      allCandidates.push({
+      return {
         pool,
         sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
         n: narrative.status === "fulfilled" ? narrative.value : null,
         ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
         mem: recallForPool(pool.pool),
-      });
-      await new Promise(r => setTimeout(r, 150)); // avoid 429s
-    }
+      };
+    }));
 
     // Hard filters after token recon — block launchpads and excessive Jupiter bot holders
     const passing = allCandidates.filter(({ pool, ti }) => {
@@ -464,7 +463,7 @@ STEPS:
    Decision: NO DEPLOY
    analysis: <2-4 sentences explaining why current candidates were rejected>
    rejected: <short semicolon-separated reasons for the top candidates that were skipped>
-      `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, 2048);
+      `, Math.min(config.llm.maxSteps, 4), [], "SCREENER", config.llm.screeningModel, 2048);
     screenReport = content;
   } catch (error) {
     log("cron_error", `Screening cycle failed: ${error.message}`);
@@ -489,22 +488,7 @@ export function startCronJobs() {
 
   const screenTask = cron.schedule(`*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`, runScreeningCycle);
 
-  const healthTask = cron.schedule(`0 * * * *`, async () => {
-    if (_managementBusy) return;
-    _managementBusy = true;
-    log("cron", "Starting health check");
-    try {
-      await agentLoop(`
-HEALTH CHECK
 
-Summarize the current portfolio health, total fees earned, and performance of all open positions. Recommend any high-level adjustments if needed.
-      `, config.llm.maxSteps, [], "MANAGER");
-    } catch (error) {
-      log("cron_error", `Health check failed: ${error.message}`);
-    } finally {
-      _managementBusy = false;
-    }
-  });
 
   // Morning Briefing at 8:00 AM UTC+7 (1:00 AM UTC)
   const briefingTask = cron.schedule(`0 1 * * *`, async () => {

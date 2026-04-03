@@ -95,9 +95,14 @@ function shouldRequireRealToolUse(goal, agentType, requireTool) {
  * @returns {string} - The agent's final text response
  */
 export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
-  const { requireTool = false } = options;
+  const { requireTool = false, portfolio: prePortfolio, positions: prePositions } = options;
   // Build dynamic system prompt with current portfolio state
-  const [portfolio, positions] = await Promise.all([getWalletBalances(), getMyPositions()]);
+  const [portfolio, positions] = agentType === "SCREENER"
+    ? [{ sol: "see goal" }, { positions: [] }]
+    : await Promise.all([
+        prePortfolio || getWalletBalances(),
+        prePositions || getMyPositions()
+      ]);
   const stateSummary = getStateSummary();
   const lessons = getLessonsForPrompt({ agentType });
   const perfSummary = getPerformanceSummary();

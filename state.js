@@ -15,25 +15,38 @@ const STATE_FILE = "./state.json";
 
 const MAX_RECENT_EVENTS = 20;
 
+let _stateCache = null;
+let _saveTimeout = null;
+
 function load() {
+  if (_stateCache) return _stateCache;
   if (!fs.existsSync(STATE_FILE)) {
-    return { positions: {}, recentEvents: [], lastUpdated: null };
+    _stateCache = { positions: {}, recentEvents: [], lastUpdated: null };
+    return _stateCache;
   }
   try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    _stateCache = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    return _stateCache;
   } catch (err) {
     log("state_error", `Failed to read state.json: ${err.message}`);
-    return { positions: {}, lastUpdated: null };
+    _stateCache = { positions: {}, lastUpdated: null };
+    return _stateCache;
   }
 }
 
 function save(state) {
-  try {
-    state.lastUpdated = new Date().toISOString();
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-  } catch (err) {
-    log("state_error", `Failed to write state.json: ${err.message}`);
-  }
+  _stateCache = state;
+  if (_saveTimeout) return;
+  _saveTimeout = setTimeout(() => {
+    try {
+      state.lastUpdated = new Date().toISOString();
+      fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    } catch (err) {
+      log("state_error", `Failed to write state.json: ${err.message}`);
+    } finally {
+      _saveTimeout = null;
+    }
+  }, 1000);
 }
 
 // ─── Position Registry ─────────────────────────────────────────
