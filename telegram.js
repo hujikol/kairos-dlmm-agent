@@ -37,6 +37,32 @@ function saveChatId(id) {
 
 loadChatId();
 
+// ─── Queue System & Rate Limiting ────────────────────────────────
+const _outboundQueue = [];
+let _isSending = false;
+
+async function processQueue() {
+  if (_isSending || _outboundQueue.length === 0) return;
+  _isSending = true;
+
+  while (_outboundQueue.length > 0) {
+    const task = _outboundQueue.shift();
+    try {
+      await task();
+    } catch (e) {
+      log("telegram_error", `Queue task failed: ${e.message}`);
+    }
+    await sleep(1500); // 1.5s delay between messages to respect Telegram limits
+  }
+
+  _isSending = false;
+}
+
+function enqueueMessage(task) {
+  _outboundQueue.push(task);
+  processQueue();
+}
+
 // ─── Core send ───────────────────────────────────────────────────
 export function isEnabled() {
   return !!TOKEN;
@@ -44,43 +70,63 @@ export function isEnabled() {
 
 export async function sendMessage(text) {
   if (!TOKEN || !chatId) return;
-  try {
-    const res = await fetch(`${BASE}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: String(text).slice(0, 4096),
-      }),
+  return new Promise((resolve) => {
+    enqueueMessage(async () => {
+      try {
+        const res = await fetch(`${BASE}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: String(text).slice(0, 4096),
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          if (res.status === 429) {
+            log("telegram_error", `Rate limited (429). Stalling queue...`);
+            await sleep(5000);
+          } else {
+            log("telegram_error", `sendMessage ${res.status}: ${err.slice(0, 100)}`);
+          }
+        }
+      } catch (e) {
+        log("telegram_error", `sendMessage failed: ${e.message}`);
+      }
+      resolve();
     });
-    if (!res.ok) {
-      const err = await res.text();
-      log("telegram_error", `sendMessage ${res.status}: ${err.slice(0, 100)}`);
-    }
-  } catch (e) {
-    log("telegram_error", `sendMessage failed: ${e.message}`);
-  }
+  });
 }
 
 export async function sendHTML(html) {
   if (!TOKEN || !chatId) return;
-  try {
-    const res = await fetch(`${BASE}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: html.slice(0, 4096),
-        parse_mode: "HTML",
-      }),
+  return new Promise((resolve) => {
+    enqueueMessage(async () => {
+      try {
+        const res = await fetch(`${BASE}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: html.slice(0, 4096),
+            parse_mode: "HTML",
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          if (res.status === 429) {
+            log("telegram_error", `Rate limited (429). Stalling queue...`);
+            await sleep(5000);
+          } else {
+            log("telegram_error", `sendHTML ${res.status}: ${err.slice(0, 100)}`);
+          }
+        }
+      } catch (e) {
+        log("telegram_error", `sendHTML failed: ${e.message}`);
+      }
+      resolve();
     });
-    if (!res.ok) {
-      const err = await res.text();
-      log("telegram_error", `sendHTML ${res.status}: ${err.slice(0, 100)}`);
-    }
-  } catch (e) {
-    log("telegram_error", `sendHTML failed: ${e.message}`);
-  }
+  });
 }
 
 

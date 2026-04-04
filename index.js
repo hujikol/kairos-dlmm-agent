@@ -316,10 +316,13 @@ export async function runScreeningCycle({ silent = false } = {}) {
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
-    if (preBalance.sol < minRequired) {
+    if (preBalance.sol < minRequired && process.env.DRY_RUN !== "true") {
       log("cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
       _screeningBusy = false;
       return null;
+    }
+    if (preBalance.sol < minRequired && process.env.DRY_RUN === "true") {
+      log("cron", `DRY RUN — bypassing SOL check (${preBalance.sol.toFixed(3)} SOL, would need ${minRequired})`);
     }
   } catch (e) {
     log("cron_error", `Screening pre-check failed: ${e.message}`);
