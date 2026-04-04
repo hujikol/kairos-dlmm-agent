@@ -248,3 +248,37 @@ async function swapViaQuoteApi({ wallet, connection, input_mint, output_mint, am
   log("swap", `SUCCESS (fallback) tx: ${txHash}`);
   return { success: true, tx: txHash, input_mint, output_mint };
 }
+
+/**
+ * Automatically swaps non-SOL tokens (reward fees) to SOL.
+ * If mints are provided, only those are checked. Otherwise, all non-SOL tokens with USD >= 0.10 are swapped.
+ */
+export async function autoSwapRewardFees(mints = null) {
+  try {
+    const balances = await getWalletBalances();
+    const tokensToSwap = balances.tokens?.filter(t => 
+      t.mint !== config.tokens.SOL && 
+      (mints === null || mints.includes(t.mint)) && 
+      t.usd >= 0.10
+    );
+
+    if (!tokensToSwap || tokensToSwap.length === 0) {
+      return { success: true, swapped: [] };
+    }
+
+    const swapResults = [];
+    for (const token of tokensToSwap) {
+      log("wallet", `Auto-swapping reward fee token ${token.symbol || token.mint.slice(0, 8)} ($${token.usd.toFixed(2)}) to SOL`);
+      const result = await swapToken({ 
+        input_mint: token.mint, 
+        output_mint: config.tokens.SOL, 
+        amount: token.balance 
+      });
+      swapResults.push(result);
+    }
+    return { success: true, swapped: swapResults };
+  } catch (e) {
+    log("wallet_error", `Auto-swap reward fees failed: ${e.message}`);
+    return { success: false, error: e.message };
+  }
+}

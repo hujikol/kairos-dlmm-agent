@@ -52,6 +52,7 @@ export const config = {
   management: {
     minClaimAmount:        u.minClaimAmount        ?? 5,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
+    autoSwapAfterClose:    u.autoSwapAfterClose    ?? true,
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
@@ -159,5 +160,14 @@ export function reloadScreeningThresholds() {
     if (fresh.athFilterPct      !== undefined) s.athFilterPct     = fresh.athFilterPct;
     if (fresh.maxBundlePct      != null) s.maxBundlePct     = fresh.maxBundlePct;
     if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;
+
+    // Reload management/risk settings
+    const m = config.management;
+    if (fresh.minSolToOpen !== undefined) m.minSolToOpen = fresh.minSolToOpen;
+    if (fresh.deployAmountSol !== undefined) m.deployAmountSol = fresh.deployAmountSol;
+    if (fresh.gasReserve !== undefined) m.gasReserve = fresh.gasReserve;
+    if (fresh.positionSizePct !== undefined) m.positionSizePct = fresh.positionSizePct;
+    if (fresh.maxPositions !== undefined) config.risk.maxPositions = fresh.maxPositions;
+    if (fresh.maxDeployAmount !== undefined) config.risk.maxDeployAmount = fresh.maxDeployAmount;
   } catch { /* ignore */ }
 }
