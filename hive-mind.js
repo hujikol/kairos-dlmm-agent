@@ -77,9 +77,16 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = GET_TIMEOUT_MS) {
  * Check whether Hive Mind is configured and enabled.
  * @returns {boolean}
  */
-export function isEnabled() {
+function getHiveCredentials() {
   const cfg = readConfig();
-  return Boolean(cfg.hiveMindUrl && cfg.hiveMindApiKey);
+  const url = process.env.HIVE_MIND_URL || cfg.hiveMindUrl;
+  const key = process.env.HIVE_MIND_API_KEY || cfg.hiveMindApiKey;
+  return { url, key };
+}
+
+export function isEnabled() {
+  const { url, key } = getHiveCredentials();
+  return Boolean(url && key);
 }
 
 /**
@@ -116,9 +123,11 @@ export async function register(url, registrationToken) {
   }
 
   const { agent_id, api_key } = await res.json();
-  writeConfig({ hiveMindUrl: baseUrl, hiveMindApiKey: api_key, hiveMindAgentId: agent_id });
+  writeConfig({ hiveMindAgentId: agent_id });
   console.log("[hive]", `Registered! agent_id=${agent_id}`);
-  console.log("[hive]", `API key: ${api_key}`);
+  console.log("[hive]", `IMPORTANT: Please update your .env with the following:`);
+  console.log("[hive]", `HIVE_MIND_URL=${baseUrl}`);
+  console.log("[hive]", `HIVE_MIND_API_KEY=${api_key}`);
   console.log("[hive]", `Save this key — it will NOT be shown again.`);
 
   return api_key;
@@ -131,7 +140,8 @@ export async function register(url, registrationToken) {
 export async function syncToHive() {
   try {
     const cfg = readConfig();
-    if (!cfg.hiveMindUrl || !cfg.hiveMindApiKey) return;
+    const { url, key } = getHiveCredentials();
+    if (!url || !key) return;
 
     // Debounce
     const now = Date.now();
@@ -187,12 +197,12 @@ export async function syncToHive() {
     console.log("[hive]", `Syncing ${lessons.length} lessons, ${deploys.length} deploys...`);
 
     const res = await fetchWithTimeout(
-      `${cfg.hiveMindUrl}/api/sync`,
+      `${url}/api/sync`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${cfg.hiveMindApiKey}`,
+          Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify(payload),
       },
@@ -219,12 +229,12 @@ export async function syncToHive() {
  */
 export async function queryPoolConsensus(poolAddress) {
   try {
-    const cfg = readConfig();
-    if (!cfg.hiveMindUrl || !cfg.hiveMindApiKey) return null;
+    const { url, key } = getHiveCredentials();
+    if (!url || !key) return null;
 
     const res = await fetchWithTimeout(
-      `${cfg.hiveMindUrl}/api/consensus/pool/${encodeURIComponent(poolAddress)}`,
-      { headers: { Authorization: `Bearer ${cfg.hiveMindApiKey}` } },
+      `${url}/api/consensus/pool/${encodeURIComponent(poolAddress)}`,
+      { headers: { Authorization: `Bearer ${key}` } },
     );
 
     if (!res.ok) return null;
@@ -241,15 +251,15 @@ export async function queryPoolConsensus(poolAddress) {
  */
 export async function queryLessonConsensus(tags) {
   try {
-    const cfg = readConfig();
-    if (!cfg.hiveMindUrl || !cfg.hiveMindApiKey) return null;
+    const { url, key } = getHiveCredentials();
+    if (!url || !key) return null;
 
     const qs = Array.isArray(tags) && tags.length > 0
       ? `?tags=${encodeURIComponent(tags.join(","))}`
       : "";
     const res = await fetchWithTimeout(
-      `${cfg.hiveMindUrl}/api/consensus/lessons${qs}`,
-      { headers: { Authorization: `Bearer ${cfg.hiveMindApiKey}` } },
+      `${url}/api/consensus/lessons${qs}`,
+      { headers: { Authorization: `Bearer ${key}` } },
     );
 
     if (!res.ok) return null;
@@ -266,13 +276,13 @@ export async function queryLessonConsensus(tags) {
  */
 export async function queryPatternConsensus(volatility) {
   try {
-    const cfg = readConfig();
-    if (!cfg.hiveMindUrl || !cfg.hiveMindApiKey) return null;
+    const { url, key } = getHiveCredentials();
+    if (!url || !key) return null;
 
     const qs = volatility != null ? `?volatility=${encodeURIComponent(volatility)}` : "";
     const res = await fetchWithTimeout(
-      `${cfg.hiveMindUrl}/api/consensus/patterns${qs}`,
-      { headers: { Authorization: `Bearer ${cfg.hiveMindApiKey}` } },
+      `${url}/api/consensus/patterns${qs}`,
+      { headers: { Authorization: `Bearer ${key}` } },
     );
 
     if (!res.ok) return null;
@@ -288,12 +298,12 @@ export async function queryPatternConsensus(volatility) {
  */
 export async function queryThresholdConsensus() {
   try {
-    const cfg = readConfig();
-    if (!cfg.hiveMindUrl || !cfg.hiveMindApiKey) return null;
+    const { url, key } = getHiveCredentials();
+    if (!url || !key) return null;
 
     const res = await fetchWithTimeout(
-      `${cfg.hiveMindUrl}/api/consensus/thresholds`,
-      { headers: { Authorization: `Bearer ${cfg.hiveMindApiKey}` } },
+      `${url}/api/consensus/thresholds`,
+      { headers: { Authorization: `Bearer ${key}` } },
     );
 
     if (!res.ok) return null;
@@ -309,12 +319,12 @@ export async function queryThresholdConsensus() {
  */
 export async function getHivePulse() {
   try {
-    const cfg = readConfig();
-    if (!cfg.hiveMindUrl || !cfg.hiveMindApiKey) return null;
+    const { url, key } = getHiveCredentials();
+    if (!url || !key) return null;
 
     const res = await fetchWithTimeout(
-      `${cfg.hiveMindUrl}/api/pulse`,
-      { headers: { Authorization: `Bearer ${cfg.hiveMindApiKey}` } },
+      `${url}/api/pulse`,
+      { headers: { Authorization: `Bearer ${key}` } },
     );
 
     if (!res.ok) return null;

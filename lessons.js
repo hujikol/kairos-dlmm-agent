@@ -1,67 +1,26 @@
 /**
  * Agent learning system.
- *
- * After each position closes, performance is analyzed and lessons are
- * derived. These lessons are injected into the system prompt so the
- * agent avoids repeating mistakes and doubles down on what works.
+ * Backed by SQLite (meridian.db).
  */
 
 import fs from "fs";
+import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
+import { getDB } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 
-const LESSONS_FILE = "./lessons.json";
 const MIN_EVOLVE_POSITIONS = 5;   // don't evolve until we have real data
 const MAX_CHANGE_PER_STEP  = 0.20; // never shift a threshold more than 20% at once
 
-function load() {
-  if (!fs.existsSync(LESSONS_FILE)) {
-    return { lessons: [], performance: [] };
-  }
-  try {
-    return JSON.parse(fs.readFileSync(LESSONS_FILE, "utf8"));
-  } catch {
-    return { lessons: [], performance: [] };
-  }
-}
-
-function save(data) {
-  fs.writeFileSync(LESSONS_FILE, JSON.stringify(data, null, 2));
-}
-
 // ─── Record Position Performance ──────────────────────────────
 
-/**
- * Call this when a position closes. Captures performance data and
- * derives a lesson if the outcome was notably good or bad.
- *
- * @param {Object} perf
- * @param {string} perf.position       - Position address
- * @param {string} perf.pool           - Pool address
- * @param {string} perf.pool_name      - Pool name (e.g. "Mustard-SOL")
- * @param {string} perf.strategy       - "spot" | "curve" | "bid_ask"
- * @param {number} perf.bin_range      - Bin range used
- * @param {number} perf.bin_step       - Pool bin step
- * @param {number} perf.volatility     - Pool volatility at deploy time
- * @param {number} perf.fee_tvl_ratio  - fee/TVL ratio at deploy time
- * @param {number} perf.organic_score  - Token organic score at deploy time
- * @param {number} perf.amount_sol     - Amount deployed
- * @param {number} perf.fees_earned_usd - Total fees earned
- * @param {number} perf.final_value_usd - Value when closed
- * @param {number} perf.initial_value_usd - Value when opened
- * @param {number} perf.minutes_in_range  - Total minutes position was in range
- * @param {number} perf.minutes_held      - Total minutes position was held
- * @param {string} perf.close_reason   - Why it was closed
- */
 export async function recordPerformance(perf) {
-  const data = load();
+  const db = getDB();
 
-  // Guard against unit-mixed records where a SOL-sized final value is
-  // accidentally written into a USD field (e.g. final_value_usd = 2 for a 2 SOL close).
   const suspiciousUnitMix =
     Number.isFinite(perf.initial_value_usd) &&
     Number.isFinite(perf.final_value_usd) &&
@@ -72,7 +31,7 @@ export async function recordPerformance(perf) {
     perf.final_value_usd <= perf.amount_sol * 2;
 
   if (suspiciousUnitMix) {
-    log("lessons_warn", `Skipped suspicious performance record for ${perf.pool_name || perf.pool}: initial=${perf.initial_value_usd}, final=${perf.final_value_usd}, amount_sol=${perf.amount_sol}`);
+    log("lessons_warn", `Skipped suspicious performance record for ${perf.pool_name || perf.pool}`);
     return;
   }
 
@@ -92,18 +51,38 @@ export async function recordPerformance(perf) {
     recorded_at: new Date().toISOString(),
   };
 
-  data.performance.push(entry);
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO performance (
+        position, pool, pool_name, strategy, bin_range, bin_step, volatility,
+        fee_tvl_ratio, organic_score, amount_sol, fees_earned_usd, final_value_usd,
+        initial_value_usd, minutes_in_range, minutes_held, close_reason, pnl_usd,
+        pnl_pct, range_efficiency, deployed_at, closed_at, recorded_at, base_mint
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `).run(
+      entry.position, entry.pool, entry.pool_name, entry.strategy, JSON.stringify(entry.bin_range),
+      entry.bin_step, entry.volatility, entry.fee_tvl_ratio, entry.organic_score, entry.amount_sol,
+      entry.fees_earned_usd, entry.final_value_usd, entry.initial_value_usd, entry.minutes_in_range,
+      entry.minutes_held, entry.close_reason, entry.pnl_usd, entry.pnl_pct, entry.range_efficiency,
+      entry.deployed_at, entry.closed_at, entry.recorded_at, entry.base_mint
+    );
 
-  // Derive and store a lesson
-  const lesson = derivLesson(entry);
-  if (lesson) {
-    data.lessons.push(lesson);
-    log("lessons", `New lesson: ${lesson.rule}`);
-  }
+    const lesson = derivLesson(entry);
+    if (lesson) {
+      db.prepare(`
+        INSERT INTO lessons (
+          id, rule, tags, outcome, context, pnl_pct, range_efficiency, pool, created_at, pinned, role
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        lesson.id, lesson.rule, JSON.stringify(lesson.tags), lesson.outcome, lesson.context,
+        lesson.pnl_pct, lesson.range_efficiency, lesson.pool, lesson.created_at, 0, null
+      );
+      log("lessons", `New lesson: ${lesson.rule}`);
+    }
+  })();
 
-  save(data);
-
-  // Update pool-level memory
   if (perf.pool) {
     const { recordPoolDeploy } = await import("./pool-memory.js");
     recordPoolDeploy(perf.pool, {
@@ -121,53 +100,44 @@ export async function recordPerformance(perf) {
     });
   }
 
-  // Post-mortem analysis — generates hard rules from losing patterns
+  const allPerformance = db.prepare('SELECT * FROM performance').all();
+
   try {
     const { analyzeClose } = await import("./postmortem.js");
-    analyzeClose(entry, data.performance);
+    analyzeClose(entry, allPerformance);
   } catch (e) {
     log("postmortem_error", `Post-mortem analysis failed: ${e.message}`);
   }
 
-  // Evolve thresholds every 5 closed positions
-  if (data.performance.length % MIN_EVOLVE_POSITIONS === 0) {
+  if (allPerformance.length % MIN_EVOLVE_POSITIONS === 0) {
     const { config, reloadScreeningThresholds } = await import("./config.js");
-    const result = evolveThresholds(data.performance, config);
+    const result = evolveThresholds(allPerformance, config);
     if (result?.changes && Object.keys(result.changes).length > 0) {
       reloadScreeningThresholds();
       log("evolve", `Auto-evolved thresholds: ${JSON.stringify(result.changes)}`);
     }
 
-    // Darwinian signal weight recalculation
     if (config.darwin?.enabled) {
       const { recalculateWeights } = await import("./signal-weights.js");
-      const wResult = recalculateWeights(data.performance, config);
+      const wResult = recalculateWeights(allPerformance, config);
       if (wResult.changes.length > 0) {
         log("evolve", `Darwin: adjusted ${wResult.changes.length} signal weight(s)`);
       }
     }
   }
 
-  // Fire-and-forget sync to hive mind (if enabled)
   import("./hive-mind.js").then(m => m.syncToHive()).catch(() => {});
 }
 
-/**
- * Derive a lesson from a closed position's performance.
- * Only generates a lesson if the outcome was clearly good or bad.
- */
 function derivLesson(perf) {
   const tags = [];
-
-  // Categorize outcome
   const outcome = perf.pnl_pct >= 5 ? "good"
     : perf.pnl_pct >= 0 ? "neutral"
     : perf.pnl_pct >= -5 ? "poor"
     : "bad";
 
-  if (outcome === "neutral") return null; // nothing interesting to learn
+  if (outcome === "neutral") return null;
 
-  // Build context description
   const context = [
     `${perf.pool_name}`,
     `strategy=${perf.strategy}`,
@@ -182,19 +152,19 @@ function derivLesson(perf) {
 
   if (outcome === "good" || outcome === "bad") {
     if (perf.range_efficiency < 30 && outcome === "bad") {
-      rule = `AVOID: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}) with strategy="${perf.strategy}" — went OOR ${100 - perf.range_efficiency}% of the time. Consider wider bin_range or bid_ask strategy.`;
+       rule = `AVOID: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}) with strategy="${perf.strategy}" — went OOR ${100 - perf.range_efficiency}% of the time. Consider wider bin_range or bid_ask strategy.`;
       tags.push("oor", perf.strategy, `volatility_${Math.round(perf.volatility)}`);
     } else if (perf.range_efficiency > 80 && outcome === "good") {
-      rule = `PREFER: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}) with strategy="${perf.strategy}" — ${perf.range_efficiency}% in-range efficiency, PnL +${perf.pnl_pct}%.`;
+       rule = `PREFER: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}) with strategy="${perf.strategy}" — ${perf.range_efficiency}% in-range efficiency, PnL +${perf.pnl_pct}%.`;
       tags.push("efficient", perf.strategy);
     } else if (outcome === "bad" && perf.close_reason?.includes("volume")) {
       rule = `AVOID: Pools with fee_tvl_ratio=${perf.fee_tvl_ratio} that showed volume collapse — fees evaporated quickly. Minimum sustained volume check needed before deploying.`;
       tags.push("volume_collapse");
     } else if (outcome === "good") {
-      rule = `WORKED: ${context} → PnL +${perf.pnl_pct}%, range efficiency ${perf.range_efficiency}%.`;
+       rule = `WORKED: ${context} → PnL +${perf.pnl_pct}%, range efficiency ${perf.range_efficiency}%.`;
       tags.push("worked");
     } else {
-      rule = `FAILED: ${context} → PnL ${perf.pnl_pct}%, range efficiency ${perf.range_efficiency}%. Reason: ${perf.close_reason}.`;
+       rule = `FAILED: ${context} → PnL ${perf.pnl_pct}%, range efficiency ${perf.range_efficiency}%. Reason: ${perf.close_reason}.`;
       tags.push("failed");
     }
   }
@@ -214,32 +184,18 @@ function derivLesson(perf) {
   };
 }
 
-// ─── Adaptive Threshold Evolution ──────────────────────────────
-
-/**
- * Analyze closed position performance and evolve screening thresholds.
- * Writes changes to user-config.json and returns a summary.
- *
- * @param {Array}  perfData - Array of performance records (from lessons.json)
- * @param {Object} config   - Live config object (mutated in place)
- * @returns {{ changes: Object, rationale: Object } | null}
- */
 export function evolveThresholds(perfData, config) {
   if (!perfData || perfData.length < MIN_EVOLVE_POSITIONS) return null;
 
   const winners = perfData.filter((p) => p.pnl_pct > 0);
   const losers  = perfData.filter((p) => p.pnl_pct < -5);
 
-  // Need at least some signal in both directions before adjusting
   const hasSignal = winners.length >= 2 || losers.length >= 2;
   if (!hasSignal) return null;
 
   const changes   = {};
   const rationale = {};
 
-  // ── 1. maxBinStep ─────────────────────────────────────────
-  // If losers cluster at higher bin steps → tighten the ceiling.
-  // If winners span higher bin steps safely → loosen a bit.
   {
     const winnerBinSteps = winners.map((p) => p.bin_step).filter(isFiniteNum);
     const loserBinSteps  = losers.map((p) => p.bin_step).filter(isFiniteNum);
@@ -270,8 +226,6 @@ export function evolveThresholds(perfData, config) {
     }
   }
 
-  // ── 2. minFeeActiveTvlRatio ─────────────────────────────────────────
-  // Raise the floor if low-fee pools consistently underperform.
   {
     const winnerFees = winners.map((p) => p.fee_tvl_ratio).filter(isFiniteNum);
     const loserFees  = losers.map((p) => p.fee_tvl_ratio).filter(isFiniteNum);
@@ -307,7 +261,6 @@ export function evolveThresholds(perfData, config) {
     }
   }
 
-  // ── 3. minOrganic ─────────────────────────────────────────────
   {
     const loserOrganics  = losers.map((p) => p.organic_score).filter(isFiniteNum);
     const winnerOrganics = winners.map((p) => p.organic_score).filter(isFiniteNum);
@@ -328,8 +281,6 @@ export function evolveThresholds(perfData, config) {
     }
   }
 
-  // ── 4. Hold duration analysis by volatility bucket ───────────
-  // Informational — surfaces insights as rationale even if no threshold changes
   {
     const buckets = { low: [], medium: [], high: [] };
     for (const p of perfData) {
@@ -356,7 +307,6 @@ export function evolveThresholds(perfData, config) {
 
   if (Object.keys(changes).length === 0) return { changes: {}, rationale };
 
-  // ── Persist changes to user-config.json ───────────────────────
   let userConfig = {};
   if (fs.existsSync(USER_CONFIG_PATH)) {
     try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* ignore */ }
@@ -366,39 +316,36 @@ export function evolveThresholds(perfData, config) {
   userConfig._lastEvolved = new Date().toISOString();
   userConfig._positionsAtEvolution = perfData.length;
 
-  fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
+  writeFileAtomic.sync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
 
-  // Apply to live config object immediately
   const s = config.screening;
   if (changes.maxBinStep           != null) s.maxBinStep         = changes.maxBinStep;
   if (changes.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = changes.minFeeActiveTvlRatio;
   if (changes.minOrganic           != null) s.minOrganic         = changes.minOrganic;
 
-  // Log a lesson summarizing the evolution
-  const data = load();
-  data.lessons.push({
-    id: Date.now(),
-    rule: `[AUTO-EVOLVED @ ${perfData.length} positions] ${Object.entries(changes).map(([k, v]) => `${k}=${v}`).join(", ")} — ${Object.values(rationale).join("; ")}`,
-    tags: ["evolution", "config_change"],
-    outcome: "manual",
-    created_at: new Date().toISOString(),
-  });
-  save(data);
+  const db = getDB();
+  db.prepare(`
+    INSERT INTO lessons (id, rule, tags, outcome, pinned, role, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    Date.now(),
+    `[AUTO-EVOLVED @ ${perfData.length} positions] ${Object.entries(changes).map(([k, v]) => `${k}=${v}`).join(", ")} — ${Object.values(rationale).join("; ")}`,
+    JSON.stringify(["evolution", "config_change"]),
+    "manual",
+    0,
+    null,
+    new Date().toISOString()
+  );
 
   return { changes, rationale };
 }
 
-// ─── Strategy Performance Stats ────────────────────────────────
-
-/**
- * Compute per-strategy win rate, avg PnL, and range efficiency
- * from closed position history. Injected into SCREENER prompt.
- */
 export function getStrategyStats() {
-  const data = load();
+  const db = getDB();
+  const perf = db.prepare('SELECT pnl_pct, range_efficiency, strategy FROM performance').all();
   const byStrategy = {};
 
-  for (const p of data.performance) {
+  for (const p of perf) {
     const key = p.strategy || "unknown";
     if (!byStrategy[key]) {
       byStrategy[key] = { wins: 0, losses: 0, total_pnl: 0, total_range_eff: 0, count: 0 };
@@ -420,16 +367,8 @@ export function getStrategyStats() {
   );
 }
 
-// ─── Helpers ───────────────────────────────────────────────────
-
-function isFiniteNum(n) {
-  return typeof n === "number" && isFinite(n);
-}
-
-function avg(arr) {
-  return arr.reduce((s, x) => s + x, 0) / arr.length;
-}
-
+function isFiniteNum(n) { return typeof n === "number" && isFinite(n); }
+function avg(arr) { return arr.reduce((s, x) => s + x, 0) / arr.length; }
 function percentile(arr, p) {
   const sorted = [...arr].sort((a, b) => a - b);
   const idx = (p / 100) * (sorted.length - 1);
@@ -437,12 +376,7 @@ function percentile(arr, p) {
   const hi = Math.ceil(idx);
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
 }
-
-function clamp(val, min, max) {
-  return Math.max(min, Math.min(max, val));
-}
-
-/** Move current toward target by at most maxChange fraction. */
+function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
 function nudge(current, target, maxChange) {
   const delta = target - current;
   const maxDelta = current * maxChange;
@@ -452,65 +386,46 @@ function nudge(current, target, maxChange) {
 
 // ─── Manual Lessons ────────────────────────────────────────────
 
-/**
- * Add a manual lesson (e.g. from operator observation).
- *
- * @param {string}   rule
- * @param {string[]} tags
- * @param {Object}   opts
- * @param {boolean}  opts.pinned - Always inject regardless of cap
- * @param {string}   opts.role   - "SCREENER" | "MANAGER" | "GENERAL" | null (all roles)
- */
 export function addLesson(rule, tags = [], { pinned = false, role = null } = {}) {
-  const data = load();
-  data.lessons.push({
-    id: Date.now(),
-    rule,
-    tags,
-    outcome: "manual",
-    pinned: !!pinned,
-    role: role || null,
-    created_at: new Date().toISOString(),
-  });
-  save(data);
+  const db = getDB();
+  db.prepare(`
+    INSERT INTO lessons (id, rule, tags, outcome, pinned, role, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(Date.now(), rule, JSON.stringify(tags), "manual", pinned ? 1 : 0, role || null, new Date().toISOString());
   log("lessons", `Manual lesson added${pinned ? " [PINNED]" : ""}${role ? ` [${role}]` : ""}: ${rule}`);
 }
 
-/**
- * Pin a lesson by ID — pinned lessons are always injected regardless of cap.
- */
 export function pinLesson(id) {
-  const data = load();
-  const lesson = data.lessons.find((l) => l.id === id);
-  if (!lesson) return { found: false };
-  lesson.pinned = true;
-  save(data);
-  log("lessons", `Pinned lesson ${id}: ${lesson.rule.slice(0, 60)}`);
-  return { found: true, pinned: true, id, rule: lesson.rule };
+  const db = getDB();
+  const res = db.prepare('UPDATE lessons SET pinned = 1 WHERE id = ?').run(id);
+  if (res.changes === 0) return { found: false };
+  const l = db.prepare('SELECT rule FROM lessons WHERE id = ?').get(id);
+  log("lessons", `Pinned lesson ${id}: ${l.rule.slice(0, 60)}`);
+  return { found: true, pinned: true, id, rule: l.rule };
 }
 
-/**
- * Unpin a lesson by ID.
- */
 export function unpinLesson(id) {
-  const data = load();
-  const lesson = data.lessons.find((l) => l.id === id);
-  if (!lesson) return { found: false };
-  lesson.pinned = false;
-  save(data);
-  return { found: true, pinned: false, id, rule: lesson.rule };
+  const db = getDB();
+  const res = db.prepare('UPDATE lessons SET pinned = 0 WHERE id = ?').run(id);
+  if (res.changes === 0) return { found: false };
+  const l = db.prepare('SELECT rule FROM lessons WHERE id = ?').get(id);
+  return { found: true, pinned: false, id, rule: l.rule };
 }
 
-/**
- * List lessons with optional filters — for agent browsing via Telegram.
- */
 export function listLessons({ role = null, pinned = null, tag = null, limit = 30 } = {}) {
-  const data = load();
-  let lessons = [...data.lessons];
+  const db = getDB();
+  let query = 'SELECT * FROM lessons';
+  const binds = [];
+  const clauses = [];
 
-  if (pinned !== null) lessons = lessons.filter((l) => !!l.pinned === pinned);
-  if (role)            lessons = lessons.filter((l) => !l.role || l.role === role);
-  if (tag)             lessons = lessons.filter((l) => l.tags?.includes(tag));
+  if (pinned !== null) { clauses.push('pinned = ?'); binds.push(pinned ? 1 : 0); }
+  if (role) { clauses.push('(role IS NULL OR role = ?)'); binds.push(role); }
+
+  if (clauses.length > 0) query += ' WHERE ' + clauses.join(' AND ');
+
+  const list = db.prepare(query).all(...binds);
+  let lessons = list.map(l => ({ ...l, tags: JSON.parse(l.tags || '[]') }));
+  if (tag) lessons = lessons.filter(l => l.tags.includes(tag));
 
   return {
     total: lessons.length,
@@ -519,88 +434,57 @@ export function listLessons({ role = null, pinned = null, tag = null, limit = 30
       rule: l.rule.slice(0, 120),
       tags: l.tags,
       outcome: l.outcome,
-      pinned: !!l.pinned,
+      pinned: l.pinned === 1,
       role: l.role || "all",
       created_at: l.created_at?.slice(0, 10),
     })),
   };
 }
 
-/**
- * Remove a lesson by ID.
- */
 export function removeLesson(id) {
-  const data = load();
-  const before = data.lessons.length;
-  data.lessons = data.lessons.filter((l) => l.id !== id);
-  save(data);
-  return before - data.lessons.length;
+  const db = getDB();
+  return db.prepare('DELETE FROM lessons WHERE id = ?').run(id).changes;
 }
 
-/**
- * Remove lessons matching a keyword in their rule text (case-insensitive).
- */
 export function removeLessonsByKeyword(keyword) {
-  const data = load();
-  const before = data.lessons.length;
-  const kw = keyword.toLowerCase();
-  data.lessons = data.lessons.filter((l) => !l.rule.toLowerCase().includes(kw));
-  save(data);
-  return before - data.lessons.length;
+  const db = getDB();
+  const kw = `%${keyword}%`;
+  return db.prepare('DELETE FROM lessons WHERE rule LIKE ?').run(kw).changes;
 }
 
-/**
- * Clear ALL lessons (keeps performance data).
- */
 export function clearAllLessons() {
-  const data = load();
-  const count = data.lessons.length;
-  data.lessons = [];
-  save(data);
-  return count;
+  const db = getDB();
+  return db.prepare('DELETE FROM lessons').run().changes;
 }
 
-/**
- * Clear ALL performance records.
- */
 export function clearPerformance() {
-  const data = load();
-  const count = data.performance.length;
-  data.performance = [];
-  save(data);
-  return count;
+  const db = getDB();
+  return db.prepare('DELETE FROM performance').run().changes;
 }
 
 // ─── Lesson Retrieval ──────────────────────────────────────────
 
-// Tags that map to each agent role — used for role-aware lesson injection
 const ROLE_TAGS = {
   SCREENER: ["screening", "narrative", "strategy", "deployment", "token", "volume", "entry", "bundler", "holders", "organic"],
   MANAGER:  ["management", "risk", "oor", "fees", "position", "hold", "close", "pnl", "rebalance", "claim"],
-  GENERAL:  [], // all lessons
+  GENERAL:  [], 
 };
 
-/**
- * Get lessons formatted for injection into the system prompt.
- * Structured injection with three tiers:
- *   1. Pinned        — always injected, up to PINNED_CAP
- *   2. Role-matched  — lessons tagged for this agentType, up to ROLE_CAP
- *   3. Recent        — fill remaining slots up to RECENT_CAP
- *
- * @param {Object} opts
- * @param {string} [opts.agentType]  - "SCREENER" | "MANAGER" | "GENERAL"
- * @param {number} [opts.maxLessons] - Override total cap (default 35)
- */
 export function getLessonsForPrompt(opts = {}) {
-  // Support legacy call signature: getLessonsForPrompt(20)
   if (typeof opts === "number") opts = { maxLessons: opts };
 
   const { agentType = "GENERAL", maxLessons } = opts;
 
-  const data = load();
-  if (data.lessons.length === 0) return null;
+  const db = getDB();
+  const allRows = db.prepare('SELECT * FROM lessons').all();
+  if (allRows.length === 0) return null;
 
-  // Smaller caps for automated cycles — they don't need the full lesson history
+  const allLessons = allRows.map(l => ({
+    ...l,
+    tags: JSON.parse(l.tags || '[]'),
+    pinned: l.pinned === 1
+  }));
+
   const isAutoCycle = agentType === "SCREENER" || agentType === "MANAGER";
   const PINNED_CAP  = isAutoCycle ? 5  : 10;
   const ROLE_CAP    = isAutoCycle ? 6  : 15;
@@ -609,23 +493,18 @@ export function getLessonsForPrompt(opts = {}) {
   const outcomePriority = { bad: 0, poor: 1, failed: 1, good: 2, worked: 2, manual: 1, neutral: 3, evolution: 2 };
   const byPriority = (a, b) => (outcomePriority[a.outcome] ?? 3) - (outcomePriority[b.outcome] ?? 3);
 
-  // ── Tier 1: Pinned ──────────────────────────────────────────────
-  // Respect role even for pinned lessons — a pinned SCREENER lesson shouldn't pollute MANAGER
-  const pinned = data.lessons
+  const pinned = allLessons
     .filter((l) => l.pinned && (!l.role || l.role === agentType || agentType === "GENERAL"))
     .sort(byPriority)
     .slice(0, PINNED_CAP);
 
   const usedIds = new Set(pinned.map((l) => l.id));
 
-  // ── Tier 2: Role-matched ────────────────────────────────────────
   const roleTags = ROLE_TAGS[agentType] || [];
-  const roleMatched = data.lessons
+  const roleMatched = allLessons
     .filter((l) => {
       if (usedIds.has(l.id)) return false;
-      // Include if: lesson has no role restriction OR matches this role
       const roleOk = !l.role || l.role === agentType || agentType === "GENERAL";
-      // Include if: lesson has role-relevant tags OR no tags (general)
       const tagOk  = roleTags.length === 0 || !l.tags?.length || l.tags.some((t) => roleTags.includes(t));
       return roleOk && tagOk;
     })
@@ -634,10 +513,9 @@ export function getLessonsForPrompt(opts = {}) {
 
   roleMatched.forEach((l) => usedIds.add(l.id));
 
-  // ── Tier 3: Recent fill ─────────────────────────────────────────
   const remainingBudget = RECENT_CAP - pinned.length - roleMatched.length;
   const recent = remainingBudget > 0
-    ? data.lessons
+    ? allLessons
         .filter((l) => !usedIds.has(l.id))
         .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))
         .slice(0, remainingBudget)
@@ -662,37 +540,22 @@ function fmt(lessons) {
   }).join("\n");
 }
 
-/**
- * Get individual performance records filtered by time window.
- * Tool handler: get_performance_history
- *
- * @param {Object} opts
- * @param {number} [opts.hours=24]   - How many hours back to look
- * @param {number} [opts.limit=50]   - Max records to return
- */
 export function getPerformanceHistory({ hours = 24, limit = 50 } = {}) {
-  const data = load();
-  const p = data.performance;
-
-  if (p.length === 0) return { positions: [], count: 0, hours };
-
+  const db = getDB();
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-
-  const filtered = p
-    .filter((r) => r.recorded_at >= cutoff)
-    .slice(-limit)
-    .map((r) => ({
-      pool_name: r.pool_name,
-      pool: r.pool,
-      strategy: r.strategy,
-      pnl_usd: r.pnl_usd,
-      pnl_pct: r.pnl_pct,
-      fees_earned_usd: r.fees_earned_usd,
-      range_efficiency: r.range_efficiency,
-      minutes_held: r.minutes_held,
-      close_reason: r.close_reason,
-      closed_at: r.recorded_at,
-    }));
+  
+  const filtered = db.prepare('SELECT * FROM performance WHERE recorded_at >= ? LIMIT ?').all(cutoff, limit).map((r) => ({
+    pool_name: r.pool_name,
+    pool: r.pool,
+    strategy: r.strategy,
+    pnl_usd: r.pnl_usd,
+    pnl_pct: r.pnl_pct,
+    fees_earned_usd: r.fees_earned_usd,
+    range_efficiency: r.range_efficiency,
+    minutes_held: r.minutes_held,
+    close_reason: r.close_reason,
+    closed_at: r.recorded_at,
+  }));
 
   const totalPnl = filtered.reduce((s, r) => s + (r.pnl_usd ?? 0), 0);
   const wins = filtered.filter((r) => r.pnl_usd > 0).length;
@@ -706,26 +569,25 @@ export function getPerformanceHistory({ hours = 24, limit = 50 } = {}) {
   };
 }
 
-/**
- * Get performance stats summary.
- */
 export function getPerformanceSummary() {
-  const data = load();
-  const p = data.performance;
+  const db = getDB();
+  const stats = db.prepare(`
+    SELECT COUNT(*) as count, SUM(pnl_usd) as total_pnl, SUM(pnl_pct) as pt_sum, SUM(range_efficiency) as eff_sum 
+    FROM performance
+  `).get();
+  
+  const count = stats.count || 0;
+  if (count === 0) return null;
 
-  if (p.length === 0) return null;
-
-  const totalPnl = p.reduce((s, x) => s + x.pnl_usd, 0);
-  const avgPnlPct = p.reduce((s, x) => s + x.pnl_pct, 0) / p.length;
-  const avgRangeEfficiency = p.reduce((s, x) => s + x.range_efficiency, 0) / p.length;
-  const wins = p.filter((x) => x.pnl_usd > 0).length;
+  const wins = db.prepare('SELECT COUNT(*) as wins FROM performance WHERE pnl_usd > 0').get().wins;
+  const totalLessons = db.prepare('SELECT COUNT(*) as c FROM lessons').get().c;
 
   return {
-    total_positions_closed: p.length,
-    total_pnl_usd: Math.round(totalPnl * 100) / 100,
-    avg_pnl_pct: Math.round(avgPnlPct * 100) / 100,
-    avg_range_efficiency_pct: Math.round(avgRangeEfficiency * 10) / 10,
-    win_rate_pct: Math.round((wins / p.length) * 100),
-    total_lessons: data.lessons.length,
+    total_positions_closed: count,
+    total_pnl_usd: Math.round((stats.total_pnl || 0) * 100) / 100,
+    avg_pnl_pct: Math.round(((stats.pt_sum||0) / count) * 100) / 100,
+    avg_range_efficiency_pct: Math.round(((stats.eff_sum||0) / count) * 10) / 10,
+    win_rate_pct: Math.round((wins / count) * 100),
+    total_lessons: totalLessons,
   };
 }

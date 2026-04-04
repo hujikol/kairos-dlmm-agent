@@ -46,21 +46,53 @@ const INTENT_PATTERNS = [
   { intent: "lessons",     re: /\b(lesson|learned|teach|pin|unpin|clear lesson|what did you learn)\b/i },
 ];
 
-function getToolsForRole(agentType, goal = "") {
-  if (agentType === "MANAGER")  return tools.filter(t => MANAGER_TOOLS.has(t.function.name));
-  if (agentType === "SCREENER") return tools.filter(t => SCREENER_TOOLS.has(t.function.name));
-
-  // GENERAL: match intent from goal, combine matched tool sets
-  const matched = new Set();
-  for (const { intent, re } of INTENT_PATTERNS) {
-    if (re.test(goal)) {
-      for (const t of INTENT_TOOLS[intent]) matched.add(t);
+function makeStrictSchema(schema) {
+  if (schema.type === "object" && schema.properties) {
+    schema.additionalProperties = false;
+    const origRequired = new Set(schema.required || []);
+    schema.required = Object.keys(schema.properties);
+    for (const key of schema.required) {
+      const prop = schema.properties[key];
+      if (!origRequired.has(key)) {
+        if (typeof prop.type === "string") {
+          prop.type = [prop.type, "null"];
+        } else if (Array.isArray(prop.type)) {
+          if (!prop.type.includes("null")) prop.type.push("null");
+        }
+      }
+      makeStrictSchema(prop);
     }
+  } else if (schema.type === "array" && schema.items) {
+    makeStrictSchema(schema.items);
+  }
+}
+
+function getToolsForRole(agentType, goal = "") {
+  let matchedTools;
+  if (agentType === "MANAGER")  matchedTools = tools.filter(t => MANAGER_TOOLS.has(t.function.name));
+  else if (agentType === "SCREENER") matchedTools = tools.filter(t => SCREENER_TOOLS.has(t.function.name));
+  else {
+    const matched = new Set();
+    for (const { intent, re } of INTENT_PATTERNS) {
+      if (re.test(goal)) {
+        for (const t of INTENT_TOOLS[intent]) matched.add(t);
+      }
+    }
+    // Fall back to all tools if no intent matched
+    matchedTools = matched.size === 0 ? tools : tools.filter(t => matched.has(t.function.name));
   }
 
-  // Fall back to all tools if no intent matched
-  if (matched.size === 0) return tools;
-  return tools.filter(t => matched.has(t.function.name));
+  // Enforce strict output schema formatting dynamically
+  return matchedTools.map(t => {
+    const tc = JSON.parse(JSON.stringify(t));
+    tc.function.strict = true;
+    if (tc.function.parameters) {
+      makeStrictSchema(tc.function.parameters);
+    } else {
+      tc.function.parameters = { type: "object", properties: {}, additionalProperties: false };
+    }
+    return tc;
+  });
 }
 import { getWalletBalances } from "./tools/wallet.js";
 import { getMyPositions } from "./tools/dlmm.js";
@@ -77,7 +109,7 @@ const client = new OpenAI({
   timeout: 5 * 60 * 1000,
 });
 
-const DEFAULT_MODEL = process.env.LLM_MODEL || "openrouter/healer-alpha";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "qwen/qwen3.6-plus:free";
 
 const TOOL_REQUIRED_INTENTS = /\b(deploy|open position|open|add liquidity|lp into|invest in|close|exit|withdraw|remove liquidity|claim|harvest|collect|swap|convert|sell|exchange|block|unblock|blacklist|self.?update|pull latest|git pull|update yourself|config|setting|threshold|set |change|update |balance|wallet|position|portfolio|pnl|yield|range|screen|candidate|find pool|search|research|token|smart wallet|whale|watch.?list|tracked wallet|study top|top lpers?|lp behavior|who.?s lping|performance|history|stats|report|lesson|learned|teach|pin|unpin)\b/i;
 
@@ -137,7 +169,9 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       let usedModel = activeModel;
       // Force a tool call on step 0 for action intents — prevents the model from inventing deploy/close outcomes
       const ACTION_INTENTS = /\b(deploy|open|add liquidity|close|exit|withdraw|claim|swap|block|unblock)\b/i;
-      const toolChoice = (step === 0 && (ACTION_INTENTS.test(goal) || mustUseRealTool)) ? "required" : "auto";
+      // Note: OpenRouter throws 404 on Qwen models if tool_choice: "required" is used alongside strict schemas.
+      // We rely on the retry logic below if it fails to call a tool.
+      const toolChoice = "auto";
 
       for (let attempt = 0; attempt < 3; attempt++) {
         response = await client.chat.completions.create({

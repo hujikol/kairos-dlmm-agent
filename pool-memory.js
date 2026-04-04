@@ -3,133 +3,124 @@
  *
  * Keyed by pool address. Automatically updated when positions close
  * (via recordPerformance in lessons.js). Agent can query before deploying.
+ *
+ * Backed by SQLite (meridian.db).
  */
 
-import fs from "fs";
+import { getDB } from "./db.js";
 import { log } from "./logger.js";
-
-const POOL_MEMORY_FILE = "./pool-memory.json";
-
-function load() {
-  if (!fs.existsSync(POOL_MEMORY_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(POOL_MEMORY_FILE, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function save(data) {
-  fs.writeFileSync(POOL_MEMORY_FILE, JSON.stringify(data, null, 2));
-}
 
 // ─── Write ─────────────────────────────────────────────────────
 
 /**
- * Record a closed deploy into pool-memory.json.
+ * Record a closed deploy into the database.
  * Called automatically from recordPerformance() in lessons.js.
- *
- * @param {string} poolAddress
- * @param {Object} deployData
- * @param {string} deployData.pool_name
- * @param {string} deployData.base_mint
- * @param {string} deployData.deployed_at
- * @param {string} deployData.closed_at
- * @param {number} deployData.pnl_pct
- * @param {number} deployData.pnl_usd
- * @param {number} deployData.range_efficiency
- * @param {number} deployData.minutes_held
- * @param {string} deployData.close_reason
- * @param {string} deployData.strategy
- * @param {number} deployData.volatility
  */
 export function recordPoolDeploy(poolAddress, deployData) {
   if (!poolAddress) return;
+  const db = getDB();
 
-  const db = load();
+  db.transaction(() => {
+    // 1. Ensure pool_memory exists
+    const existing = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+    if (!existing) {
+      db.prepare(`
+        INSERT INTO pool_memory (
+          pool_address, name, base_mint, total_deploys, avg_pnl_pct, win_rate,
+          last_deployed_at, last_outcome, notes, cooldown_until
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        poolAddress, deployData.pool_name || poolAddress.slice(0, 8), deployData.base_mint || null,
+        0, 0, 0, null, null, '[]', null
+      );
+    }
 
-  if (!db[poolAddress]) {
-    db[poolAddress] = {
-      name: deployData.pool_name || poolAddress.slice(0, 8),
-      base_mint: deployData.base_mint || null,
-      deploys: [],
-      total_deploys: 0,
-      avg_pnl_pct: 0,
-      win_rate: 0,
-      last_deployed_at: null,
-      last_outcome: null,
-      notes: [],
-    };
-  }
+    // 2. Insert the deploy
+    const closed_at = deployData.closed_at || new Date().toISOString();
+    const pnl_pct = deployData.pnl_pct ?? null;
+    db.prepare(`
+      INSERT INTO pool_deploys (
+        pool_address, deployed_at, closed_at, pnl_pct, pnl_usd, range_efficiency,
+        minutes_held, close_reason, strategy, volatility_at_deploy
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        poolAddress, deployData.deployed_at || null, closed_at, pnl_pct,
+        deployData.pnl_usd ?? null, deployData.range_efficiency ?? null,
+        deployData.minutes_held ?? null, deployData.close_reason || null,
+        deployData.strategy || null, deployData.volatility ?? null
+    );
 
-  const entry = db[poolAddress];
+    // 3. Update pool_memory aggregates
+    const deploys = db.prepare('SELECT pnl_pct FROM pool_deploys WHERE pool_address = ?').all(poolAddress);
+    const totalDeploys = deploys.length;
+    const withPnl = deploys.filter(d => d.pnl_pct != null);
+    
+    let avgPnl = 0;
+    let winRate = 0;
+    if (withPnl.length > 0) {
+      avgPnl = Math.round((withPnl.reduce((s, d) => s + d.pnl_pct, 0) / withPnl.length) * 100) / 100;
+      winRate = Math.round((withPnl.filter(d => d.pnl_pct >= 0).length / withPnl.length) * 100) / 100;
+    }
 
-  const deploy = {
-    deployed_at: deployData.deployed_at || null,
-    closed_at: deployData.closed_at || new Date().toISOString(),
-    pnl_pct: deployData.pnl_pct ?? null,
-    pnl_usd: deployData.pnl_usd ?? null,
-    range_efficiency: deployData.range_efficiency ?? null,
-    minutes_held: deployData.minutes_held ?? null,
-    close_reason: deployData.close_reason || null,
-    strategy: deployData.strategy || null,
-    volatility_at_deploy: deployData.volatility ?? null,
-  };
+    const lastOutcome = (pnl_pct ?? 0) >= 0 ? "profit" : "loss";
+    
+    // Fetch latest pool state
+    const poolState = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+    let notes = [];
+    try { notes = JSON.parse(poolState.notes || '[]'); } catch { notes = []; }
+    let cooldownUntil = poolState.cooldown_until;
 
-  entry.deploys.push(deploy);
-  entry.total_deploys = entry.deploys.length;
-  entry.last_deployed_at = deploy.closed_at;
-  entry.last_outcome = (deploy.pnl_pct ?? 0) >= 0 ? "profit" : "loss";
+    // ── Smart cooldown: learn from repeat losses ───────────────────
+    const recentDeploys = db.prepare('SELECT pnl_pct FROM pool_deploys WHERE pool_address = ? ORDER BY id DESC LIMIT 5').all(poolAddress);
+    const recentLosses = recentDeploys.filter(d => (d.pnl_pct ?? 0) < -5);
 
-  // Recompute aggregates
-  const withPnl = entry.deploys.filter((d) => d.pnl_pct != null);
-  if (withPnl.length > 0) {
-    entry.avg_pnl_pct = Math.round(
-      (withPnl.reduce((s, d) => s + d.pnl_pct, 0) / withPnl.length) * 100
-    ) / 100;
-    entry.win_rate = Math.round(
-      (withPnl.filter((d) => d.pnl_pct >= 0).length / withPnl.length) * 100
-    ) / 100;
-  }
+    let extendedCooldown = false;
+    let cooldownHours = 0;
+    if (recentLosses.length >= 2) {
+      cooldownHours = recentLosses.length >= 3 ? 48 : 12;
+      extendedCooldown = true;
+      notes.push({
+        note: `Auto-blacklisted for ${cooldownHours}h: ${recentLosses.length} losses in last ${recentDeploys.length} deploys`,
+        added_at: new Date().toISOString()
+      });
+      log("pool-memory", `Extended cooldown for ${poolState.name}: ${cooldownHours}h (${recentLosses.length} recent losses)`);
+    } else if ((pnl_pct ?? 0) < -15) {
+      cooldownHours = 8;
+      extendedCooldown = true;
+      log("pool-memory", `${cooldownHours}h cooldown for ${poolState.name}: large loss (${pnl_pct}%)`);
+    } else if (deployData.close_reason === "low yield" || deployData.close_reason === "low_yield") {
+      cooldownHours = 4;
+      extendedCooldown = true;
+      log("pool-memory", `Cooldown set for ${poolState.name} (low yield close)`);
+    }
 
-  if (deployData.base_mint && !entry.base_mint) {
-    entry.base_mint = deployData.base_mint;
-  }
+    if (extendedCooldown) {
+      cooldownUntil = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
+    }
 
-  // ── Smart cooldown: learn from repeat losses ───────────────────
-  const recentDeploys = entry.deploys.slice(-5);
-  const recentLosses = recentDeploys.filter(d => (d.pnl_pct ?? 0) < -5);
+    let baseMint = poolState.base_mint;
+    if (deployData.base_mint && !baseMint) baseMint = deployData.base_mint;
+    
+    db.prepare(`
+      UPDATE pool_memory SET
+        base_mint = ?, total_deploys = ?, avg_pnl_pct = ?, win_rate = ?,
+        last_deployed_at = ?, last_outcome = ?, notes = ?, cooldown_until = ?
+      WHERE pool_address = ?
+    `).run(
+      baseMint, totalDeploys, avgPnl, winRate, closed_at, lastOutcome,
+      JSON.stringify(notes), cooldownUntil, poolAddress
+    );
 
-  if (recentLosses.length >= 2) {
-    // 2+ losses in last 5 deploys → escalating cooldown
-    const cooldownHours = recentLosses.length >= 3 ? 48 : 12;
-    entry.cooldown_until = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
-    entry.notes.push({
-      note: `Auto-blacklisted for ${cooldownHours}h: ${recentLosses.length} losses in last ${recentDeploys.length} deploys`,
-      added_at: new Date().toISOString(),
-    });
-    log("pool-memory", `Extended cooldown for ${entry.name}: ${cooldownHours}h (${recentLosses.length} recent losses)`);
-  } else if ((deploy.pnl_pct ?? 0) < -15) {
-    // Single large loss → 8h cooldown
-    const cooldownHours = 8;
-    entry.cooldown_until = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
-    log("pool-memory", `${cooldownHours}h cooldown for ${entry.name}: large loss (${deploy.pnl_pct}%)`);
-  } else if (deploy.close_reason === "low yield") {
-    const cooldownHours = 4;
-    entry.cooldown_until = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
-    log("pool-memory", `Cooldown set for ${entry.name} until ${entry.cooldown_until} (low yield close)`);
-  }
-
-  save(db);
-  log("pool-memory", `Recorded deploy for ${entry.name} (${poolAddress.slice(0, 8)}): PnL ${deploy.pnl_pct}%`);
+    log("pool-memory", `Recorded deploy for ${poolState.name || poolAddress.slice(0, 8)}: PnL ${pnl_pct}%`);
+  })();
 }
 
 export function isPoolOnCooldown(poolAddress) {
   if (!poolAddress) return false;
-  const db = load();
-  const entry = db[poolAddress];
-  if (!entry?.cooldown_until) return false;
-  return new Date(entry.cooldown_until) > new Date();
+  const db = getDB();
+  const row = db.prepare('SELECT cooldown_until FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+  if (!row?.cooldown_until) return false;
+  return new Date(row.cooldown_until) > new Date();
 }
 
 /**
@@ -139,20 +130,20 @@ export function isPoolOnCooldown(poolAddress) {
  */
 export function isTokenToxic(baseMint) {
   if (!baseMint) return false;
-  const db = load();
-
-  let totalDeploys = 0;
-  let totalLosses = 0;
-
-  for (const entry of Object.values(db)) {
-    if (entry.base_mint !== baseMint) continue;
-    for (const d of entry.deploys) {
-      totalDeploys++;
-      if ((d.pnl_pct ?? 0) < -5) totalLosses++;
-    }
-  }
-
-  return totalDeploys >= 3 && (totalLosses / totalDeploys) > 0.66;
+  const db = getDB();
+  
+  const query = `
+    SELECT d.pnl_pct 
+    FROM pool_deploys d
+    JOIN pool_memory m ON m.pool_address = d.pool_address
+    WHERE m.base_mint = ?
+  `;
+  const deploys = db.prepare(query).all(baseMint);
+  
+  if (deploys.length < 3) return false;
+  
+  const losers = deploys.filter(d => (d.pnl_pct ?? 0) < -5).length;
+  return (losers / deploys.length) > 0.66;
 }
 
 // ─── Read ──────────────────────────────────────────────────────
@@ -164,8 +155,8 @@ export function isTokenToxic(baseMint) {
 export function getPoolMemory({ pool_address }) {
   if (!pool_address) return { error: "pool_address required" };
 
-  const db = load();
-  const entry = db[pool_address];
+  const db = getDB();
+  const entry = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(pool_address);
 
   if (!entry) {
     return {
@@ -174,6 +165,10 @@ export function getPoolMemory({ pool_address }) {
       message: "No history for this pool — first time deploying here.",
     };
   }
+
+  const history = db.prepare('SELECT * FROM pool_deploys WHERE pool_address = ? ORDER BY id DESC LIMIT 10').all(pool_address);
+  let notes = [];
+  try { notes = JSON.parse(entry.notes || '[]'); } catch { /**/ }
 
   return {
     pool_address,
@@ -185,88 +180,89 @@ export function getPoolMemory({ pool_address }) {
     win_rate: entry.win_rate,
     last_deployed_at: entry.last_deployed_at,
     last_outcome: entry.last_outcome,
-    notes: entry.notes,
-    history: entry.deploys.slice(-10), // last 10 deploys
+    notes,
+    history: history.reverse(), // chronologically ordered (oldest first among the 10)
   };
 }
 
 /**
  * Record a live position snapshot during a management cycle.
- * Builds a trend dataset while position is still open — not just at close.
  * Keeps last 48 snapshots per pool (~4h at 5min intervals).
  */
 export function recordPositionSnapshot(poolAddress, snapshot) {
   if (!poolAddress) return;
-  const db = load();
+  const db = getDB();
 
-  if (!db[poolAddress]) {
-    db[poolAddress] = {
-      name: snapshot.pair || poolAddress.slice(0, 8),
-      base_mint: null,
-      deploys: [],
-      total_deploys: 0,
-      avg_pnl_pct: 0,
-      win_rate: 0,
-      last_deployed_at: null,
-      last_outcome: null,
-      notes: [],
-      snapshots: [],
-    };
-  }
+  db.transaction(() => {
+    // 1. Ensure pool_memory exists
+    const existing = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+    if (!existing) {
+      db.prepare(`
+        INSERT INTO pool_memory (
+          pool_address, name, base_mint, total_deploys, avg_pnl_pct, win_rate,
+          last_deployed_at, last_outcome, notes, cooldown_until
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        poolAddress, snapshot.pair || poolAddress.slice(0, 8), null,
+        0, 0, 0, null, null, '[]', null
+      );
+    }
 
-  if (!db[poolAddress].snapshots) db[poolAddress].snapshots = [];
+    db.prepare(`
+      INSERT INTO pool_snapshots (
+        pool_address, ts, position, pnl_pct, pnl_usd, in_range, unclaimed_fees_usd,
+        minutes_out_of_range, age_minutes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        poolAddress, new Date().toISOString(), snapshot.position || null,
+        snapshot.pnl_pct ?? null, snapshot.pnl_usd ?? null, snapshot.in_range ? 1 : 0,
+        snapshot.unclaimed_fees_usd ?? null, snapshot.minutes_out_of_range ?? null,
+        snapshot.age_minutes ?? null
+    );
 
-  db[poolAddress].snapshots.push({
-    ts: new Date().toISOString(),
-    position: snapshot.position,
-    pnl_pct: snapshot.pnl_pct ?? null,
-    pnl_usd: snapshot.pnl_usd ?? null,
-    in_range: snapshot.in_range ?? null,
-    unclaimed_fees_usd: snapshot.unclaimed_fees_usd ?? null,
-    minutes_out_of_range: snapshot.minutes_out_of_range ?? null,
-    age_minutes: snapshot.age_minutes ?? null,
-  });
-
-  // Keep last 48 snapshots (~4h at 5min intervals)
-  if (db[poolAddress].snapshots.length > 48) {
-    db[poolAddress].snapshots = db[poolAddress].snapshots.slice(-48);
-  }
-
-  save(db);
+    // Keep last 48 snapshots
+    db.prepare(`
+      DELETE FROM pool_snapshots 
+      WHERE pool_address = ? 
+      AND id NOT IN (
+        SELECT id FROM pool_snapshots WHERE pool_address = ? ORDER BY id DESC LIMIT 48
+      )
+    `).run(poolAddress, poolAddress);
+  })();
 }
 
 /**
  * Recall focused context for a specific pool — used before screening or management.
- * Returns a short formatted string ready for injection into the agent goal.
  */
 export function recallForPool(poolAddress) {
   if (!poolAddress) return null;
-  const db = load();
-  const entry = db[poolAddress];
+  const db = getDB();
+  const entry = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
   if (!entry) return null;
 
   const lines = [];
 
-  // Deploy history summary
   if (entry.total_deploys > 0) {
     lines.push(`POOL MEMORY [${entry.name}]: ${entry.total_deploys} past deploy(s), avg PnL ${entry.avg_pnl_pct}%, win rate ${entry.win_rate}%, last outcome: ${entry.last_outcome}`);
   }
 
-  // Recent snapshot trend (last 6 = ~30min)
-  const snaps = (entry.snapshots || []).slice(-6);
+  // Recent snapshot trend (last 6)
+  const snaps = db.prepare('SELECT * FROM pool_snapshots WHERE pool_address = ? ORDER BY id DESC LIMIT 6').all(poolAddress).reverse();
   if (snaps.length >= 2) {
     const first = snaps[0];
     const last = snaps[snaps.length - 1];
     const pnlTrend = last.pnl_pct != null && first.pnl_pct != null
       ? (last.pnl_pct - first.pnl_pct).toFixed(2)
       : null;
-    const oorCount = snaps.filter(s => s.in_range === false).length;
+    const oorCount = snaps.filter(s => s.in_range === 0).length;
     lines.push(`RECENT TREND: PnL drift ${pnlTrend !== null ? (pnlTrend >= 0 ? "+" : "") + pnlTrend + "%" : "unknown"} over last ${snaps.length} cycles, OOR in ${oorCount}/${snaps.length} cycles`);
   }
 
   // Notes
-  if (entry.notes?.length > 0) {
-    const lastNote = entry.notes[entry.notes.length - 1];
+  let notes = [];
+  try { notes = JSON.parse(entry.notes || '[]'); } catch { /**/ }
+  if (notes.length > 0) {
+    const lastNote = notes[notes.length - 1];
     lines.push(`NOTE: ${lastNote.note}`);
   }
 
@@ -275,34 +271,35 @@ export function recallForPool(poolAddress) {
 
 /**
  * Tool handler: add_pool_note
- * Agent can annotate a pool with a freeform note.
  */
 export function addPoolNote({ pool_address, note }) {
   if (!pool_address) return { error: "pool_address required" };
   if (!note) return { error: "note required" };
 
-  const db = load();
+  const db = getDB();
 
-  if (!db[pool_address]) {
-    db[pool_address] = {
-      name: pool_address.slice(0, 8),
-      base_mint: null,
-      deploys: [],
-      total_deploys: 0,
-      avg_pnl_pct: 0,
-      win_rate: 0,
-      last_deployed_at: null,
-      last_outcome: null,
-      notes: [],
-    };
-  }
+  db.transaction(() => {
+    let entry = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(pool_address);
+    if (!entry) {
+      db.prepare(`
+        INSERT INTO pool_memory (
+          pool_address, name, base_mint, total_deploys, avg_pnl_pct, win_rate,
+          last_deployed_at, last_outcome, notes, cooldown_until
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        pool_address, pool_address.slice(0, 8), null, 0, 0, 0, null, null, '[]', null
+      );
+      entry = { notes: '[]' };
+    }
 
-  db[pool_address].notes.push({
-    note,
-    added_at: new Date().toISOString(),
-  });
+    let notes = [];
+    try { notes = JSON.parse(entry.notes || '[]'); } catch { notes = []; }
+    
+    notes.push({ note, added_at: new Date().toISOString() });
+    
+    db.prepare('UPDATE pool_memory SET notes = ? WHERE pool_address = ?').run(JSON.stringify(notes), pool_address);
+  })();
 
-  save(db);
   log("pool-memory", `Note added to ${pool_address.slice(0, 8)}: ${note}`);
   return { saved: true, pool_address, note };
 }

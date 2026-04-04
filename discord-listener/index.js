@@ -11,6 +11,7 @@
  */
 import { Client } from "discord.js-selfbot-v13";
 import fs from "fs";
+import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -51,7 +52,7 @@ function saveSignal(record) {
   const signals = loadSignals();
   signals.unshift(record); // newest first
   // Keep last 100 signals
-  fs.writeFileSync(SIGNALS_FILE, JSON.stringify(signals.slice(0, 100), null, 2));
+  writeFileAtomic.sync(SIGNALS_FILE, JSON.stringify(signals.slice(0, 100), null, 2));
 }
 
 async function processAddress(address, message) {

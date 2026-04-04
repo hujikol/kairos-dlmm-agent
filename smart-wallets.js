@@ -1,4 +1,5 @@
 import fs from "fs";
+import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
@@ -16,7 +17,7 @@ function loadWallets() {
 }
 
 function saveWallets(data) {
-  fs.writeFileSync(WALLETS_PATH, JSON.stringify(data, null, 2));
+  writeFileAtomic.sync(WALLETS_PATH, JSON.stringify(data, null, 2));
 }
 
 const SOLANA_PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;

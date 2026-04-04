@@ -11,6 +11,7 @@
  */
 
 import fs from "fs";
+import writeFileAtomic from "write-file-atomic";
 import { log } from "./logger.js";
 
 const POSTMORTEM_FILE = "./postmortem-rules.json";
@@ -28,7 +29,7 @@ function loadRules() {
 function saveRules(rules) {
   // Keep only the most recent rules
   const trimmed = rules.slice(-MAX_RULES);
-  fs.writeFileSync(POSTMORTEM_FILE, JSON.stringify(trimmed, null, 2));
+  writeFileAtomic.sync(POSTMORTEM_FILE, JSON.stringify(trimmed, null, 2));
 }
 
 // ─── Core Analysis ──────────────────────────────────────────────

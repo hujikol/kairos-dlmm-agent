@@ -22,6 +22,7 @@ import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsO
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
 import { config, reloadScreeningThresholds } from "../config.js";
 import fs from "fs";
+import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
 import { execSync, spawn } from "child_process";
@@ -213,7 +214,7 @@ const toolMap = {
     }
     Object.assign(userConfig, applied);
     userConfig._lastAgentTune = new Date().toISOString();
-    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
+    writeFileAtomic.sync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
 
     // Restart cron jobs if intervals changed
     const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null;

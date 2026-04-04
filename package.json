@@ -19,12 +19,14 @@
     "@meteora-ag/dlmm": "latest",
     "@solana/spl-token": "^0.3.11",
     "@solana/web3.js": "^1.95.0",
+    "better-sqlite3": "^12.8.0",
     "bn.js": "^5.2.1",
     "bs58": "^5.0.0",
     "dotenv": "^17.3.1",
-    "node-cron": "^3.0.3",
     "jsonrepair": "^3.13.3",
-    "openai": "^4.73.0"
+    "node-cron": "^3.0.3",
+    "openai": "^4.73.0",
+    "write-file-atomic": "^7.0.1"
   },
   "engines": {
     "node": ">=18.0.0"
