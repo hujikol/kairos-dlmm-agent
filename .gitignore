@@ -17,6 +17,11 @@ pool-memory.json
 token-blacklist.json
 strategy-library.json
 
+# SQLite Database files
+*.db
+*.db-shm
+*.db-wal
+
 # Logs
 logs/
 
