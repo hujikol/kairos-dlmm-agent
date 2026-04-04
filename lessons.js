@@ -424,7 +424,15 @@ export function listLessons({ role = null, pinned = null, tag = null, limit = 30
   if (clauses.length > 0) query += ' WHERE ' + clauses.join(' AND ');
 
   const list = db.prepare(query).all(...binds);
-  let lessons = list.map(l => ({ ...l, tags: JSON.parse(l.tags || '[]') }));
+  let lessons = list.map(l => {
+    let parsedTags = [];
+    try {
+      parsedTags = JSON.parse(l.tags || '[]');
+      if (typeof parsedTags === "string") parsedTags = JSON.parse(parsedTags);
+      if (!Array.isArray(parsedTags)) parsedTags = [];
+    } catch (e) { parsedTags = []; }
+    return { ...l, tags: parsedTags };
+  });
   if (tag) lessons = lessons.filter(l => l.tags.includes(tag));
 
   return {
@@ -479,11 +487,20 @@ export function getLessonsForPrompt(opts = {}) {
   const allRows = db.prepare('SELECT * FROM lessons').all();
   if (allRows.length === 0) return null;
 
-  const allLessons = allRows.map(l => ({
-    ...l,
-    tags: JSON.parse(l.tags || '[]'),
-    pinned: l.pinned === 1
-  }));
+  const allLessons = allRows.map(l => {
+    let parsedTags = [];
+    try {
+      parsedTags = JSON.parse(l.tags || '[]');
+      if (typeof parsedTags === "string") parsedTags = JSON.parse(parsedTags);
+      if (!Array.isArray(parsedTags)) parsedTags = [];
+    } catch (e) { parsedTags = []; }
+    
+    return {
+      ...l,
+      tags: parsedTags,
+      pinned: l.pinned === 1
+    };
+  });
 
   const isAutoCycle = agentType === "SCREENER" || agentType === "MANAGER";
   const PINNED_CAP  = isAutoCycle ? 5  : 10;

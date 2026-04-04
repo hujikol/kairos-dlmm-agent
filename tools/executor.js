@@ -101,7 +101,12 @@ const toolMap = {
   unblock_deployer: unblockDev,
   list_blocked_deployers: listBlockedDevs,
   add_lesson: ({ rule, tags, pinned, role }) => {
-    addLesson(rule, tags || [], { pinned: !!pinned, role: role || null });
+    let parsedTags = tags;
+    if (typeof parsedTags === "string") {
+      try { parsedTags = JSON.parse(parsedTags); } catch (e) { parsedTags = [parsedTags]; }
+    }
+    if (!Array.isArray(parsedTags)) parsedTags = [];
+    addLesson(rule, parsedTags, { pinned: !!pinned, role: role || null });
     return { saved: true, rule, pinned: !!pinned, role: role || "all" };
   },
   pin_lesson:   ({ id }) => pinLesson(id),

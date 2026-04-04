@@ -111,8 +111,9 @@ export async function deployPosition({
   pool_address = normalizeMint(pool_address);
   const activeStrategy = strategy || config.strategy.strategy;
 
-  const activeBinsBelow = bins_below ?? config.strategy.binsBelow;
-  const activeBinsAbove = bins_above ?? 0;
+  const activeBinsBelow = Number(bins_below ?? config.strategy.binsBelow);
+  const activeBinsAbove = Number(bins_above ?? 0);
+
 
   if (isPoolOnCooldown(pool_address)) {
     log("deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown (closed for low yield) — skipping`);
