@@ -101,6 +101,33 @@ export async function getWalletBalances() {
 }
 
 /**
+ * Get the direct real-time balance of a specific mint using the Solana connection.
+ * Faster and more accurate than waiting for the Helius Wallet API to index.
+ */
+export async function getMintBalance(mint) {
+  const connection = getConnection();
+  const wallet = getWallet();
+  const mintPubKey = new PublicKey(normalizeMint(mint));
+
+  if (mintPubKey.toString() === config.tokens.SOL) {
+    const lamports = await connection.getBalance(wallet.publicKey);
+    return lamports / LAMPORTS_PER_SOL;
+  }
+
+  try {
+    const accounts = await connection.getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPubKey });
+    if (!accounts.value || accounts.value.length === 0) return 0;
+    
+    return accounts.value.reduce((sum, acc) => {
+      return sum + (acc.account.data.parsed.info.tokenAmount.uiAmount || 0);
+    }, 0);
+  } catch (e) {
+    log("wallet_error", `Failed to fetch balance for ${mint}: ${e.message}`);
+    return 0;
+  }
+}
+
+/**
  * Swap tokens via Jupiter Ultra API (order → sign → execute).
  */
 const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -250,25 +277,45 @@ async function swapViaQuoteApi({ wallet, connection, input_mint, output_mint, am
 }
 
 /**
- * Automatically swaps non-SOL tokens (reward fees) to SOL.
+ * Automatically swaps non-SOL tokens (reward fees or closed position principal) to SOL.
  * If mints are provided, only those are checked. Otherwise, all non-SOL tokens with USD >= 0.10 are swapped.
  */
 export async function autoSwapRewardFees(mints = null) {
   try {
     const balances = await getWalletBalances();
-    const tokensToSwap = balances.tokens?.filter(t => 
+    let tokensToSwap = balances.tokens?.filter(t => 
       t.mint !== config.tokens.SOL && 
       (mints === null || mints.includes(t.mint)) && 
       t.usd >= 0.10
     );
 
+    // ─── Direct Fallback for provided mints (Helius lag) ───────
+    if (mints && mints.length > 0) {
+      const foundMints = new Set(tokensToSwap.map(t => t.mint));
+      const missingMints = mints.filter(m => !foundMints.has(m) && m !== config.tokens.SOL);
+      
+      if (missingMints.length > 0) {
+        log("wallet", `Checking direct balance for ${missingMints.length} missing mint(s) due to Helius API lag...`);
+        for (const mint of missingMints) {
+          const bal = await getMintBalance(mint);
+          if (bal > 0) {
+            // We don't have the USD value here, but if it's a known mint from close_position, we swap it.
+            tokensToSwap.push({ mint, balance: bal, symbol: mint.slice(0, 8), usd: 1.0 }); // Dummy USD > 0.10
+          } else {
+            log("wallet", `Skipped ${mint.slice(0, 8)}: Direct balance is 0.`);
+          }
+        }
+      }
+    }
+
     if (!tokensToSwap || tokensToSwap.length === 0) {
+      log("wallet", "No tokens found to auto-swap.");
       return { success: true, swapped: [] };
     }
 
     const swapResults = [];
     for (const token of tokensToSwap) {
-      log("wallet", `Auto-swapping reward fee token ${token.symbol || token.mint.slice(0, 8)} ($${token.usd.toFixed(2)}) to SOL`);
+      log("wallet", `Auto-swapping token ${token.symbol || token.mint.slice(0, 8)} (${token.balance}) to SOL`);
       const result = await swapToken({ 
         input_mint: token.mint, 
         output_mint: config.tokens.SOL, 
@@ -278,7 +325,15 @@ export async function autoSwapRewardFees(mints = null) {
     }
     return { success: true, swapped: swapResults };
   } catch (e) {
-    log("wallet_error", `Auto-swap reward fees failed: ${e.message}`);
+    log("wallet_error", `Auto-swap failed: ${e.message}`);
     return { success: false, error: e.message };
   }
+}
+
+/**
+ * Sweeps all tokens in the wallet back to SOL (manual command).
+ */
+export async function swapAllTokensToSol() {
+  log("wallet", "Manual 'Swap All' triggered — sweeping wallet to SOL...");
+  return await autoSwapRewardFees(null);
 }

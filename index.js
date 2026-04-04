@@ -4,7 +4,7 @@ import readline from "readline";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
-import { getWalletBalances } from "./tools/wallet.js";
+import { getWalletBalances, autoSwapRewardFees } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
@@ -274,9 +274,32 @@ RULES:
 
 Execute the required actions. Do NOT re-evaluate CLOSE/CLAIM — rules already applied. Just execute.
 After executing, write a brief one-line result per position.
-      `, Math.min(config.llm.maxSteps, 5), [], "MANAGER", config.llm.managementModel, 2048, { positions: livePositions });
+      `, Math.min(config.llm.maxSteps, 10), [], "MANAGER", config.llm.managementModel, 2048, { positions: livePositions });
 
       mgmtReport += `\n\n${content}`;
+
+      // ═══════════════════════════════════════════
+      //  POST-TRADE: Auto-swap fee tokens to SOL
+      // ═══════════════════════════════════════════
+      const executedActions = actionPositions.filter(p => {
+        const a = actionMap.get(p.position);
+        return a?.action === "CLAIM" || a?.action === "CLOSE";
+      });
+
+      if (executedActions.length > 0) {
+        log("post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
+        const swapResult = await autoSwapRewardFees();
+        if (swapResult.swapped && swapResult.swapped.length > 0) {
+          log("post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
+          for (const swap of swapResult.swapped) {
+            if (swap.success) {
+              mgmtReport += `\n🔁 Swapped → SOL: tx ${swap.tx}`;
+            } else {
+              log("post_trade_warn", `Swap failed: ${swap.error}`);
+            }
+          }
+        }
+      }
     } else {
       log("cron", "Management: all positions STAY — skipping LLM");
     }
@@ -479,7 +502,7 @@ STEPS:
     *Decision:* NO DEPLOY
     *analysis:* <2-4 sentences explaining why current candidates were rejected>
     *rejected:* <short semicolon-separated reasons for the top candidates that were skipped>
-      `, Math.min(config.llm.maxSteps, 4), [], "SCREENER", config.llm.screeningModel, 2048);
+      `, Math.min(config.llm.maxSteps, 10), [], "SCREENER", config.llm.screeningModel, 2048);
     screenReport = content;
   } catch (error) {
     log("cron_error", `Screening cycle failed: ${error.message}`);
@@ -719,6 +742,34 @@ if (isTTY) {
       return;
     }
 
+    if (text === "/balance") {
+      try {
+        const wallet = await getWalletBalances();
+        const cur = config.management.solMode ? "◎" : "$";
+        
+        let table = "Token     Balance      Value\n";
+        table += "────────  ───────────  ──────\n";
+        
+        // Add SOL
+        table += `SOL       ${wallet.sol.toFixed(4).padEnd(11)}  $${wallet.sol_usd.toFixed(2)}\n`;
+        
+        // Add other non-zero tokens
+        wallet.tokens.filter(t => t.symbol !== "SOL" && t.usd > 0.01).forEach(t => {
+          const sym = t.symbol.slice(0, 8).padEnd(8);
+          const bal = t.balance.toString().slice(0, 11).padEnd(11);
+          const val = `$${t.usd.toFixed(2)}`;
+          table += `${sym}  ${bal}  ${val}\n`;
+        });
+        
+        await sendMessage(
+          `*💰 Wallet Balance*\n\n` +
+          `\`\`\`\n${table}\`\`\`\n` +
+          `*Total:* $${wallet.total_usd.toFixed(2)}`
+        );
+      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+      return;
+    }
+
     if (text === "/status") {
       try {
         const [wallet, positionsData] = await Promise.all([
@@ -764,6 +815,31 @@ if (isTTY) {
         });
 
         await sendMessage(`*🔍 Top Candidates*\n\n\`\`\`\n${table}\`\`\``);
+      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+      return;
+    }
+
+    if (text === "/screen") {
+      runScreeningCycle().catch((e) => log("cron_error", `Manual screening failed: ${e.message}`));
+      await sendMessage("🔍 *Manual Screening Started*");
+      return;
+    }
+
+    if (text === "/swap-all") {
+      try {
+        await sendMessage("🔄 *Sweeping all tokens to SOL...*");
+        const result = await swapAllTokensToSol();
+        if (result.success) {
+          const count = result.swapped?.length || 0;
+          if (count === 0) {
+            await sendMessage("No eligible tokens found to swap.");
+          } else {
+            const symbols = result.swapped.map(s => s.input_mint?.slice(0, 4)).join(", ");
+            await sendMessage(`✅ *Sweep Complete*\nSwapped ${count} tokens (${symbols}) to SOL.`);
+          }
+        } else {
+          await sendMessage(`❌ Sweep failed: ${result.error}`);
+        }
       } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
       return;
     }
@@ -908,7 +984,10 @@ Commands:
   1 / 2 / 3 ...  Deploy ${DEPLOY} SOL into that pool
   auto           Let the agent pick and deploy automatically
   /status        Refresh wallet + positions
+  /balance       Show detailed wallet holdings
   /candidates    Refresh top pool list
+  /screen        Manually trigger a full screening cycle
+  /swap-all      Sweep all non-SOL tokens in wallet back to SOL
   /briefing      Show morning briefing (last 24h)
   /learn         Study top LPers from the best current pool and save lessons
   /learn <addr>  Study top LPers from a specific pool address
@@ -933,7 +1012,10 @@ Commands:
           `Deploy ${DEPLOY} SOL into pool ${pool.pool} (${pool.name}). Call get_active_bin first then deploy_position. Report result.`,
           config.llm.maxSteps,
           [],
-          "SCREENER"
+          "SCREENER",
+          null,
+          null,
+          { requireTool: true }
         );
         console.log(`\n${reply}\n`);
         launchCron();
@@ -949,10 +1031,35 @@ Commands:
           `get_top_candidates, pick the best one, get_active_bin, deploy_position with ${DEPLOY} SOL. Execute now, don't ask.`,
           config.llm.maxSteps,
           [],
-          "SCREENER"
+          "SCREENER",
+          null,
+          null,
+          { requireTool: true }
         );
         console.log(`\n${reply}\n`);
         launchCron();
+      });
+      return;
+    }
+
+    // ── screen: manual trigger ─────
+    if (input.toLowerCase() === "screen" || input.toLowerCase() === "/screen") {
+      runScreeningCycle().catch((e) => log("cron_error", `Manual screening failed: ${e.message}`));
+      console.log("\nManual screening cycle started.\n");
+      rl.prompt();
+      return;
+    }
+
+    // ── swap-all: manual sweep ─────
+    if (input.toLowerCase() === "/swap-all") {
+      await runBusy(async () => {
+        console.log("\nSweeping wallet to SOL...\n");
+        const result = await swapAllTokensToSol();
+        if (result.success) {
+          console.log(`\nSweep complete. Swapped ${result.swapped?.length || 0} tokens.\n`);
+        } else {
+          console.log(`\nSweep failed: ${result.error}\n`);
+        }
       });
       return;
     }
@@ -975,6 +1082,21 @@ Commands:
         for (const p of positions.positions) {
           const status = p.in_range ? "in-range ✓" : "OUT OF RANGE ⚠";
           console.log(`  ${p.pair.padEnd(16)} ${status}  fees: ${config.management.solMode ? "◎" : "$"}${p.unclaimed_fees_usd}`);
+        }
+        console.log();
+      });
+      return;
+    }
+
+    if (input === "/balance") {
+      await runBusy(async () => {
+        const wallet = await getWalletBalances();
+        console.log(`\nWallet Holdings ($${wallet.total_usd.toFixed(2)}):`);
+        console.log(`  SOL:   ${wallet.sol.toFixed(4)} ($${wallet.sol_usd.toFixed(2)})`);
+        for (const t of wallet.tokens) {
+          if (t.symbol !== "SOL" && t.usd > 0.01) {
+            console.log(`  ${t.symbol.padEnd(6)}: ${t.balance.toString().padEnd(12)} ($${t.usd.toFixed(2)})`);
+          }
         }
         console.log();
       });

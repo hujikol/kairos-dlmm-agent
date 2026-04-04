@@ -9,7 +9,7 @@ import {
   closePosition,
   searchPools,
 } from "./dlmm.js";
-import { getWalletBalances, swapToken, autoSwapRewardFees } from "./wallet.js";
+import { getWalletBalances, swapToken, autoSwapRewardFees, swapAllTokensToSol } from "./wallet.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction } from "../state.js";
@@ -58,6 +58,7 @@ const toolMap = {
   close_position: closePosition,
   get_wallet_balance: getWalletBalances,
   swap_token: swapToken,
+  swap_all_to_sol: swapAllTokensToSol,
   get_top_lpers: studyTopLPers,
   study_top_lpers: studyTopLPers,
   set_position_note: ({ position_address, instruction }) => {
@@ -315,14 +316,16 @@ export async function executeTool(name, args) {
             if (result.quote_mint) mintsToSwap.push(result.quote_mint);
             
             const swapResult = await autoSwapRewardFees(mintsToSwap);
-            if (swapResult && swapResult.swapped && swapResult.swapped.length > 0) {
-              result.auto_swapped = true;
-              result.auto_swap_note = `Non-SOL tokens already auto-swapped back to SOL. Do NOT call swap_token again.`;
-              result.sol_received = swapResult.swapped.reduce((acc, s) => acc + (s.amount_out || 0), 0);
+              if (swapResult && swapResult.swapped && swapResult.swapped.length > 0) {
+                result.auto_swapped = true;
+                result.auto_swap_note = `Non-SOL tokens already auto-swapped back to SOL. Do NOT call swap_token again.`;
+                result.sol_received = swapResult.swapped.reduce((acc, s) => acc + (s.amount_out || 0), 0);
+              } else {
+                log("executor", `Auto-swap after close: No eligible tokens found to swap (or balance not yet indexed).`);
+              }
+            } catch (e) {
+              log("executor_warn", `Auto-swap after close failed: ${e.message}`);
             }
-          } catch (e) {
-            log("executor_warn", `Auto-swap after close failed: ${e.message}`);
-          }
         }
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {

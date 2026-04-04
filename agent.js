@@ -115,7 +115,7 @@ const TOOL_REQUIRED_INTENTS = /\b(deploy|open position|open|add liquidity|lp int
 
 function shouldRequireRealToolUse(goal, agentType, requireTool) {
   if (requireTool) return true;
-  if (agentType === "MANAGER") return false;
+  if (agentType === "MANAGER" || agentType === "SCREENER") return false;
   return TOOL_REQUIRED_INTENTS.test(goal);
 }
 
