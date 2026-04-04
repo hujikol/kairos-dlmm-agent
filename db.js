@@ -174,6 +174,64 @@ function initSchema(db) {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_pool_snapshots_pool ON pool_snapshots(pool_address)`);
+
+  // ─── Strategies ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS strategies (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      author TEXT,
+      lp_strategy TEXT,
+      token_criteria TEXT, -- JSON
+      entry TEXT, -- JSON
+      range TEXT, -- JSON
+      exit TEXT, -- JSON
+      best_for TEXT,
+      raw TEXT,
+      added_at TEXT,
+      updated_at TEXT
+    )
+  `);
+
+  // ─── Signal Weights ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS signal_weights (
+      id INTEGER PRIMARY KEY DEFAULT 1, -- Only one record for current weights
+      weights TEXT, -- JSON
+      last_recalc TEXT,
+      recalc_count INTEGER
+    )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS signal_weights_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT,
+      changes TEXT, -- JSON
+      window_size INTEGER,
+      win_count INTEGER,
+      loss_count INTEGER
+    )
+  `);
+
+  // ─── Blacklists ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS token_blacklist (
+      mint TEXT PRIMARY KEY,
+      symbol TEXT,
+      reason TEXT,
+      added_at TEXT,
+      added_by TEXT
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dev_blocklist (
+      wallet TEXT PRIMARY KEY,
+      label TEXT,
+      reason TEXT,
+      added_at TEXT
+    )
+  `);
 }
 
 /**

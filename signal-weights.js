@@ -9,11 +9,8 @@
  * LLM prompt so the agent can prioritize the right screening criteria.
  */
 
-import fs from "fs";
-import writeFileAtomic from "write-file-atomic";
+import { getDB } from "./db.js";
 import { log } from "./logger.js";
-
-const WEIGHTS_FILE = "./signal-weights.json";
 
 // ─── Signal Definitions ─────────────────────────────────────────
 
@@ -51,7 +48,10 @@ const CATEGORICAL_SIGNALS = new Set(["narrative_quality"]);
 // ─── Persistence ─────────────────────────────────────────────────
 
 export function loadWeights() {
-  if (!fs.existsSync(WEIGHTS_FILE)) {
+  const db = getDB();
+  const row = db.prepare('SELECT * FROM signal_weights WHERE id = 1').get();
+
+  if (!row) {
     const initial = {
       weights: { ...DEFAULT_WEIGHTS },
       last_recalc: null,
@@ -59,28 +59,37 @@ export function loadWeights() {
       history: [],
     };
     saveWeights(initial);
-    log("signal_weights", "Created signal-weights.json with default weights");
+    log("signal_weights", "Initialized signal weights in DB");
     return initial;
   }
-  try {
-    return JSON.parse(fs.readFileSync(WEIGHTS_FILE, "utf8"));
-  } catch (err) {
-    log("signal_weights_error", `Failed to read signal-weights.json: ${err.message}`);
-    return {
-      weights: { ...DEFAULT_WEIGHTS },
-      last_recalc: null,
-      recalc_count: 0,
-      history: [],
-    };
-  }
+
+  const history = db.prepare('SELECT * FROM signal_weights_history ORDER BY id DESC LIMIT 20').all();
+
+  return {
+    weights: JSON.parse(row.weights || '{}'),
+    last_recalc: row.last_recalc,
+    recalc_count: row.recalc_count,
+    history: history.map(h => ({
+      timestamp: h.timestamp,
+      changes: JSON.parse(h.changes || '[]'),
+      window_size: h.window_size,
+      win_count: h.win_count,
+      loss_count: h.loss_count
+    })).reverse()
+  };
 }
 
 export function saveWeights(data) {
-  try {
-    writeFileAtomic.sync(WEIGHTS_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    log("signal_weights_error", `Failed to write signal-weights.json: ${err.message}`);
-  }
+  const db = getDB();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT OR REPLACE INTO signal_weights (id, weights, last_recalc, recalc_count)
+      VALUES (1, ?, ?, ?)
+    `).run(JSON.stringify(data.weights), data.last_recalc, data.recalc_count);
+
+    // If there's new history not yet in the DB, we might want to add it.
+    // However, the recalculateWeights function below manages history addition now.
+  })();
 }
 
 // ─── Core Algorithm ──────────────────────────────────────────────
@@ -176,25 +185,28 @@ export function recalculateWeights(perfData, cfg = {}) {
   }
 
   // Persist
-  data.weights = weights;
-  data.last_recalc = new Date().toISOString();
-  data.recalc_count = (data.recalc_count || 0) + 1;
-  if (!data.history) data.history = [];
-  if (changes.length > 0) {
-    data.history.push({
-      timestamp: data.last_recalc,
-      changes,
-      window_size: recent.length,
-      win_count: wins.length,
-      loss_count: losses.length,
-    });
-    if (data.history.length > 20) data.history = data.history.slice(-20);
-  }
-  saveWeights(data);
+  db.transaction(() => {
+    db.prepare(`
+      INSERT OR REPLACE INTO signal_weights (id, weights, last_recalc, recalc_count)
+      VALUES (1, ?, ?, ?)
+    `).run(JSON.stringify(weights), new Date().toISOString(), (data.recalc_count || 0) + 1);
 
-  log("signal_weights", changes.length > 0
-    ? `Recalculated: ${changes.length} weight(s) adjusted from ${recent.length} records`
-    : `Recalculated: no changes needed (${recent.length} records, ${ranked.length} signals evaluated)`);
+    if (changes.length > 0) {
+      db.prepare(`
+        INSERT INTO signal_weights_history (timestamp, changes, window_size, win_count, loss_count)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(new Date().toISOString(), JSON.stringify(changes), recent.length, wins.length, losses.length);
+      
+      // Cleanup old history (keep last 50)
+      db.prepare(`
+        DELETE FROM signal_weights_history WHERE id NOT IN (
+          SELECT id FROM signal_weights_history ORDER BY id DESC LIMIT 50
+        )
+      `).run();
+    }
+  })();
+
+  log("signal_weights", `${changes.length > 0 ? "Recalculated" : "Evaluated"}: ${changes.length} weight(s) adjusted from ${recent.length} records`);
 
   return { changes, weights };
 }

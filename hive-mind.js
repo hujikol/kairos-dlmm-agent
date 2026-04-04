@@ -23,11 +23,10 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { getDB } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
-const LESSONS_FILE = path.join(__dirname, "lessons.json");
-const POOL_MEMORY_FILE = path.join(__dirname, "pool-memory.json");
 
 const SYNC_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
 const GET_TIMEOUT_MS = 5_000;
@@ -148,23 +147,19 @@ export async function syncToHive() {
     if (now - _lastSyncTime < SYNC_DEBOUNCE_MS) return;
     _lastSyncTime = now;
 
-    // ── Collect local data ──────────────────────────
+    // ── Collect local data from SQLite ──────────────────────────
+    const db = getDB();
 
     // Lessons
-    const lessonsData = readJsonFile(LESSONS_FILE) || { lessons: [], performance: [] };
-    const lessons = lessonsData.lessons || [];
+    const lessons = db.prepare('SELECT id, rule, tags, outcome, context, pnl_pct, range_efficiency, pool, created_at, pinned, role FROM lessons').all();
+    lessons.forEach(l => l.tags = JSON.parse(l.tags || '[]'));
 
-    // Pool deploys — flatten all pools' deploy arrays
-    const poolMemory = readJsonFile(POOL_MEMORY_FILE) || {};
-    const deploys = [];
-    for (const poolAddr of Object.keys(poolMemory)) {
-      const pool = poolMemory[poolAddr];
-      if (Array.isArray(pool.deploys)) {
-        for (const d of pool.deploys) {
-          deploys.push({ pool_address: poolAddr, pool_name: pool.name, ...d });
-        }
-      }
-    }
+    // Pool deploys — join pool_deploys with pool_memory to get pool names/mints
+    const deploys = db.prepare(`
+      SELECT d.*, m.name as pool_name, m.base_mint
+      FROM pool_deploys d
+      JOIN pool_memory m ON m.pool_address = d.pool_address
+    `).all();
 
     // Screening thresholds from config
     const thresholds = {

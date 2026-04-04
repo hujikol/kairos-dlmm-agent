@@ -6,6 +6,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import axios from "axios";
+import { isBlacklisted } from "../token-blacklist.js";
+import { isDevBlocked } from "../dev-blocklist.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -28,16 +30,11 @@ export function dedupCheck(address) {
   return { pass: true };
 }
 
-// Stage 2: Token blacklist — reject if mint is blacklisted
+// Stage 2: Token blacklist — reject if mint is blacklisted (reads from SQLite)
 export function blacklistCheck(mint) {
-  const file = path.join(ROOT, "token-blacklist.json");
-  if (!fs.existsSync(file)) return { pass: true };
-  try {
-    const data = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (data[mint]) {
-      return { pass: false, reason: `blacklisted: ${data[mint].reason || "no reason"}` };
-    }
-  } catch { /* parse error, pass */ }
+  if (isBlacklisted(mint)) {
+    return { pass: false, reason: `blacklisted token` };
+  }
   return { pass: true };
 }
 
@@ -106,20 +103,14 @@ export async function rugCheck(mint) {
   }
 }
 
-// Stage 5: Deployer blacklist
+// Stage 5: Deployer blocklist (reads from SQLite)
 export async function deployerCheck(poolAddress) {
-  const file = path.join(ROOT, "deployer-blacklist.json");
-  if (!fs.existsSync(file)) return { pass: true };
   try {
-    const data = JSON.parse(fs.readFileSync(file, "utf8"));
-    const blocked = data.addresses || [];
-    if (blocked.length === 0) return { pass: true };
-
     // Fetch pool creator from Meteora API
     const res = await axios.get(`https://dlmm.datapi.meteora.ag/pools/${poolAddress}`, { timeout: 8000 });
     const creator = res.data?.creator || res.data?.creator_address;
-    if (creator && blocked.includes(creator)) {
-      return { pass: false, reason: `deployer blacklisted: ${creator}` };
+    if (creator && isDevBlocked(creator)) {
+      return { pass: false, reason: `deployer blocked: ${creator}` };
     }
   } catch { /* can't check, pass */ }
   return { pass: true };
