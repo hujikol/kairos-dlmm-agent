@@ -68,18 +68,21 @@ export function isEnabled() {
   return !!TOKEN;
 }
 
-export async function sendMessage(text) {
+export async function sendMessage(text, parseMode = "Markdown") {
   if (!TOKEN || !chatId) return;
   return new Promise((resolve) => {
     enqueueMessage(async () => {
       try {
+        const payload = {
+          chat_id: chatId,
+          text: String(text).slice(0, 4096),
+        };
+        if (parseMode) payload.parse_mode = parseMode;
+
         const res = await fetch(`${BASE}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: String(text).slice(0, 4096),
-          }),
+          body: JSON.stringify(payload),
         });
         if (!res.ok) {
           const err = await res.text();
@@ -186,7 +189,7 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
     ? `Price range: ${priceRange.min < 0.0001 ? priceRange.min.toExponential(3) : priceRange.min.toFixed(6)} – ${priceRange.max < 0.0001 ? priceRange.max.toExponential(3) : priceRange.max.toFixed(6)}\n`
     : "";
   const poolStr = (binStep || baseFee)
-    ? `Bin step: ${binStep ?? "?"}  |  Base fee: ${baseFee != null ? baseFee + "%" : "?"}\n`
+    ? `Bin step: ${binStep ?? "?"}  •  Base fee: ${baseFee != null ? baseFee + "%" : "?"}\n`
     : "";
   await sendHTML(
     `✅ <b>Deployed</b> ${pair}\n` +
@@ -209,7 +212,7 @@ export async function notifyClose({ pair, pnlUsd, pnlPct }) {
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {
   await sendHTML(
     `🔄 <b>Swapped</b> ${inputSymbol} → ${outputSymbol}\n` +
-    `In: ${amountIn ?? "?"} | Out: ${amountOut ?? "?"}\n` +
+    `In: ${amountIn ?? "?"}  •  Out: ${amountOut ?? "?"}\n` +
     `Tx: <code>${tx?.slice(0, 16)}...</code>`
   );
 }

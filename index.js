@@ -209,29 +209,36 @@ export async function runManagementCycle({ silent = false } = {}) {
     // ── Build JS report ──────────────────────────────────────────────
     const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
     const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
+    const cur = config.management.solMode ? "◎" : "$";
 
-    const reportLines = positionData.map((p) => {
+    let table = "ID  Pair        PnL     Yield   Status\n";
+    table += "──  ──────────  ──────  ──────  ──────\n";
+
+    const reportLines = positionData.map((p, i) => {
       const act = actionMap.get(p.position);
-      const inRange = p.in_range ? "🟢 IN" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
-      const val = config.management.solMode ? `◎${p.total_value_usd ?? "?"}` : `$${p.total_value_usd ?? "?"}`;
-      const unclaimed = config.management.solMode ? `◎${p.unclaimed_fees_usd ?? "?"}` : `$${p.unclaimed_fees_usd ?? "?"}`;
-      const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
-      let line = `**${p.pair}** | Age: ${p.age_minutes ?? "?"}m | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${p.pnl_pct ?? "?"}% | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
-      if (p.instruction) line += `\nNote: "${p.instruction}"`;
-      if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
-      if (act.action === "CLOSE" && act.rule && act.rule !== "exit") line += `\nRule ${act.rule}: ${act.reason}`;
-      if (act.action === "CLAIM") line += `\n→ Claiming fees`;
-      return line;
-    });
+      const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.slice(0, 6).padEnd(6);
+      const yield_pct = `${p.fee_per_tvl_24h ?? "?"}%`.slice(0, 6).padEnd(6);
+      const statusIcon = p.in_range ? "🟢" : "🔴";
+      const statusLabel = act.action === "INSTRUCTION" ? "HOLD" : act.action;
+      
+      table += `${String(i + 1).padEnd(2)}  ${p.pair.slice(0, 10).padEnd(10)}  ${pnl}  ${yield_pct}  ${statusIcon}${statusLabel}\n`;
+      
+      let detail = "";
+      if (p.instruction) detail += `\nNote: "${p.instruction}"`;
+      if (act.action === "CLOSE" && act.rule === "exit") detail += `\n⚡ Trailing TP: ${act.reason}`;
+      if (act.action === "CLOSE" && act.rule && act.rule !== "exit") detail += `\nRule ${act.rule}: ${act.reason}`;
+      if (act.action === "CLAIM") detail += `\n→ Claiming fees`;
+      return detail ? `*${p.pair}*:${detail}` : null;
+    }).filter(Boolean);
 
     const needsAction = [...actionMap.values()].filter(a => a.action !== "STAY");
     const actionSummary = needsAction.length > 0
       ? needsAction.map(a => a.action === "INSTRUCTION" ? "EVAL instruction" : `${a.action}${a.reason ? ` (${a.reason})` : ""}`).join(", ")
       : "no action";
 
-    const cur = config.management.solMode ? "◎" : "$";
-    mgmtReport = reportLines.join("\n\n") +
-      `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
+    mgmtReport = `\`\`\`\n${table}\`\`\`\n` +
+      (reportLines.length > 0 ? reportLines.join("\n\n") + "\n\n" : "") +
+      `Summary: 💼 ${positions.length} pos | ${cur}${totalValue.toFixed(2)} | fees: ${cur}${totalUnclaimed.toFixed(2)} | ${actionSummary}`;
 
     // ── Call LLM only if action needed ──────────────────────────────
     const actionPositions = positionData.filter(p => {
@@ -287,7 +294,7 @@ After executing, write a brief one-line result per position.
   } finally {
     _managementBusy = false;
     if (!silent && telegramEnabled()) {
-      if (mgmtReport) sendMessage(`🔄 Management Cycle\n\n${stripThink(mgmtReport)}`).catch(() => { });
+      if (mgmtReport) sendMessage(`*🔄 Management Cycle*\n\n${stripThink(mgmtReport)}`).catch(() => { });
       for (const p of positions) {
         if (!p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes) {
           notifyOutOfRange({ pair: p.pair, minutesOOR: p.minutes_out_of_range }).catch(() => { });
@@ -456,22 +463,22 @@ STEPS:
 2. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
    bins_below = round(35 + (volatility/5)*55) clamped to [35,90].
 3. Report in this exact format (no tables, no extra sections):
-   Decision: DEPLOYED PAIR
-   pool: <name> | <pool address>
-   amount: <deploy amount> SOL | strategy=<strategy> | active_bin=<bin>
-   metrics: bin_step=X | fee=X% | fee_tvl=X% | volume=$X | tvl=$X | volatility=X | organic=X | mcap=$X
-   holder_audit: top10=X% | bots=X% | fees=XSOL | token_age=Xh
-   okx: risk=X | bundle=X% | sniper=X% | suspicious=X% | ath=X% | rugpull=Y/N | wash=Y/N
-   smart_wallets: <names or none>
-   range: minPrice→maxPrice (downside=(minPrice/maxPrice-1)*100%)
-   narrative: <1-2 sentences on what the token/pool is and why it has attention>
-   analysis: <2-4 sentences covering why this setup is attractive right now, key risks, and what outweighed the alternatives>
-   reason: <one decisive sentence explaining why this pool won over the rest>
-   rejected: <one short sentence on why the next best alternatives were passed over>
+    *Decision:* DEPLOYED PAIR
+    *pool:* <name> | <pool address>
+    *amount:* <deploy amount> SOL | *strategy*=<strategy> | *active_bin*=<bin>
+    *metrics:* bin_step=X | fee=X% | fee_tvl=X% | volume=$X | tvl=$X | volatility=X | organic=X | mcap=$X
+    *holder_audit:* top10=X% | bots=X% | fees=XSOL | token_age=Xh
+    *okx:* risk=X | bundle=X% | sniper=X% | suspicious=X% | ath=X% | rugpull=Y/N | wash=Y/N
+    *smart_wallets:* <names or none>
+    *range:* minPrice→maxPrice (downside=(minPrice/maxPrice-1)*100%)
+    *narrative:* <1-2 sentences on what the token/pool is and why it has attention>
+    *analysis:* <2-4 sentences covering why this setup is attractive right now, key risks, and what outweighed the alternatives>
+    *reason:* <one decisive sentence explaining why this pool won over the rest>
+    *rejected:* <one short sentence on why the next best alternatives were passed over>
 4. If no pool qualifies, report in this exact format instead:
-   Decision: NO DEPLOY
-   analysis: <2-4 sentences explaining why current candidates were rejected>
-   rejected: <short semicolon-separated reasons for the top candidates that were skipped>
+    *Decision:* NO DEPLOY
+    *analysis:* <2-4 sentences explaining why current candidates were rejected>
+    *rejected:* <short semicolon-separated reasons for the top candidates that were skipped>
       `, Math.min(config.llm.maxSteps, 4), [], "SCREENER", config.llm.screeningModel, 2048);
     screenReport = content;
   } catch (error) {
@@ -480,7 +487,7 @@ STEPS:
   } finally {
     _screeningBusy = false;
     if (!silent && telegramEnabled()) {
-      if (screenReport) sendMessage(`🔍 Screening Cycle\n\n${stripThink(screenReport)}`).catch(() => { });
+      if (screenReport) sendMessage(`*🔍 Screening Cycle*\n\n${stripThink(screenReport)}`).catch(() => { });
     }
   }
   return screenReport;
@@ -712,18 +719,77 @@ if (isTTY) {
       return;
     }
 
+    if (text === "/status") {
+      try {
+        const [wallet, positionsData] = await Promise.all([
+          getWalletBalances(),
+          getMyPositions({ force: true })
+        ]);
+        const { positions, total_positions } = positionsData;
+        const cur = config.management.solMode ? "◎" : "$";
+        
+        let table = "ID  Pair        PnL     Value\n";
+        table += "──  ──────────  ──────  ──────\n";
+        positions.forEach((p, i) => {
+          const pair = p.pair.slice(0, 10).padEnd(10);
+          const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.padEnd(6);
+          const val = `${cur}${p.total_value_usd}`.padEnd(6);
+          table += `${String(i + 1).padEnd(2)}  ${pair}  ${pnl}  ${val}\n`;
+        });
+        
+        const posBlock = total_positions > 0 ? `\`\`\`\n${table}\`\`\`\n` : "_No open positions._\n";
+        await sendMessage(
+          `*📊 Status Report*\n\n` +
+          posBlock +
+          `*Wallet:* ${wallet.sol.toFixed(4)} SOL ($${wallet.sol_usd})\n` +
+          `*SOL Price:* $${wallet.sol_price}`
+        );
+      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+      return;
+    }
+
+    if (text === "/candidates") {
+      try {
+        const { candidates } = await getTopCandidates({ limit: 5 });
+        if (!candidates?.length) { await sendMessage("No candidates found."); return; }
+        
+        let table = "#   Pool        fee/TVL  vol    org\n";
+        table += "──  ──────────  ───────  ─────  ───\n";
+        candidates.forEach((p, i) => {
+          const name = p.name.slice(0, 10).padEnd(10);
+          const ftvl = `${p.fee_active_tvl_ratio ?? p.fee_tvl_ratio}%`.slice(0, 5).padStart(7);
+          const vol = `$${((p.volume_window || 0) / 1000).toFixed(1)}k`.padStart(5);
+          const org = String(p.organic_score).padStart(3);
+          table += `${String(i + 1).padEnd(2)}  ${name}  ${ftvl}  ${vol}  ${org}\n`;
+        });
+
+        await sendMessage(`*🔍 Top Candidates*\n\n\`\`\`\n${table}\`\`\``);
+      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+      return;
+    }
+
     if (text === "/positions") {
       try {
         const { positions, total_positions } = await getMyPositions({ force: true });
         if (total_positions === 0) { await sendMessage("No open positions."); return; }
         const cur = config.management.solMode ? "◎" : "$";
-        const lines = positions.map((p, i) => {
-          const pnl = p.pnl_usd >= 0 ? `+${cur}${p.pnl_usd}` : `-${cur}${Math.abs(p.pnl_usd)}`;
-          const age = p.age_minutes != null ? `${p.age_minutes}m` : "?";
-          const oor = !p.in_range ? " ⚠️OOR" : "";
-          return `${i + 1}. ${p.pair} | ${cur}${p.total_value_usd} | PnL: ${pnl} | fees: ${cur}${p.unclaimed_fees_usd} | ${age}${oor}`;
+        
+        let table = "#   Pair        Value   PnL     Fees\n";
+        table += "──  ──────────  ──────  ──────  ──────\n";
+        positions.forEach((p, i) => {
+          const pair = p.pair.slice(0, 10).padEnd(10);
+          const val = `${cur}${p.total_value_usd}`.slice(0, 6).padEnd(6);
+          const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.slice(0, 6).padEnd(6);
+          const fees = `${cur}${p.unclaimed_fees_usd}`.slice(0, 6).padEnd(6);
+          const oor = !p.in_range ? " ⚠️" : "";
+          table += `${String(i + 1).padEnd(2)}  ${pair}  ${val}  ${pnl}  ${fees}${oor}\n`;
         });
-        await sendMessage(`📊 Open Positions (${total_positions}):\n\n${lines.join("\n")}\n\n/close <n> to close | /set <n> <note> to set instruction`);
+
+        await sendMessage(
+          `*📊 Open Positions (${total_positions})*\n\n` +
+          `\`\`\`\n${table}\`\`\`\n` +
+          `\`/close <n>\` to close | \`/set <n> <note>\` to set instruction`
+        );
       } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
       return;
     }
@@ -740,7 +806,7 @@ if (isTTY) {
         if (result.success) {
           const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
           const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
-          await sendMessage(`✅ Closed ${pos.pair}\nPnL: ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"} | close txs: ${closeTxs?.join(", ") || "n/a"}${claimNote}`);
+          await sendMessage(`✅ *Closed* ${pos.pair}\n*PnL:* ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"}  •  *txs:* \`${closeTxs?.join(", ") || "n/a"}\`${claimNote}`);
         } else {
           await sendMessage(`❌ Close failed: ${JSON.stringify(result)}`);
         }
