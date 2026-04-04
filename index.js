@@ -768,6 +768,59 @@ if (isTTY) {
       return;
     }
 
+    if (text === "/thresholds") {
+      try {
+        const s = config.screening;
+        const m = config.management;
+        const r = config.risk || config.management; // handles legacy/merged config
+        const perf = getPerformanceSummary();
+        
+        let msg = "⚙️ *BOT CONFIGURATION*\n\n";
+
+        // --- SCREENING SECTION ---
+        let sc = "🔍 SCREENING\n";
+        sc += "────────────────────\n";
+        sc += `fee_aTVL_min    ${s.minFeeActiveTvlRatio}%\n`;
+        sc += `organic_min     ${s.minOrganic}\n`;
+        sc += `holders_min     ${s.minHolders}\n`;
+        sc += `tvl_min         $${(s.minTvl/1000).toFixed(1)}k\n`;
+        sc += `vol_min         $${(s.minVolume/1000).toFixed(1)}k\n`;
+        sc += `mcap_min        $${(s.minMcap/1000).toFixed(1)}k\n`;
+        sc += `mcap_max        $${(s.maxMcap/1000000).toFixed(1)}M\n`;
+        sc += `age_min         ${s.minTokenAgeHours ?? 0}h\n`;
+        sc += `timeframe       ${s.timeframe}\n`;
+        msg += `\`\`\`\n${sc}\`\`\`\n`;
+
+        // --- MANAGEMENT SECTION ---
+        let mg = "💼 MANAGEMENT\n";
+        mg += "────────────────────\n";
+        mg += `deploy_amt      ${m.deployAmountSol} SOL\n`;
+        mg += `max_pos         ${m.maxPositions}\n`;
+        mg += `min_open        ${m.minSolToOpen} SOL\n`;
+        mg += `gas_reserve     ${m.gasReserve} SOL\n`;
+        mg += `strategy        ${m.strategy}\n`;
+        msg += `\`\`\`\n${mg}\`\`\`\n`;
+
+        // --- RISK & EXIT SECTION ---
+        let rs = "🛡️ RISK & EXIT\n";
+        rs += "────────────────────\n";
+        rs += `stop_loss       ${m.stopLossPct}%\n`;
+        rs += `tp_fee_pct      ${m.takeProfitFeePct}%\n`;
+        rs += `trailing_tp     ${m.trailingTakeProfit ? "ON" : "OFF"}\n`;
+        rs += `  trigger       ${m.trailingTriggerPct}%\n`;
+        rs += `  drop          ${m.trailingDropPct}%\n`;
+        rs += `oor_wait        ${m.outOfRangeWaitMinutes}m\n`;
+        msg += `\`\`\`\n${rs}\`\`\`\n`;
+
+        if (perf) {
+          msg += `_Stats from ${perf.total_positions_closed} closed positions:_\n` +
+                 `*Win Rate:* ${perf.win_rate_pct}%  •  *Avg PnL:* ${perf.avg_pnl_pct}%`;
+        }
+
+        await sendMessage(msg);
+      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+      return;
+    }
     if (text === "/positions") {
       try {
         const { positions, total_positions } = await getMyPositions({ force: true });
