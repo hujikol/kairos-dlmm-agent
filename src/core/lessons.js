@@ -8,8 +8,8 @@ import crypto from "crypto";
 import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
-import { log } from "./logger.js";
-import { getDB } from "./db.js";
+import { log } from "../logger.js";
+import { getDB } from "../db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -85,7 +85,7 @@ export async function recordPerformance(perf) {
   })();
 
   if (perf.pool) {
-    const { recordPoolDeploy } = await import("./pool-memory.js");
+    const { recordPoolDeploy } = await import("../features/pool-memory.js");
     recordPoolDeploy(perf.pool, {
       pool_name: perf.pool_name,
       base_mint: perf.base_mint,
@@ -111,7 +111,7 @@ export async function recordPerformance(perf) {
   }
 
   if (allPerformance.length % MIN_EVOLVE_POSITIONS === 0) {
-    const { config, reloadScreeningThresholds } = await import("./config.js");
+    const { config, reloadScreeningThresholds } = await import("../config.js");
     const result = evolveThresholds(allPerformance, config);
     if (result?.changes && Object.keys(result.changes).length > 0) {
       reloadScreeningThresholds();
@@ -127,7 +127,7 @@ export async function recordPerformance(perf) {
     }
   }
 
-  import("./hive-mind.js").then(m => m.syncToHive()).catch(() => {});
+  import("../features/hive-mind.js").then(m => m.syncToHive()).catch(() => {});
 }
 
 function derivLesson(perf) {

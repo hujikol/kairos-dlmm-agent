@@ -6,8 +6,8 @@
  * before the pool list reaches the LLM.
  */
 
-import { getDB } from "./db.js";
-import { log } from "./logger.js";
+import { getDB } from "../db.js";
+import { log } from "../logger.js";
 
 export function isDevBlocked(devWallet) {
   if (!devWallet) return false;

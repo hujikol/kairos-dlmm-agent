@@ -3,7 +3,7 @@
  * Run: node test/test-screening.js
  */
 
-import { discoverPools, getPoolDetail } from "../tools/screening.js";
+import { discoverPools, getPoolDetail } from "../src/screening/discovery.js";
 
 async function main() {
   console.log("=== Testing Pool Discovery API ===\n");

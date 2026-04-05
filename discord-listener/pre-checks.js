@@ -6,8 +6,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import axios from "axios";
-import { isBlacklisted } from "../token-blacklist.js";
-import { isDevBlocked } from "../dev-blocklist.js";
+import { isBlacklisted } from "../src/features/token-blacklist.js";
+import { isDevBlocked } from "../src/features/dev-blocklist.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");

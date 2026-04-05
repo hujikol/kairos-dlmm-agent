@@ -6,8 +6,8 @@
  * During screening, the active strategy's criteria guide token selection and position config.
  */
 
-import { getDB } from "./db.js";
-import { log } from "./logger.js";
+import { getDB } from "../db.js";
+import { log } from "../logger.js";
 
 // ─── Default Strategies ─────────────────────────────────────────
 const DEFAULT_STRATEGIES = {

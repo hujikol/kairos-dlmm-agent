@@ -5,8 +5,8 @@
  * Screening filters blacklisted tokens before passing pools to the LLM.
  */
 
-import { getDB } from "./db.js";
-import { log } from "./logger.js";
+import { getDB } from "../db.js";
+import { log } from "../logger.js";
 
 // ─── Check ─────────────────────────────────────────────────────
 

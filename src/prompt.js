@@ -10,8 +10,8 @@
  * @returns {string} - Complete system prompt
  */
 import { config } from "./config.js";
-import { getStrategyStats } from "./lessons.js";
-import { getRulesForPrompt } from "./postmortem.js";
+import { getStrategyStats } from "./core/lessons.js";
+import { getRulesForPrompt } from "./core/postmortem.js";
 
 export function buildSystemPrompt(agentType, portfolio, positions, stateSummary = null, lessons = null, perfSummary = null) {
   const s = config.screening;

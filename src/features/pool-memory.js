@@ -7,8 +7,8 @@
  * Backed by SQLite (meridian.db).
  */
 
-import { getDB } from "./db.js";
-import { log } from "./logger.js";
+import { getDB } from "../db.js";
+import { log } from "../logger.js";
 
 // ─── Write ─────────────────────────────────────────────────────
 

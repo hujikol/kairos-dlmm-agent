@@ -1,5 +1,5 @@
-import { getDB } from "./db.js";
-import { getPerformanceSummary, getPerformanceHistory } from "./lessons.js";
+import { getDB } from "../db.js";
+import { getPerformanceSummary, getPerformanceHistory } from "../core/lessons.js";
 
 export async function generateBriefing() {
   const db = getDB();

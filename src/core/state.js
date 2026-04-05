@@ -8,8 +8,8 @@
  * - Actions taken (claims, rebalances)
  */
 
-import { getDB } from "./db.js";
-import { log } from "./logger.js";
+import { getDB } from "../db.js";
+import { log } from "../logger.js";
 
 const MAX_RECENT_EVENTS = 20;
 

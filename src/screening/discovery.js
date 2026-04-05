@@ -1,6 +1,6 @@
 import { config } from "../config.js";
-import { isBlacklisted } from "../token-blacklist.js";
-import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
+import { isBlacklisted } from "../features/token-blacklist.js";
+import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../logger.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
@@ -117,7 +117,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   const { pools } = await discoverPools({ page_size: 50 });
 
   // Exclude pools where the wallet already has an open position
-  const { getMyPositions } = await import("./dlmm.js");
+  const { getMyPositions } = await import("../integrations/meteora.js");
   const { positions } = await getMyPositions();
   const occupiedPools = new Set(positions.map((p) => p.pool));
   const occupiedMints = new Set(positions.map((p) => p.base_mint).filter(Boolean));
@@ -128,7 +128,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
 
   // Enrich with OKX data — advanced info (risk/bundle/sniper) + ATH price (no API key required)
   if (eligible.length > 0) {
-    const { getAdvancedInfo, getPriceInfo, getClusterList, getRiskFlags } = await import("./okx.js");
+    const { getAdvancedInfo, getPriceInfo, getClusterList, getRiskFlags } = await import("../integrations/okx.js");
     const okxResults = await Promise.allSettled(
       eligible.map((p) => p.base?.mint
         ? Promise.all([getAdvancedInfo(p.base.mint), getPriceInfo(p.base.mint), getClusterList(p.base.mint), getRiskFlags(p.base.mint)])

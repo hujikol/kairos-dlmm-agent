@@ -94,12 +94,12 @@ function getToolsForRole(agentType, goal = "") {
     return tc;
   });
 }
-import { getWalletBalances } from "./tools/wallet.js";
-import { getMyPositions } from "./tools/dlmm.js";
+import { getWalletBalances } from "./integrations/helius.js";
+import { getMyPositions } from "./integrations/meteora.js";
 import { log } from "./logger.js";
 import { config } from "./config.js";
-import { getStateSummary } from "./state.js";
-import { getLessonsForPrompt, getPerformanceSummary } from "./lessons.js";
+import { getStateSummary } from "./core/state.js";
+import { getLessonsForPrompt, getPerformanceSummary } from "./core/lessons.js";
 
 // Supports OpenRouter (default) or any OpenAI-compatible local server (e.g. LM Studio)
 // To use LM Studio: set LLM_BASE_URL=http://localhost:1234/v1 and LLM_API_KEY=lm-studio in .env

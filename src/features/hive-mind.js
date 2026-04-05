@@ -23,7 +23,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getDB } from "./db.js";
+import { getDB } from "../db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -179,7 +179,7 @@ export async function syncToHive() {
     // Agent stats via dynamic import (avoids circular deps)
     let agentStats = null;
     try {
-      const { getPerformanceSummary } = await import("./lessons.js");
+      const { getPerformanceSummary } = await import("../core/lessons.js");
       agentStats = getPerformanceSummary();
     } catch (e) {
       console.log("[hive]", `Could not load agent stats: ${e.message}`);

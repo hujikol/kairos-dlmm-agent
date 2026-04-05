@@ -1,4 +1,4 @@
-import { discoverPools, getPoolDetail, getTopCandidates } from "./screening.js";
+import { discoverPools, getPoolDetail, getTopCandidates } from "../screening/discovery.js";
 import {
   getActiveBin,
   deployPosition,
@@ -8,18 +8,18 @@ import {
   claimFees,
   closePosition,
   searchPools,
-} from "./dlmm.js";
-import { getWalletBalances, swapToken, autoSwapRewardFees, swapAllTokensToSol } from "./wallet.js";
-import { studyTopLPers } from "./study.js";
-import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
-import { setPositionInstruction } from "../state.js";
+} from "../integrations/meteora.js";
+import { getWalletBalances, swapToken, autoSwapRewardFees, swapAllTokensToSol } from "../integrations/helius.js";
+import { studyTopLPers } from "../integrations/lpagent.js";
+import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../core/lessons.js";
+import { setPositionInstruction } from "../core/state.js";
 
-import { getPoolMemory, addPoolNote } from "../pool-memory.js";
-import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
-import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-blacklist.js";
-import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
-import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
-import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
+import { getPoolMemory, addPoolNote } from "../features/pool-memory.js";
+import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../core/strategy-library.js";
+import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../features/token-blacklist.js";
+import { blockDev, unblockDev, listBlockedDevs } from "../features/dev-blocklist.js";
+import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../features/smart-wallets.js";
+import { getTokenInfo, getTokenHolders, getTokenNarrative } from "../integrations/jupiter.js";
 import { config, reloadScreeningThresholds } from "../config.js";
 import fs from "fs";
 import writeFileAtomic from "write-file-atomic";
@@ -30,7 +30,7 @@ import { execSync, spawn } from "child_process";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
 import { log, logAction } from "../logger.js";
-import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
+import { notifyDeploy, notifyClose, notifySwap } from "../notifications/telegram.js";
 
 // Registered by index.js so update_config can restart cron jobs when intervals change
 let _cronRestarter = null;

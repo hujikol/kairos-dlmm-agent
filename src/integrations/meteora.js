@@ -17,10 +17,10 @@ import {
   getTrackedPosition,
   minutesOutOfRange,
   syncOpenPositions,
-} from "../state.js";
-import { recordPerformance } from "../lessons.js";
-import { isPoolOnCooldown } from "../pool-memory.js";
-import { normalizeMint } from "./wallet.js";
+} from "../core/state.js";
+import { recordPerformance } from "../core/lessons.js";
+import { isPoolOnCooldown } from "../features/pool-memory.js";
+import { normalizeMint } from "./helius.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
