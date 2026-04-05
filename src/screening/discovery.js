@@ -1,7 +1,7 @@
 import { config } from "../config.js";
 import { isBlacklisted } from "../features/token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
-import { log } from "../logger.js";
+import { log } from "../core/logger.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
 

@@ -23,7 +23,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getDB } from "../db.js";
+import { getDB } from "../core/db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");

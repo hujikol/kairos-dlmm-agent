@@ -96,7 +96,7 @@ function getToolsForRole(agentType, goal = "") {
 }
 import { getWalletBalances } from "./integrations/helius.js";
 import { getMyPositions } from "./integrations/meteora.js";
-import { log } from "./logger.js";
+import { log } from "./core/logger.js";
 import { config } from "./config.js";
 import { getStateSummary } from "./core/state.js";
 import { getLessonsForPrompt, getPerformanceSummary } from "./core/lessons.js";

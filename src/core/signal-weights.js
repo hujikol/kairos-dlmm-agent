@@ -9,8 +9,8 @@
  * LLM prompt so the agent can prioritize the right screening criteria.
  */
 
-import { getDB } from "../db.js";
-import { log } from "../logger.js";
+import { getDB } from "./db.js";
+import { log } from "./logger.js";
 
 // ─── Signal Definitions ─────────────────────────────────────────
 
@@ -185,6 +185,7 @@ export function recalculateWeights(perfData, cfg = {}) {
   }
 
   // Persist
+  const db = getDB();
   db.transaction(() => {
     db.prepare(`
       INSERT OR REPLACE INTO signal_weights (id, weights, last_recalc, recalc_count)

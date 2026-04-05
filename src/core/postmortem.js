@@ -12,7 +12,7 @@
 
 import fs from "fs";
 import writeFileAtomic from "write-file-atomic";
-import { log } from "../logger.js";
+import { log } from "./logger.js";
 
 const POSTMORTEM_FILE = "./postmortem-rules.json";
 const MAX_RULES = 50;

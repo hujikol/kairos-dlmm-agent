@@ -2,14 +2,14 @@ import "dotenv/config";
 import cron from "node-cron";
 import readline from "readline";
 import { agentLoop } from "./agent.js";
-import { log } from "./logger.js";
+import { log } from "./core/logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./integrations/meteora.js";
 import { getWalletBalances, autoSwapRewardFees } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { registerCronRestarter } from "./tools/executor.js";
-import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled } from "./telegram.js";
+import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled } from "./notifications/telegram.js";
 import { generateBriefing } from "./notifications/briefing.js";
 import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits } from "./core/state.js";
 import { getActiveStrategy } from "./core/strategy-library.js";
@@ -1215,7 +1215,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
           console.log(`\nNeed at least 5 closed positions to evolve. ${needed} more needed.\n`);
           return;
         }
-        const db = (await import("./db.js")).getDB();
+        const db = (await import("./core/db.js")).getDB();
         const allPerformance = db.prepare('SELECT * FROM performance').all();
         const result = evolveThresholds(allPerformance, config);
         if (!result || Object.keys(result.changes).length === 0) {

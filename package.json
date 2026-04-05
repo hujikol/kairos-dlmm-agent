@@ -5,12 +5,12 @@
   "description": "Autonomous DLMM LP agent for Meteora on Solana",
   "main": "src/index.js",
   "bin": {
-    "meridian": "cli.js"
+    "meridian": "src/cli.js"
   },
   "scripts": {
-    "setup": "node setup.js",
-    "start": "node index.js",
-    "dev": "DRY_RUN=true node index.js",
+    "setup": "node src/setup.js",
+    "start": "node src/index.js",
+    "dev": "DRY_RUN=true node src/index.js",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
     "postinstall": "node scripts/patch-anchor.js"
