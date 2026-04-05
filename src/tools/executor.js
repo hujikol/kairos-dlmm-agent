@@ -1,258 +1,33 @@
-import { discoverPools, getPoolDetail, getTopCandidates } from "../screening/discovery.js";
-import {
-  getActiveBin,
-  deployPosition,
-  getMyPositions,
-  getWalletPositions,
-  getPositionPnl,
-  claimFees,
-  closePosition,
-  searchPools,
-} from "../integrations/meteora.js";
-import { getWalletBalances, swapToken, autoSwapRewardFees, swapAllTokensToSol } from "../integrations/helius.js";
-import { studyTopLPers } from "../integrations/lpagent.js";
-import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../core/lessons.js";
-import { setPositionInstruction } from "../core/state.js";
-
-import { getPoolMemory, addPoolNote } from "../features/pool-memory.js";
-import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../core/strategy-library.js";
-import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../features/token-blacklist.js";
-import { blockDev, unblockDev, listBlockedDevs } from "../features/dev-blocklist.js";
-import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../features/smart-wallets.js";
-import { getTokenInfo, getTokenHolders, getTokenNarrative } from "../integrations/jupiter.js";
-import { config, reloadScreeningThresholds } from "../config.js";
 import fs from "fs";
 import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
-import { execSync, spawn } from "child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
-import { log, logAction } from "../logger.js";
-import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
 
-// Registered by index.js so update_config can restart cron jobs when intervals change
-let _cronRestarter = null;
-export function registerCronRestarter(fn) { _cronRestarter = fn; }
+import { log, logAction } from "../core/logger.js";
+import { registerCronRestarter as _registerCron } from "./admin.js";
+export const registerCronRestarter = _registerCron;
 
-// Map tool names to implementations
-const toolMap = {
-  discover_pools: discoverPools,
-  get_top_candidates: getTopCandidates,
-  get_pool_detail: getPoolDetail,
-  get_position_pnl: getPositionPnl,
-  get_active_bin: getActiveBin,
-  deploy_position: deployPosition,
-  get_my_positions: getMyPositions,
-  get_wallet_positions: getWalletPositions,
-  search_pools: searchPools,
-  get_token_info: getTokenInfo,
-  get_token_holders: getTokenHolders,
-  get_token_narrative: getTokenNarrative,
-  add_smart_wallet: addSmartWallet,
-  remove_smart_wallet: removeSmartWallet,
-  list_smart_wallets: listSmartWallets,
-  check_smart_wallets_on_pool: checkSmartWalletsOnPool,
-  claim_fees: claimFees,
-  close_position: closePosition,
-  get_wallet_balance: getWalletBalances,
-  swap_token: swapToken,
-  swap_all_to_sol: swapAllTokensToSol,
-  get_top_lpers: studyTopLPers,
-  study_top_lpers: studyTopLPers,
-  set_position_note: ({ position_address, instruction }) => {
-    const ok = setPositionInstruction(position_address, instruction || null);
-    if (!ok) return { error: `Position ${position_address} not found in state` };
-    return { saved: true, position: position_address, instruction: instruction || null };
-  },
-  self_update: async () => {
-    try {
-      const result = execSync("git pull", { cwd: process.cwd(), encoding: "utf8" }).trim();
-      if (result.includes("Already up to date")) {
-        return { success: true, updated: false, message: "Already up to date — no restart needed." };
-      }
-      // Delay restart so this tool response (and Telegram message) gets sent first
-      setTimeout(() => {
-        const child = spawn(process.execPath, process.argv.slice(1), {
-          detached: true,
-          stdio: "inherit",
-          cwd: process.cwd(),
-        });
-        child.unref();
-        process.exit(0);
-      }, 3000);
-      return { success: true, updated: true, message: `Updated! Restarting in 3s...\n${result}` };
-    } catch (e) {
-      return { success: false, error: e.message };
-    }
-  },
-  get_performance_history: getPerformanceHistory,
-  add_strategy:        addStrategy,
-  list_strategies:     listStrategies,
-  get_strategy:        getStrategy,
-  set_active_strategy: setActiveStrategy,
-  remove_strategy:     removeStrategy,
-  get_pool_memory: getPoolMemory,
-  add_pool_note: addPoolNote,
-  add_to_blacklist: addToBlacklist,
-  remove_from_blacklist: removeFromBlacklist,
-  list_blacklist: listBlacklist,
-  block_deployer: blockDev,
-  unblock_deployer: unblockDev,
-  list_blocked_deployers: listBlockedDevs,
-  add_lesson: ({ rule, tags, pinned, role }) => {
-    let parsedTags = tags;
-    if (typeof parsedTags === "string") {
-      try { parsedTags = JSON.parse(parsedTags); } catch (e) { parsedTags = [parsedTags]; }
-    }
-    if (!Array.isArray(parsedTags)) parsedTags = [];
-    addLesson(rule, parsedTags, { pinned: !!pinned, role: role || null });
-    return { saved: true, rule, pinned: !!pinned, role: role || "all" };
-  },
-  pin_lesson:   ({ id }) => pinLesson(id),
-  unpin_lesson: ({ id }) => unpinLesson(id),
-  list_lessons: ({ role, pinned, tag, limit } = {}) => listLessons({ role, pinned, tag, limit }),
-  clear_lessons: ({ mode, keyword }) => {
-    if (mode === "all") {
-      const n = clearAllLessons();
-      log("info", "lessons", `Cleared all ${n} lessons`);
-      return { cleared: n, mode: "all" };
-    }
-    if (mode === "performance") {
-      const n = clearPerformance();
-      log("info", "lessons", `Cleared ${n} performance records`);
-      return { cleared: n, mode: "performance" };
-    }
-    if (mode === "keyword") {
-      if (!keyword) return { error: "keyword required for mode=keyword" };
-      const n = removeLessonsByKeyword(keyword);
-      log("info", "lessons", `Cleared ${n} lessons matching "${keyword}"`);
-      return { cleared: n, mode: "keyword", keyword };
-    }
-    return { error: "invalid mode" };
-  },
-  update_config: ({ changes, reason = "" }) => {
-    // Flat key → config section mapping (covers everything in config.js)
-    const CONFIG_MAP = {
-      // screening
-      minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
-      minTvl: ["screening", "minTvl"],
-      maxTvl: ["screening", "maxTvl"],
-      minVolume: ["screening", "minVolume"],
-      minOrganic: ["screening", "minOrganic"],
-      minHolders: ["screening", "minHolders"],
-      minMcap: ["screening", "minMcap"],
-      maxMcap: ["screening", "maxMcap"],
-      minBinStep: ["screening", "minBinStep"],
-      maxBinStep: ["screening", "maxBinStep"],
-      timeframe: ["screening", "timeframe"],
-      category: ["screening", "category"],
-      minTokenFeesSol: ["screening", "minTokenFeesSol"],
-      maxBundlePct:     ["screening", "maxBundlePct"],
-      maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
-      maxTop10Pct: ["screening", "maxTop10Pct"],
-      minTokenAgeHours: ["screening", "minTokenAgeHours"],
-      maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
-      athFilterPct:     ["screening", "athFilterPct"],
-      minFeePerTvl24h: ["management", "minFeePerTvl24h"],
-      // management
-      minClaimAmount: ["management", "minClaimAmount"],
-      autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
-      autoSwapAfterClose: ["management", "autoSwapAfterClose"],
-      outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
-      outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
-      minVolumeToRebalance: ["management", "minVolumeToRebalance"],
-      stopLossPct: ["management", "stopLossPct"],
-      takeProfitFeePct: ["management", "takeProfitFeePct"],
-      trailingTakeProfit: ["management", "trailingTakeProfit"],
-      trailingTriggerPct: ["management", "trailingTriggerPct"],
-      trailingDropPct: ["management", "trailingDropPct"],
-      solMode: ["management", "solMode"],
-      minSolToOpen: ["management", "minSolToOpen"],
-      deployAmountSol: ["management", "deployAmountSol"],
-      gasReserve: ["management", "gasReserve"],
-      positionSizePct: ["management", "positionSizePct"],
-      // risk
-      maxPositions: ["risk", "maxPositions"],
-      maxDeployAmount: ["risk", "maxDeployAmount"],
-      // schedule
-      managementIntervalMin: ["schedule", "managementIntervalMin"],
-      screeningIntervalMin: ["schedule", "screeningIntervalMin"],
-      // models
-      managementModel: ["llm", "managementModel"],
-      screeningModel: ["llm", "screeningModel"],
-      generalModel: ["llm", "generalModel"],
-      // strategy
-      binsBelow: ["strategy", "binsBelow"],
-    };
+// Register all tool domains
+import { registerScreens } from "./screens.js";
+import { registerTokens } from "./tokens.js";
+import { registerPositions, positionWriteTools } from "./positions.js";
+import { registerWallet, walletWriteTools } from "./wallet.js";
+import { registerAdmin } from "./admin.js";
 
-    const applied = {};
-    const unknown = [];
+const toolMap = {};
+function registerTool(name, fn) { toolMap[name] = fn; }
+registerScreens(registerTool);
+registerTokens(registerTool);
+registerPositions(registerTool);
+registerWallet(registerTool);
+registerAdmin(registerTool);
 
-    // Build case-insensitive lookup
-    const CONFIG_MAP_LOWER = Object.fromEntries(
-      Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
-    );
+// All write tools that need safety checks
+const WRITE_TOOLS = new Set([...positionWriteTools, ...walletWriteTools]);
 
-    for (const [key, val] of Object.entries(changes)) {
-      const match = CONFIG_MAP[key] ? [key, CONFIG_MAP[key]] : CONFIG_MAP_LOWER[key.toLowerCase()];
-      if (!match) { unknown.push(key); continue; }
-      applied[match[0]] = val;
-    }
-
-    if (Object.keys(applied).length === 0) {
-      log("info", "config", `update_config failed — unknown keys: ${JSON.stringify(unknown)}, raw changes: ${JSON.stringify(changes)}`);
-      return { success: false, unknown, reason };
-    }
-
-    // Apply to live config immediately
-    for (const [key, val] of Object.entries(applied)) {
-      const [section, field] = CONFIG_MAP[key];
-      const before = config[section][field];
-      config[section][field] = val;
-      log("info", "config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
-    }
-
-    // Persist to user-config.json
-    let userConfig = {};
-    if (fs.existsSync(USER_CONFIG_PATH)) {
-      try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /**/ }
-    }
-    Object.assign(userConfig, applied);
-    userConfig._lastAgentTune = new Date().toISOString();
-    writeFileAtomic.sync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
-
-    // Restart cron jobs if intervals changed
-    const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null;
-    if (intervalChanged && _cronRestarter) {
-      _cronRestarter();
-      log("info", "config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
-    }
-
-    // Save as a lesson — but skip ephemeral per-deploy interval changes
-    // (managementIntervalMin / screeningIntervalMin change every deploy based on volatility;
-    //  the rule is already in the system prompt, storing it 75+ times is pure noise)
-    const lessonsKeys = Object.keys(applied).filter(
-      k => k !== "managementIntervalMin" && k !== "screeningIntervalMin"
-    );
-    if (lessonsKeys.length > 0) {
-      const summary = lessonsKeys.map(k => `${k}=${applied[k]}`).join(", ");
-      addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
-    }
-
-    log("info", "config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
-    return { success: true, applied, unknown, reason };
-  },
-};
-
-// Tools that modify on-chain state (need extra safety checks)
-const WRITE_TOOLS = new Set([
-  "deploy_position",
-  "claim_fees",
-  "close_position",
-  "swap_token",
-]);
+export { toolMap };
 
 /**
  * Execute a tool call with safety checks and logging.
@@ -267,7 +42,7 @@ export async function executeTool(name, args) {
   const fn = toolMap[name];
   if (!fn) {
     const error = `Unknown tool: ${name}`;
-    log("error", error);
+    log("error", "executor", error);
     return { error };
   }
 
@@ -276,10 +51,7 @@ export async function executeTool(name, args) {
     const safetyCheck = await runSafetyChecks(name, args);
     if (!safetyCheck.pass) {
       log("warn", "safety_block", `${name} blocked: ${safetyCheck.reason}`);
-      return {
-        blocked: true,
-        reason: safetyCheck.reason,
-      };
+      return { blocked: true, reason: safetyCheck.reason };
     }
   }
 
@@ -297,48 +69,6 @@ export async function executeTool(name, args) {
       success,
     });
 
-    if (success) {
-      if (name === "swap_token" && result.tx) {
-        notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => {});
-      } else if (name === "deploy_position") {
-        notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
-      } else if (name === "close_position") {
-        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
-        // Note low-yield closes in pool memory so screener avoids redeploying
-        if (args.reason && args.reason.toLowerCase().includes("yield")) {
-          const poolAddr = result.pool || args.pool_address;
-          if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
-        }
-        // Auto-swap base and quote tokens back to SOL unless user said to hold
-        if (config.management.autoSwapAfterClose && !args.skip_swap && result.base_mint) {
-          try {
-            const mintsToSwap = [result.base_mint];
-            if (result.quote_mint) mintsToSwap.push(result.quote_mint);
-            
-            const swapResult = await autoSwapRewardFees(mintsToSwap);
-              if (swapResult && swapResult.swapped && swapResult.swapped.length > 0) {
-                result.auto_swapped = true;
-                result.auto_swap_note = `Non-SOL tokens already auto-swapped back to SOL. Do NOT call swap_token again.`;
-                result.sol_received = swapResult.swapped.reduce((acc, s) => acc + (s.amount_out || 0), 0);
-              } else {
-                log("info", "executor", `Auto-swap after close: No eligible tokens found to swap (or balance not yet indexed).`);
-              }
-            } catch (e) {
-              log("warn", "executor", `Auto-swap after close failed: ${e.message}`);
-            }
-        }
-      } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
-        try {
-            const mintsToSwap = [result.base_mint];
-            if (result.quote_mint) mintsToSwap.push(result.quote_mint);
-            
-            await autoSwapRewardFees(mintsToSwap);
-        } catch (e) {
-          log("warn", "executor", `Auto-swap after claim failed: ${e.message}`);
-        }
-      }
-    }
-
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -351,11 +81,7 @@ export async function executeTool(name, args) {
       success: false,
     });
 
-    // Return error to LLM so it can decide what to do
-    return {
-      error: error.message,
-      tool: name,
-    };
+    return { error: error.message, tool: name };
   }
 }
 
@@ -365,90 +91,54 @@ export async function executeTool(name, args) {
 async function runSafetyChecks(name, args) {
   switch (name) {
     case "deploy_position": {
-      // Reject pools with bin_step out of configured range
+      // Lazy import to avoid circular dependency
+      const { config } = await import("../config.js");
+      const { getMyPositions } = await import("../integrations/meteora.js");
+      const { getWalletBalances } = await import("../integrations/helius.js");
+
       const minStep = config.screening.minBinStep;
       const maxStep = config.screening.maxBinStep;
       if (args.bin_step != null && (args.bin_step < minStep || args.bin_step > maxStep)) {
-        return {
-          pass: false,
-          reason: `bin_step ${args.bin_step} is outside the allowed range of [${minStep}-${maxStep}].`,
-        };
+        return { pass: false, reason: `bin_step ${args.bin_step} is outside the allowed range of [${minStep}-${maxStep}].` };
       }
 
-      // Check position count limit + duplicate pool guard — force fresh scan to avoid stale cache
       const positions = await getMyPositions({ force: true });
       if (positions.total_positions >= config.risk.maxPositions) {
-        return {
-          pass: false,
-          reason: `Max positions (${config.risk.maxPositions}) reached. Close a position first.`,
-        };
+        return { pass: false, reason: `Max positions (${config.risk.maxPositions}) reached. Close a position first.` };
       }
-      const alreadyInPool = positions.positions.some(
-        (p) => p.pool === args.pool_address
-      );
+      const alreadyInPool = positions.positions.some((p) => p.pool === args.pool_address);
       if (alreadyInPool) {
-        return {
-          pass: false,
-          reason: `Already have an open position in pool ${args.pool_address}. Cannot open duplicate.`,
-        };
+        return { pass: false, reason: `Already have an open position in pool ${args.pool_address}. Cannot open duplicate.` };
       }
 
-      // Block same base token across different pools
       if (args.base_mint) {
-        const alreadyHasMint = positions.positions.some(
-          (p) => p.base_mint === args.base_mint
-        );
+        const alreadyHasMint = positions.positions.some((p) => p.base_mint === args.base_mint);
         if (alreadyHasMint) {
-          return {
-            pass: false,
-            reason: `Already holding base token ${args.base_mint} in another pool. One position per token only.`,
-          };
+          return { pass: false, reason: `Already holding base token ${args.base_mint} in another pool. One position per token only.` };
         }
       }
 
-      // Check amount limits
       const amountY = args.amount_y ?? args.amount_sol ?? 0;
       if (amountY <= 0) {
-        return {
-          pass: false,
-          reason: `Must provide a positive SOL amount (amount_y).`,
-        };
+        return { pass: false, reason: `Must provide a positive SOL amount (amount_y).` };
       }
-
       const minDeploy = Math.max(0.1, config.management.deployAmountSol);
       if (amountY < minDeploy) {
-        return {
-          pass: false,
-          reason: `Amount ${amountY} SOL is below the minimum deploy amount (${minDeploy} SOL). Use at least ${minDeploy} SOL.`,
-        };
+        return { pass: false, reason: `Amount ${amountY} SOL is below the minimum deploy amount (${minDeploy} SOL). Use at least ${minDeploy} SOL.` };
       }
       if (amountY > config.risk.maxDeployAmount) {
-        return {
-          pass: false,
-          reason: `SOL amount ${amountY} exceeds maximum allowed per position (${config.risk.maxDeployAmount}).`,
-        };
+        return { pass: false, reason: `SOL amount ${amountY} exceeds maximum allowed per position (${config.risk.maxDeployAmount}).` };
       }
 
-      // Check SOL balance
       const balance = await getWalletBalances();
       const gasReserve = config.management.gasReserve;
       const minRequired = amountY + gasReserve;
       if (balance.sol < minRequired) {
-        return {
-          pass: false,
-          reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).`,
-        };
+        return { pass: false, reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).` };
       }
 
       return { pass: true };
     }
-
-    case "swap_token": {
-      // Basic check — prevent swapping when DRY_RUN is true
-      // (handled inside swapToken itself, but belt-and-suspenders)
-      return { pass: true };
-    }
-
     default:
       return { pass: true };
   }

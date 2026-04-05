@@ -395,16 +395,12 @@ Responds with what changed before restarting in 3 seconds.`,
     function: {
       name: "add_smart_wallet",
       description: `Add a wallet to the smart wallet tracker.
-Use when the user says "add smart wallet", "track this wallet", "add to smart wallets", etc.
-- type "lp": wallet is tracked for LP positions (checked before deploying). Use for LPers/whales.
-- type "holder": wallet is only checked for token holdings (never fetches positions). Use for KOLs/traders who don't LP.`,
+Use when the user says "add smart wallet", "track this wallet", "add to smart wallets", etc.`,
       parameters: {
         type: "object",
         properties: {
           name: { type: "string", description: "Label for this wallet (e.g. 'alpha-1', 'whale-sol')" },
-          address: { type: "string", description: "Solana wallet address (base58)" },
-          category: { type: "string", enum: ["alpha", "smart", "fast", "multi"], description: "Wallet category (default: alpha)" },
-          type: { type: "string", enum: ["lp", "holder"], description: "lp = tracks LP positions, holder = tracks token holdings only (default: lp)" }
+          address: { type: "string", description: "Solana wallet address (base58)" }
         },
         required: ["name", "address"]
       }
@@ -831,7 +827,7 @@ Call list_lessons first to find the lesson ID.`,
       parameters: {
         type: "object",
         properties: {
-          id: { type: "number", description: "Lesson ID (from list_lessons)" }
+          id: { type: "string", description: "Lesson ID (UUID, from list_lessons)" }
         },
         required: ["id"]
       }
@@ -846,7 +842,7 @@ Call list_lessons first to find the lesson ID.`,
       parameters: {
         type: "object",
         properties: {
-          id: { type: "number", description: "Lesson ID to unpin" }
+          id: { type: "string", description: "Lesson ID (UUID, from list_lessons) to unpin" }
         },
         required: ["id"]
       }
