@@ -1,22 +1,22 @@
-import { getDB } from "../db.js";
-import { log } from "../logger.js";
+import { getDB } from "../core/db.js";
+import { log } from "../core/logger.js";
 
 const SOLANA_PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-export function addSmartWallet({ name, address, category = "alpha", type = "lp" }) {
+export function addSmartWallet({ name, address }) {
   if (!SOLANA_PUBKEY_RE.test(address)) {
     return { success: false, error: "Invalid Solana address format" };
   }
   const db = getDB();
-  const existing = db.prepare('SELECT name, type FROM smart_wallets WHERE address = ?').get(address);
+  const existing = db.prepare('SELECT name FROM smart_wallets WHERE address = ?').get(address);
   if (existing) {
     return { success: false, error: `Already tracks as "${existing.name}"` };
   }
-  db.prepare('INSERT INTO smart_wallets (address, name, category, type, added_at) VALUES (?, ?, ?, ?, ?)').run(
-    address, name, category, type, new Date().toISOString()
+  db.prepare('INSERT INTO smart_wallets (address, name, added_at) VALUES (?, ?, ?)').run(
+    address, name, new Date().toISOString()
   );
-  log("info", "smart_wallets", `Added wallet: ${name} (${category}, type=${type})`);
-  return { success: true, wallet: { name, address, category, type } };
+  log("info", "smart_wallets", `Added wallet: ${name}`);
+  return { success: true, wallet: { name, address } };
 }
 
 export function removeSmartWallet({ address }) {
@@ -40,9 +40,7 @@ const CACHE_TTL = 5 * 60 * 1000;
 
 export async function checkSmartWalletsOnPool({ pool_address }) {
   const allWallets = listSmartWallets().wallets;
-  // Only check LP-type wallets — holder wallets don't have positions
-  const wallets = allWallets.filter((w) => !w.type || w.type === "lp");
-  if (wallets.length === 0) {
+  if (allWallets.length === 0) {
     return {
       pool: pool_address,
       tracked_wallets: 0,
@@ -72,7 +70,7 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
 
   const inPool = results
     .filter((r) => r.positions.some((p) => p.pool === pool_address))
-    .map((r) => ({ name: r.wallet.name, category: r.wallet.category, address: r.wallet.address }));
+    .map((r) => ({ name: r.wallet.name, address: r.wallet.address }));
 
   return {
     pool: pool_address,

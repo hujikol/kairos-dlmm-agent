@@ -40,14 +40,13 @@ function initSchema(db) {
       pool TEXT,
       pool_name TEXT,
       strategy TEXT,
-      bin_range TEXT, -- JSON
+      bin_range TEXT,
       amount_sol REAL,
       amount_x REAL,
       active_bin_at_deploy INTEGER,
       bin_step INTEGER,
       volatility REAL,
       fee_tvl_ratio REAL,
-      initial_fee_tvl_24h REAL,
       organic_score REAL,
       initial_value_usd REAL,
       signal_snapshot TEXT, -- JSON
@@ -110,9 +109,10 @@ function initSchema(db) {
   `);
 
   // ─── Lessons: Lessons ───
+  // id is TEXT (UUID) — lessons.js generates IDs with crypto.randomUUID()
   db.exec(`
     CREATE TABLE IF NOT EXISTS lessons (
-      id INTEGER PRIMARY KEY, -- Using explicit timestamp IDs as before
+      id TEXT PRIMARY KEY,
       rule TEXT,
       tags TEXT, -- JSON
       outcome TEXT,
@@ -249,8 +249,6 @@ function initSchema(db) {
     CREATE TABLE IF NOT EXISTS smart_wallets (
       address TEXT PRIMARY KEY,
       name TEXT,
-      category TEXT DEFAULT 'alpha',
-      type TEXT DEFAULT 'lp',
       added_at TEXT
     )
   `);

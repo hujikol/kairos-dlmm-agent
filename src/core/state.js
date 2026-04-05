@@ -8,8 +8,8 @@
  * - Actions taken (claims, rebalances)
  */
 
-import { getDB } from "../db.js";
-import { log } from "../logger.js";
+import { getDB } from "./db.js";
+import { log } from "./logger.js";
 
 const MAX_RECENT_EVENTS = 20;
 
@@ -58,16 +58,16 @@ export function trackPosition({
     db.prepare(`
       INSERT OR REPLACE INTO positions (
         position, pool, pool_name, strategy, bin_range, amount_sol, amount_x,
-        active_bin_at_deploy, bin_step, volatility, fee_tvl_ratio, initial_fee_tvl_24h,
+        active_bin_at_deploy, bin_step, volatility, fee_tvl_ratio,
         organic_score, initial_value_usd, signal_snapshot, base_mint, deployed_at,
         out_of_range_since, last_claim_at, total_fees_claimed_usd, rebalance_count,
         closed, closed_at, notes, peak_pnl_pct, trailing_active, instruction, status
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       position, pool, pool_name, strategy, JSON.stringify(bin_range), amount_sol, amount_x,
-      active_bin, bin_step, volatility, fee_tvl_ratio, fee_tvl_ratio,
+      active_bin, bin_step, volatility, fee_tvl_ratio,
       organic_score, initial_value_usd, JSON.stringify(signal_snapshot || null), base_mint, new Date().toISOString(),
       null, null, 0, 0,
       0, null, '[]', 0, 0, null, 'pending'
@@ -293,7 +293,7 @@ export function getStateSummary() {
       out_of_range_since: p.out_of_range_since,
       minutes_out_of_range: minutesOutOfRange(p.position),
       total_fees_claimed_usd: p.total_fees_claimed_usd,
-      initial_fee_tvl_24h: p.initial_fee_tvl_24h,
+      fee_tvl_ratio: p.fee_tvl_ratio,
       rebalance_count: p.rebalance_count,
       instruction: p.instruction || null,
     })),

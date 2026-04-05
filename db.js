@@ -1,1 +1,1 @@
-export { getDB, closeDB } from "./src/db.js";
+export { getDB, closeDB } from "./src/core/db.js";

@@ -8,8 +8,8 @@ import crypto from "crypto";
 import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
-import { log } from "../logger.js";
-import { getDB } from "../db.js";
+import { log } from "./logger.js";
+import { getDB } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -22,17 +22,17 @@ const MAX_CHANGE_PER_STEP  = 0.20; // never shift a threshold more than 20% at o
 export async function recordPerformance(perf) {
   const db = getDB();
 
-  const suspiciousUnitMix =
-    Number.isFinite(perf.initial_value_usd) &&
-    Number.isFinite(perf.final_value_usd) &&
-    Number.isFinite(perf.amount_sol) &&
-    perf.initial_value_usd >= 20 &&
-    perf.amount_sol >= 0.25 &&
-    perf.final_value_usd > 0 &&
-    perf.final_value_usd <= perf.amount_sol * 2;
+  // Only skip records that clearly indicate broken data (e.g. zero or negative final value
+  // when we know the position held value, or final value exceeding 100x the deployed amount
+  // which almost certainly means the API returned the wrong unit).
+  const isDataCorrupt =
+    (Number.isFinite(perf.final_value_usd) && perf.final_value_usd <= 0) ||
+    (Number.isFinite(perf.initial_value_usd) && perf.initial_value_usd <= 0) ||
+    (Number.isFinite(perf.final_value_usd) && Number.isFinite(perf.initial_value_usd)
+      && perf.final_value_usd > perf.initial_value_usd * 100);
 
-  if (suspiciousUnitMix) {
-    log("warn", "lessons", `Skipped suspicious performance record for ${perf.pool_name || perf.pool}`);
+  if (isDataCorrupt) {
+    log("warn", "lessons", `Skipped corrupt performance record for ${perf.pool_name || perf.pool}: initial=${perf.initial_value_usd}, final=${perf.final_value_usd}`);
     return;
   }
 
