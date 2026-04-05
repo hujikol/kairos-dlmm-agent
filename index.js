@@ -66,6 +66,16 @@ function stripThink(text) {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
 
+function escapeHTML(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 async function runBriefing() {
   log("cron", "Starting morning briefing");
   try {
@@ -317,7 +327,7 @@ After executing, write a brief one-line result per position.
   } finally {
     _managementBusy = false;
     if (!silent && telegramEnabled()) {
-      if (mgmtReport) sendMessage(`*🔄 Management Cycle*\n\n${stripThink(mgmtReport)}`).catch(() => { });
+      if (mgmtReport) sendHTML(`<b>🔄 Management Cycle</b>\n\n<pre>${escapeHTML(stripThink(mgmtReport))}</pre>`).catch(() => { });
       for (const p of positions) {
         if (!p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes) {
           notifyOutOfRange({ pair: p.pair, minutesOOR: p.minutes_out_of_range }).catch(() => { });
@@ -510,7 +520,7 @@ STEPS:
   } finally {
     _screeningBusy = false;
     if (!silent && telegramEnabled()) {
-      if (screenReport) sendMessage(`*🔍 Screening Cycle*\n\n${stripThink(screenReport)}`).catch(() => { });
+      if (screenReport) sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${escapeHTML(stripThink(screenReport))}</pre>`).catch(() => { });
     }
   }
   return screenReport;
@@ -725,9 +735,9 @@ if (isTTY) {
     if (_managementBusy || _screeningBusy || busy) {
       if (_telegramQueue.length < 5) {
         _telegramQueue.push(text);
-        sendMessage(`⏳ Queued (${_telegramQueue.length} in queue): "${text.slice(0, 60)}"`).catch(() => {});
+        sendHTML(`⏳ <b>Queued</b> (${_telegramQueue.length} in queue): "<i>${escapeHTML(text.slice(0, 60))}</i>"`).catch(() => {});
       } else {
-        sendMessage("Queue is full (5 messages). Wait for the agent to finish.").catch(() => {});
+        sendHTML("Queue is full (5 messages). Wait for the agent to finish.").catch(() => {});
       }
       return;
     }
@@ -737,7 +747,7 @@ if (isTTY) {
         const briefing = await generateBriefing();
         await sendHTML(briefing);
       } catch (e) {
-        await sendMessage(`Error: ${e.message}`).catch(() => { });
+        await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { });
       }
       return;
     }
@@ -761,10 +771,10 @@ if (isTTY) {
           table += `${sym}  ${bal}  ${val}\n`;
         });
         
-        await sendMessage(
-          `*💰 Wallet Balance*\n\n` +
-          `\`\`\`\n${table}\`\`\`\n` +
-          `*Total:* $${wallet.total_usd.toFixed(2)}`
+        await sendHTML(
+          `<b>💰 Wallet Balance</b>\n\n` +
+          `<pre>${escapeHTML(table)}</pre>\n` +
+          `<b>Total:</b> $${wallet.total_usd.toFixed(2)}`
         );
       } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
       return;
@@ -788,12 +798,12 @@ if (isTTY) {
           table += `${String(i + 1).padEnd(2)}  ${pair}  ${pnl}  ${val}\n`;
         });
         
-        const posBlock = total_positions > 0 ? `\`\`\`\n${table}\`\`\`\n` : "_No open positions._\n";
-        await sendMessage(
-          `*📊 Status Report*\n\n` +
+        const posBlock = total_positions > 0 ? `<pre>${escapeHTML(table)}</pre>\n` : "<i>No open positions.</i>\n";
+        await sendHTML(
+          `<b>📊 Status Report</b>\n\n` +
           posBlock +
-          `*Wallet:* ${wallet.sol.toFixed(4)} SOL ($${wallet.sol_usd})\n` +
-          `*SOL Price:* $${wallet.sol_price}`
+          `<b>Wallet:</b> ${wallet.sol.toFixed(4)} SOL ($${wallet.sol_usd})\n` +
+          `<b>SOL Price:</b> $${wallet.sol_price}`
         );
       } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
       return;
@@ -813,34 +823,34 @@ if (isTTY) {
           const org = String(p.organic_score).padStart(3);
           table += `${String(i + 1).padEnd(2)}  ${name}  ${ftvl}  ${vol}  ${org}\n`;
         });
-
-        await sendMessage(`*🔍 Top Candidates*\n\n\`\`\`\n${table}\`\`\``);
+        
+        await sendHTML(`<b>🔍 Top Candidates</b>\n\n<pre>${escapeHTML(table)}</pre>`);
       } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
       return;
     }
 
     if (text === "/screen") {
       runScreeningCycle().catch((e) => log("cron_error", `Manual screening failed: ${e.message}`));
-      await sendMessage("🔍 *Manual Screening Started*");
+      await sendHTML("🔍 <b>Manual Screening Started</b>");
       return;
     }
 
     if (text === "/swap-all") {
       try {
-        await sendMessage("🔄 *Sweeping all tokens to SOL...*");
+        await sendHTML("🔄 <b>Sweeping all tokens to SOL...</b>");
         const result = await swapAllTokensToSol();
         if (result.success) {
           const count = result.swapped?.length || 0;
           if (count === 0) {
-            await sendMessage("No eligible tokens found to swap.");
+            await sendHTML("No eligible tokens found to swap.");
           } else {
             const symbols = result.swapped.map(s => s.input_mint?.slice(0, 4)).join(", ");
-            await sendMessage(`✅ *Sweep Complete*\nSwapped ${count} tokens (${symbols}) to SOL.`);
+            await sendHTML(`✅ <b>Sweep Complete</b>\nSwapped ${count} tokens (<code>${escapeHTML(symbols)}</code>) to SOL.`);
           }
         } else {
-          await sendMessage(`❌ Sweep failed: ${result.error}`);
+          await sendHTML(`❌ Sweep failed: <code>${escapeHTML(result.error)}</code>`);
         }
-      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+      } catch (e) { await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { }); }
       return;
     }
 
@@ -889,11 +899,11 @@ if (isTTY) {
         msg += `\`\`\`\n${rs}\`\`\`\n`;
 
         if (perf) {
-          msg += `_Stats from ${perf.total_positions_closed} closed positions:_\n` +
-                 `*Win Rate:* ${perf.win_rate_pct}%  •  *Avg PnL:* ${perf.avg_pnl_pct}%`;
+          msg += `<i>Stats from ${perf.total_positions_closed} closed positions:</i>\n` +
+                 `<b>Win Rate:</b> ${perf.win_rate_pct}%  •  <b>Avg PnL:</b> ${perf.avg_pnl_pct}%`;
         }
 
-        await sendMessage(msg);
+        await sendHTML(msg);
       } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
       return;
     }
@@ -914,10 +924,10 @@ if (isTTY) {
           table += `${String(i + 1).padEnd(2)}  ${pair}  ${val}  ${pnl}  ${fees}${oor}\n`;
         });
 
-        await sendMessage(
-          `*📊 Open Positions (${total_positions})*\n\n` +
-          `\`\`\`\n${table}\`\`\`\n` +
-          `\`/close <n>\` to close | \`/set <n> <note>\` to set instruction`
+        await sendHTML(
+          `<b>📊 Open Positions (${total_positions})</b>\n\n` +
+          `<pre>${escapeHTML(table)}</pre>\n` +
+          `<code>/close &lt;n&gt;</code> to close | <code>/set &lt;n&gt; &lt;note&gt;</code> to set instruction`
         );
       } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
       return;
@@ -928,18 +938,18 @@ if (isTTY) {
       try {
         const idx = parseInt(closeMatch[1]) - 1;
         const { positions } = await getMyPositions({ force: true });
-        if (idx < 0 || idx >= positions.length) { await sendMessage(`Invalid number. Use /positions first.`); return; }
+        if (idx < 0 || idx >= positions.length) { await sendHTML(`Invalid number. Use <code>/positions</code> first.`); return; }
         const pos = positions[idx];
-        await sendMessage(`Closing ${pos.pair}...`);
+        await sendHTML(`Closing <b>${escapeHTML(pos.pair)}</b>...`);
         const result = await closePosition({ position_address: pos.position });
         if (result.success) {
           const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
-          const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
-          await sendMessage(`✅ *Closed* ${pos.pair}\n*PnL:* ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"}  •  *txs:* \`${closeTxs?.join(", ") || "n/a"}\`${claimNote}`);
+          const claimNote = result.claim_txs?.length ? `\nClaim txs: <code>${escapeHTML(result.claim_txs.join(", "))}</code>` : "";
+          await sendHTML(`✅ <b>Closed</b> ${escapeHTML(pos.pair)}\n<b>PnL:</b> ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"}  •  <b>txs:</b> <code>${escapeHTML(closeTxs?.join(", ") || "n/a")}</code>${claimNote}`);
         } else {
-          await sendMessage(`❌ Close failed: ${JSON.stringify(result)}`);
+          await sendHTML(`❌ Close failed: <code>${escapeHTML(JSON.stringify(result))}</code>`);
         }
-      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+      } catch (e) { await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { }); }
       return;
     }
 
@@ -949,11 +959,11 @@ if (isTTY) {
         const idx = parseInt(setMatch[1]) - 1;
         const note = setMatch[2].trim();
         const { positions } = await getMyPositions({ force: true });
-        if (idx < 0 || idx >= positions.length) { await sendMessage(`Invalid number. Use /positions first.`); return; }
+        if (idx < 0 || idx >= positions.length) { await sendHTML(`Invalid number. Use <code>/positions</code> first.`); return; }
         const pos = positions[idx];
         setPositionInstruction(pos.position, note);
-        await sendMessage(`✅ Note set for ${pos.pair}:\n"${note}"`);
-      } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => { }); }
+        await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
+      } catch (e) { await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { }); }
       return;
     }
 
@@ -966,9 +976,9 @@ if (isTTY) {
       const agentModel = agentRole === "SCREENER" ? config.llm.screeningModel : config.llm.generalModel;
       const { content } = await agentLoop(text, config.llm.maxSteps, sessionHistory, agentRole, agentModel, null, { requireTool: true });
       appendHistory(text, content);
-      await sendMessage(stripThink(content));
+      await sendHTML(`<pre>${escapeHTML(stripThink(content))}</pre>`);
     } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => { });
+      await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { });
     } finally {
       busy = false;
       rl.setPrompt(buildPrompt());
