@@ -61,16 +61,16 @@ export function trackPosition({
         active_bin_at_deploy, bin_step, volatility, fee_tvl_ratio, initial_fee_tvl_24h,
         organic_score, initial_value_usd, signal_snapshot, base_mint, deployed_at,
         out_of_range_since, last_claim_at, total_fees_claimed_usd, rebalance_count,
-        closed, closed_at, notes, peak_pnl_pct, trailing_active, instruction
+        closed, closed_at, notes, peak_pnl_pct, trailing_active, instruction, status
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       position, pool, pool_name, strategy, JSON.stringify(bin_range), amount_sol, amount_x,
       active_bin, bin_step, volatility, fee_tvl_ratio, fee_tvl_ratio,
       organic_score, initial_value_usd, JSON.stringify(signal_snapshot || null), base_mint, new Date().toISOString(),
       null, null, 0, 0,
-      0, null, '[]', 0, 0, null
+      0, null, '[]', 0, 0, null, 'pending'
     );
 
     pushEvent({ action: "deploy", position, pool_name: pool_name || pool });
@@ -90,6 +90,15 @@ function updatePosition(position_address, updates) {
 
   db.prepare(`UPDATE positions SET ${setCols} WHERE position = ?`).run(...values);
   touchLastUpdated();
+}
+
+/**
+ * Update position status: 'pending' -> 'active' -> 'closed'.
+ */
+export function updatePositionStatus(position_address, status) {
+  const db = getDB();
+  db.prepare('UPDATE positions SET status = ? WHERE position = ?').run(status, position_address);
+  log("info", "state", `Position ${position_address.slice(0,8)} status -> ${status}`);
 }
 
 /**

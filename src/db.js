@@ -62,7 +62,8 @@ function initSchema(db) {
       notes TEXT, -- JSON array of strings
       peak_pnl_pct REAL,
       trailing_active INTEGER, -- BOOLEAN
-      instruction TEXT
+      instruction TEXT,
+      status TEXT DEFAULT 'active' -- 'pending' -> 'active' -> 'closed'
     )
   `);
 

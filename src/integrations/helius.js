@@ -1,20 +1,18 @@
 import {
-  Connection,
   PublicKey,
   LAMPORTS_PER_SOL,
   VersionedTransaction,
   Keypair,
 } from "@solana/web3.js";
+import { getConnection as getRpcConnection } from "./solana.js";
 import bs58 from "bs58";
 import { log } from "../logger.js";
 import { config } from "../config.js";
 
-let _connection = null;
 let _wallet = null;
 
 function getConnection() {
-  if (!_connection) _connection = new Connection(process.env.RPC_URL, "confirmed");
-  return _connection;
+  return getRpcConnection("confirmed");
 }
 
 function getWallet() {
