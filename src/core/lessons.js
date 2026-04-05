@@ -128,6 +128,17 @@ export async function recordPerformance(perf) {
   }
 
   import("../features/hive-mind.js").then(m => m.syncToHive()).catch(() => {});
+
+  // Auto-prune performance data and near-misses
+  try {
+    const pruningResult = prunePerformance();
+    if (pruningResult.archived > 0) {
+      log("info", "lessons", `Pruning: archived ${pruningResult.archived} records`);
+    }
+    pruneNearMisses();
+  } catch (e) {
+    log("warn", "lessons", `Pruning failed: ${e.message}`);
+  }
 }
 
 function derivLesson(perf) {
@@ -137,7 +148,30 @@ function derivLesson(perf) {
     : perf.pnl_pct >= -5 ? "poor"
     : "bad";
 
-  if (outcome === "neutral") return null;
+  if (outcome === "neutral") {
+    // Insert into near_misses instead of discarding
+    const db = getDB();
+    const id = crypto.randomUUID();
+    const range_eff = perf.minutes_held > 0
+      ? Math.min(100, (perf.minutes_in_range / perf.minutes_held) * 100)
+      : 0;
+    db.prepare(`
+      INSERT OR IGNORE INTO near_misses (
+        id, position, pool, strategy, bin_step, volatility,
+        fee_tvl_ratio, organic_score, pnl_usd, pnl_pct,
+        minutes_in_range, minutes_held, range_efficiency,
+        close_reason, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, perf.position, perf.pool, perf.strategy, perf.bin_step,
+      perf.volatility, perf.fee_tvl_ratio, perf.organic_score,
+      perf.pnl_usd, perf.pnl_pct, perf.minutes_in_range,
+      perf.minutes_held, Math.round(range_eff * 10) / 10,
+      perf.close_reason, new Date().toISOString()
+    );
+    log("info", "lessons", "Neutral outcome recorded in near_misses");
+    return null;
+  }
 
   const context = [
     `${perf.pool_name}`,
@@ -290,17 +324,29 @@ export function evolveThresholds(perfData, config) {
       buckets[bucket].push(p);
     }
 
-    for (const [bucket, positions] of Object.entries(buckets)) {
+    for (const [bucketKey, positions] of Object.entries(buckets)) {
       if (positions.length < 3) continue;
       const bWinners = positions.filter(p => p.pnl_pct > 0);
       const bLosers = positions.filter(p => p.pnl_pct < -5);
+      const loserWinRate = positions.length > 0
+        ? bWinners.length / positions.length
+        : 0;
 
       if (bWinners.length > 0 && bLosers.length > 0) {
         const avgWinHold = avg(bWinners.map(p => p.minutes_held));
         const avgLossHold = avg(bLosers.map(p => p.minutes_held));
 
         if (avgLossHold > avgWinHold * 1.5) {
-          rationale[`hold_${bucket}`] = `${bucket}-vol: winners held ~${Math.round(avgWinHold)}m vs losers ~${Math.round(avgLossHold)}m — holding losers too long`;
+          rationale[`hold_${bucketKey}`] = `${bucketKey}-vol: winners held ~${Math.round(avgWinHold)}m vs losers ~${Math.round(avgLossHold)}m — holding losers too long`;
+        }
+      }
+
+      // Produce actual config changes when a volatility bucket performs poorly
+      if (loserWinRate < 0.3 && !changes.maxBinStep) {
+        const newVal = Math.max(60, config.screening.maxBinStep - 10);
+        if (newVal < config.screening.maxBinStep) {
+          changes.maxBinStep = newVal;
+          rationale[`vol_${bucketKey}_binstep`] = `${bucketKey}-vol bucket win rate only ${Math.round(loserWinRate * 100)}% (${bWinners.length}/${positions.length}) — tightened maxBinStep from ${config.screening.maxBinStep} → ${newVal}`;
         }
       }
     }
@@ -479,6 +525,41 @@ const ROLE_TAGS = {
   GENERAL:  [], 
 };
 
+// ─── Lesson Decay: Age-Weighted Selection ───────────────────────
+
+function ageWeight(createdAt) {
+  if (!createdAt) return 0.2;
+  const days = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+  if (days <= 7)   return 1.0;
+  if (days <= 30)  return 0.7;
+  if (days <= 90)  return 0.4;
+  return 0.2;
+}
+
+export { ageWeight }; // exported for testing
+
+// ─── Lesson Rating ──────────────────────────────────────────────
+
+export function rateLesson(id, rating) {
+  const db = getDB();
+  if (!['useful', 'useless'].includes(rating)) return { error: "Rating must be 'useful' or 'useless'" };
+  const res = db.prepare(
+    "UPDATE lessons SET rating = ?, rating_at = ? WHERE id = ?"
+  ).run(rating, new Date().toISOString(), id);
+  if (res.changes === 0) return { found: false };
+  const l = db.prepare('SELECT rule FROM lessons WHERE id = ?').get(id);
+  log("info", "lessons", `Lesson ${id} rated: ${rating}`);
+  return { found: true, id, rating, rule: l.rule };
+}
+
+export function pinLessonById(id) {
+  return pinLesson(id);
+}
+
+export function unpinLessonById(id) {
+  return unpinLesson(id);
+}
+
 export function getLessonsForPrompt(opts = {}) {
   if (typeof opts === "number") opts = { maxLessons: opts };
 
@@ -495,11 +576,13 @@ export function getLessonsForPrompt(opts = {}) {
       if (typeof parsedTags === "string") parsedTags = JSON.parse(parsedTags);
       if (!Array.isArray(parsedTags)) parsedTags = [];
     } catch (e) { parsedTags = []; }
-    
+
     return {
       ...l,
       tags: parsedTags,
-      pinned: l.pinned === 1
+      pinned: l.pinned === 1,
+      _ageWeight: ageWeight(l.created_at),
+      _ratedScore: l.rating === 'useful' ? 1.2 : l.rating === 'useless' ? 0.4 : 1.0,
     };
   });
 
@@ -526,7 +609,12 @@ export function getLessonsForPrompt(opts = {}) {
       const tagOk  = roleTags.length === 0 || !l.tags?.length || l.tags.some((t) => roleTags.includes(t));
       return roleOk && tagOk;
     })
-    .sort(byPriority)
+    // Sort by priority * age_weight * rated_score (higher = more relevant)
+    .sort((a, b) => {
+      const scoreA = (outcomePriority[a.outcome] ?? 3) * a._ageWeight * a._ratedScore;
+      const scoreB = (outcomePriority[b.outcome] ?? 3) * b._ageWeight * b._ratedScore;
+      return scoreA - scoreB;
+    })
     .slice(0, ROLE_CAP);
 
   roleMatched.forEach((l) => usedIds.add(l.id));
@@ -535,7 +623,12 @@ export function getLessonsForPrompt(opts = {}) {
   const recent = remainingBudget > 0
     ? allLessons
         .filter((l) => !usedIds.has(l.id))
-        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))
+        // Sort by age-weighted recency: newest that are still fresh
+        .sort((a, b) => {
+          const aDays = a.created_at ? (Date.now() - new Date(a.created_at).getTime()) / 86400000 : 999;
+          const bDays = b.created_at ? (Date.now() - new Date(b.created_at).getTime()) / 86400000 : 999;
+          return aDays - bDays;  // newer first (lower days = higher priority)
+        })
         .slice(0, remainingBudget)
     : [];
 
@@ -608,4 +701,113 @@ export function getPerformanceSummary() {
     win_rate_pct: Math.round((wins / count) * 100),
     total_lessons: totalLessons,
   };
+}
+
+// ─── Learning System Stats ──────────────────────────────────────
+
+export function getLearningStats() {
+  const db = getDB();
+
+  const perfCount = db.prepare('SELECT COUNT(*) as c FROM performance').get().c;
+  const nearMissCount = db.prepare('SELECT COUNT(*) as c FROM near_misses').get().c;
+  const lessonCount = db.prepare('SELECT COUNT(*) as c FROM lessons').get().c;
+  const archivedCount = db.prepare('SELECT COUNT(*) as c FROM performance_archive').get().c;
+
+  const perfStats = db.prepare(`
+    SELECT COUNT(*) as count, SUM(pnl_usd) as total_pnl, SUM(pnl_pct) as pt_sum
+    FROM performance
+  `).get();
+  const wins = db.prepare('SELECT COUNT(*) as wins FROM performance WHERE pnl_usd > 0').get().wins;
+
+  const nearMissAvg = db.prepare('SELECT AVG(pnl_pct) as avg_pnl, COUNT(*) as c FROM near_misses').get();
+
+  const pinnedCount = db.prepare('SELECT COUNT(*) as c FROM lessons WHERE pinned = 1').get().c;
+  const ratedUseful = db.prepare("SELECT COUNT(*) as c FROM lessons WHERE rating = 'useful'").get().c;
+  const ratedUseless = db.prepare("SELECT COUNT(*) as c FROM lessons WHERE rating = 'useless'").get().c;
+
+  const evolutionCount = db.prepare("SELECT COUNT(*) as c FROM lessons WHERE outcome = 'evolution'").get().c;
+
+  // Load current config for evolved thresholds (best effort)
+  const thresholds = {};
+  try {
+    // Try synchronous access via process-level cache or return empty
+    const cfgPath = path.join(__dirname, "user-config.json");
+    if (fs.existsSync(cfgPath)) {
+      const uc = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      thresholds.maxBinStep = uc.maxBinStep ?? "n/a";
+      thresholds.minFeeActiveTvlRatio = uc.minFeeActiveTvlRatio ?? "n/a";
+      thresholds.minOrganic = uc.minOrganic ?? "n/a";
+    }
+  } catch { /* ignore */ }
+
+  return {
+    performance_records: perfCount,
+    near_misses: nearMissCount,
+    total_lessons: lessonCount,
+    archived_records: archivedCount,
+    overall_win_rate: perfCount > 0 ? Math.round((wins / perfCount) * 100) : null,
+    total_pnl_usd: Math.round((perfStats.total_pnl || 0) * 100) / 100,
+    avg_pnl_pct: perfCount > 0 ? Math.round(((perfStats.pt_sum || 0) / perfCount) * 100) / 100 : null,
+    near_miss_avg_pnl_pct: nearMissCount > 0 ? Math.round(nearMissAvg.avg_pnl * 100) / 100 : null,
+    pinned_lessons: pinnedCount,
+    rated_useful: ratedUseful,
+    rated_useless: ratedUseless,
+    evolution_cycles: evolutionCount,
+    current_thresholds: thresholds,
+  };
+}
+
+async function asyncRequireConfig() {
+  try {
+    return await import("../config.js");
+  } catch {
+    return { config: { screening: {} } };
+  }
+}
+
+// ─── Performance Data Pruning ───────────────────────────────────
+
+const PERFORMANCE_ARCHIVE_THRESHOLD = 200;
+const PERFORMANCE_KEEP = 100;
+const NEAR_MISS_MAX_DAYS = 90;
+
+export function prunePerformance() {
+  const db = getDB();
+  const count = db.prepare('SELECT COUNT(*) as c FROM performance').get().c;
+  if (count <= PERFORMANCE_ARCHIVE_THRESHOLD) return { archived: 0, reason: "below threshold" };
+
+  // Get oldest 100 records to archive (count - KEEP oldest go to archive)
+  const toArchive = count - PERFORMANCE_KEEP;
+  const oldest = db.prepare(
+    'SELECT id FROM performance ORDER BY recorded_at ASC LIMIT ?'
+  ).all(toArchive).map(r => r.id);
+
+  if (oldest.length === 0) return { archived: 0 };
+
+  const archivedAt = new Date().toISOString();
+  const archiveStmt = db.prepare(`
+    INSERT INTO performance_archive
+    SELECT *, ? FROM performance WHERE id = ?
+  `);
+  const deleteStmt = db.prepare('DELETE FROM performance WHERE id = ?');
+
+  db.transaction(() => {
+    for (const id of oldest) {
+      archiveStmt.run(archivedAt, id);
+      deleteStmt.run(id);
+    }
+  })();
+
+  log("info", "lessons", `Archived ${oldest.length} performance records to performance_archive`);
+  return { archived: oldest.length };
+}
+
+export function pruneNearMisses() {
+  const db = getDB();
+  const cutoff = new Date(Date.now() - NEAR_MISS_MAX_DAYS * 86400000).toISOString();
+  const { changes } = db.prepare('DELETE FROM near_misses WHERE created_at < ?').run(cutoff);
+  if (changes > 0) {
+    log("info", "lessons", `Pruned ${changes} near_misses older than ${NEAR_MISS_MAX_DAYS} days`);
+  }
+  return { pruned: changes };
 }

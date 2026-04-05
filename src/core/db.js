@@ -62,7 +62,9 @@ function initSchema(db) {
       peak_pnl_pct REAL,
       trailing_active INTEGER, -- BOOLEAN
       instruction TEXT,
-      status TEXT DEFAULT 'active' -- 'pending' -> 'active' -> 'closed'
+      status TEXT DEFAULT 'active', -- 'pending' -> 'active' -> 'closed'
+      market_phase TEXT,
+      strategy_id TEXT
     )
   `);
 
@@ -122,7 +124,62 @@ function initSchema(db) {
       pool TEXT,
       created_at TEXT,
       pinned INTEGER DEFAULT 0, -- BOOLEAN
-      role TEXT
+      role TEXT,
+      rating TEXT, -- 'useful' | 'useless'
+      rating_at TEXT
+    )
+  `);
+
+  // ─── Near Misses (neutral outcomes: -5% < pnl < 5%) ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS near_misses (
+      id TEXT PRIMARY KEY,
+      position TEXT,
+      pool TEXT,
+      strategy TEXT,
+      bin_step INTEGER,
+      volatility REAL,
+      fee_tvl_ratio REAL,
+      organic_score REAL,
+      pnl_usd REAL,
+      pnl_pct REAL,
+      minutes_in_range REAL,
+      minutes_held REAL,
+      range_efficiency REAL,
+      close_reason TEXT,
+      created_at TEXT,
+      reviewed INTEGER DEFAULT 0
+    )
+  `);
+
+  // ─── Performance Archive (pruned from performance table) ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS performance_archive (
+      id INTEGER PRIMARY KEY,
+      position TEXT,
+      pool TEXT,
+      pool_name TEXT,
+      strategy TEXT,
+      bin_range TEXT,
+      bin_step INTEGER,
+      volatility REAL,
+      fee_tvl_ratio REAL,
+      organic_score REAL,
+      amount_sol REAL,
+      fees_earned_usd REAL,
+      final_value_usd REAL,
+      initial_value_usd REAL,
+      minutes_in_range REAL,
+      minutes_held REAL,
+      close_reason TEXT,
+      pnl_usd REAL,
+      pnl_pct REAL,
+      range_efficiency REAL,
+      deployed_at TEXT,
+      closed_at TEXT,
+      recorded_at TEXT,
+      base_mint TEXT,
+      archived_at TEXT
     )
   `);
 
@@ -203,6 +260,13 @@ function initSchema(db) {
       updated_at TEXT
     )
   `);
+
+  // ─── Strategies: Phase 13 columns (nullable — ALTER for existing tables) ───
+  db.exec(`ALTER TABLE strategies ADD COLUMN phase TEXT CHECK (phase IN ('any','pump','pullback','runner','bear','bull','consolidation'))`);
+  db.exec(`ALTER TABLE strategies ADD COLUMN bin_count INTEGER`);
+  db.exec(`ALTER TABLE strategies ADD COLUMN fee_tier_target REAL`);
+  db.exec(`ALTER TABLE strategies ADD COLUMN max_hold_hours INTEGER`);
+  db.exec(`ALTER TABLE strategies ADD COLUMN confidence INTEGER DEFAULT 0`);
 
   // ─── Signal Weights ───
   db.exec(`

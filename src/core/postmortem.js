@@ -11,8 +11,10 @@
  */
 
 import fs from "fs";
+import crypto from "crypto";
 import writeFileAtomic from "write-file-atomic";
 import { log } from "./logger.js";
+import { getDB } from "./db.js";
 
 const POSTMORTEM_FILE = "./postmortem-rules.json";
 const MAX_RULES = 50;
@@ -46,7 +48,11 @@ export function analyzeClose(perfRecord, allPerformance) {
   const newRules = [];
 
   // Only analyze losing positions — winners don't need post-mortems
-  if (perfRecord.pnl_pct >= 0) return newRules;
+  if (perfRecord.pnl_pct >= 0) {
+    // Still write a positive autopsy to the lessons table
+    writeAutopsyToLessons(perfRecord, allPerformance);
+    return newRules;
+  }
 
   // 1. Pattern detection: strategy × bin_step × volatility combos
   const patternRule = detectLosingPattern(perfRecord, allPerformance);
@@ -78,6 +84,9 @@ export function analyzeClose(perfRecord, allPerformance) {
     saveRules(existing);
     log("info", "postmortem", `Generated ${newRules.length} rule(s) from close of ${perfRecord.pool_name}`);
   }
+
+  // Always write autopsy to lessons table
+  writeAutopsyToLessons(perfRecord, allPerformance);
 
   return newRules;
 }
@@ -270,4 +279,81 @@ export function matchesBlockedPattern(candidate) {
 export function clearRules() {
   saveRules([]);
   return { cleared: true };
+}
+
+// ─── Enhanced Autopsy ───────────────────────────────────────────
+
+/**
+ * Write a detailed post-mortem analysis to the lessons table.
+ * Includes comparisons against pool history, volatility-class strategy
+ * performance, and a confidence score based on data volume.
+ */
+function writeAutopsyToLessons(perfRecord, allPerformance) {
+  const db = getDB();
+  const lines = [];
+  const { pnl_pct, pnl_usd, strategy, bin_step, volatility, pool_name, close_reason, minutes_held } = perfRecord;
+  const outcome = pnl_pct >= 0 ? "postmortem" : "postmortem_loss";
+
+  // 1. Pool-level comparison
+  const poolHistory = allPerformance.filter(p =>
+    p.pool === perfRecord.pool || (p.pool_name && perfRecord.pool_name && p.pool_name === perfRecord.pool_name)
+  );
+  if (poolHistory.length > 0) {
+    const poolAvgPnl = poolHistory.reduce((s, p) => s + (p.pnl_pct || 0), 0) / poolHistory.length;
+    const poolWinRate = poolHistory.filter(p => p.pnl_pct > 0).length / poolHistory.length;
+    lines.push(`Pool ${pool_name || "unknown"} history: ${poolHistory.length} trades, avg PnL ${poolAvgPnl.toFixed(2)}%, win rate ${Math.round(poolWinRate * 100)}%`);
+    if (pnl_pct < poolAvgPnl - 5) {
+      lines.push(`This close (${pnl_pct}%) underperforms pool average by ${(poolAvgPnl - pnl_pct).toFixed(1)}pp`);
+    }
+  }
+
+  // 2. Volatility-class strategy comparison
+  const volClass = volatility < 3 ? "low (<3)" : volatility < 7 ? "medium (3-7)" : "high (>=7)";
+  const volSimilar = allPerformance.filter(p => {
+    const vc = p.volatility < 3 ? "low" : p.volatility < 7 ? "medium" : "high";
+    const myVolClass = volatility < 3 ? "low" : volatility < 7 ? "medium" : "high";
+    return vc === myVolClass && p.strategy === strategy;
+  });
+  if (volSimilar.length > 0) {
+    const bestPnl = Math.max(...volSimilar.map(p => p.pnl_pct));
+    const avgPnl = volSimilar.reduce((s, p) => s + (p.pnl_pct || 0), 0) / volSimilar.length;
+    lines.push(`Volatility class ${volClass}, strategy ${strategy}: ${volSimilar.length} trades, avg PnL ${avgPnl.toFixed(2)}%, best ${bestPnl.toFixed(2)}%`);
+    if (pnl_pct < avgPnl * 0.5 && avgPnl < -2) {
+      lines.push(`AVOID: ${strategy} in ${volClass} volatility conditions — avg PnL is negative`);
+    }
+  }
+
+  // 3. Confidence score based on supporting data
+  const similarCount = volSimilar.length + (poolHistory?.length || 0);
+  let confidence = "low";
+  if (similarCount >= 10) confidence = "high";
+  else if (similarCount >= 5) confidence = "medium";
+
+  // Build the autopsy rule string
+  const closeInfo = `${pool_name || "?"} — PnL ${pnl_pct}% ($${(pnl_usd || 0).toFixed(2)}), ${close_reason || "unknown"}`;
+  const contextInfo = `strategy=${strategy}, bin_step=${bin_step}, vol=${volatility}, held ${Math.round(minutes_held || 0)}m`;
+  const analysisDetail = lines.length > 0 ? lines.join("; ") : "No comparable historical data for this pool/volatility class";
+
+  const rule = `AUTOPSY [${confidence.toUpperCase()} CONFIDENCE]: ${closeInfo} | ${contextInfo} | ${analysisDetail}`;
+
+  // Tag the lesson
+  const tags = ["postmortem", strategy, `vol_${Math.round(volatility)}`];
+  if (volSimilar.length < 3) tags.push("limited_data");
+
+  db.prepare(`
+    INSERT INTO lessons (id, rule, tags, outcome, context, pnl_pct, range_efficiency, pool, created_at, pinned, role)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    crypto.randomUUID(),
+    rule,
+    JSON.stringify(tags),
+    "postmortem",
+    JSON.stringify({ close_reason, strategy, bin_step, volatility, confidence, similar_count: similarCount }),
+    pnl_pct,
+    perfRecord.range_efficiency || 0,
+    perfRecord.pool,
+    new Date().toISOString(),
+    0,
+    null
+  );
 }
