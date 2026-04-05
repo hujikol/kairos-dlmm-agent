@@ -87,11 +87,11 @@ export function recordPoolDeploy(poolAddress, deployData) {
     } else if ((pnl_pct ?? 0) < -15) {
       cooldownHours = 8;
       extendedCooldown = true;
-      log("pool-memory", `${cooldownHours}h cooldown for ${poolState.name}: large loss (${pnl_pct}%)`);
+      log("info", "pool-memory", `${cooldownHours}h cooldown for ${poolState.name}: large loss (${pnl_pct}%)`);
     } else if (deployData.close_reason === "low yield" || deployData.close_reason === "low_yield") {
       cooldownHours = 4;
       extendedCooldown = true;
-      log("pool-memory", `Cooldown set for ${poolState.name} (low yield close)`);
+      log("info", "pool-memory", `Cooldown set for ${poolState.name} (low yield close)`);
     }
 
     if (extendedCooldown) {
@@ -111,7 +111,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
       JSON.stringify(notes), cooldownUntil, poolAddress
     );
 
-    log("pool-memory", `Recorded deploy for ${poolState.name || poolAddress.slice(0, 8)}: PnL ${pnl_pct}%`);
+    log("info", "pool-memory", `Recorded deploy for ${poolState.name || poolAddress.slice(0, 8)}: PnL ${pnl_pct}%`);
   })();
 }
 
@@ -300,6 +300,6 @@ export function addPoolNote({ pool_address, note }) {
     db.prepare('UPDATE pool_memory SET notes = ? WHERE pool_address = ?').run(JSON.stringify(notes), pool_address);
   })();
 
-  log("pool-memory", `Note added to ${pool_address.slice(0, 8)}: ${note}`);
+  log("info", "pool-memory", `Note added to ${pool_address.slice(0, 8)}: ${note}`);
   return { saved: true, pool_address, note };
 }

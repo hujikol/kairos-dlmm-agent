@@ -623,9 +623,9 @@ export async function closePosition({ position_address, reason }) {
     const recentlyClaimed = tracked?.last_claim_at && (Date.now() - new Date(tracked.last_claim_at).getTime()) < 60_000;
     try {
       if (recentlyClaimed) {
-        log("close", `Step 1: Skipping claim — fees already claimed ${Math.round((Date.now() - new Date(tracked.last_claim_at).getTime()) / 1000)}s ago`);
+        log("info", "close", `Step 1: Skipping claim — fees already claimed ${Math.round((Date.now() - new Date(tracked.last_claim_at).getTime()) / 1000)}s ago`);
       } else {
-        log("close", `Step 1: Claiming fees for ${position_address}`);
+        log("info", "close", `Step 1: Claiming fees for ${position_address}`);
         const positionData = await pool.getPosition(positionPubKey);
         const claimTxs = await pool.claimSwapFee({
           owner: wallet.publicKey,
@@ -636,11 +636,11 @@ export async function closePosition({ position_address, reason }) {
             const claimHash = await sendTx(tx, [wallet]);
             claimTxHashes.push(claimHash);
           }
-          log("close", `Step 1 OK (claim only): ${claimTxHashes.join(", ")}`);
+          log("info", "close", `Step 1 OK (claim only): ${claimTxHashes.join(", ")}`);
         }
       }
     } catch (e) {
-      log("close_warn", `Step 1 (Claim) failed or nothing to claim: ${e.message}`);
+      log("warn", "close", `Step 1 (Claim) failed or nothing to claim: ${e.message}`);
     }
 
     // ─── Step 2: Remove Liquidity & Close ──────────────────────
@@ -657,11 +657,11 @@ export async function closePosition({ position_address, reason }) {
         hasLiquidity = bins.some((bin) => new BN(bin.positionLiquidity || "0").gt(new BN(0)));
       }
     } catch (e) {
-      log("close_warn", `Could not check liquidity state: ${e.message}`);
+      log("warn", "close", `Could not check liquidity state: ${e.message}`);
     }
 
     if (hasLiquidity) {
-      log("close", `Step 2: Removing liquidity and closing account`);
+      log("info", "close", `Step 2: Removing liquidity and closing account`);
       const closeTx = await pool.removeLiquidity({
         user: wallet.publicKey,
         position: positionPubKey,
@@ -676,7 +676,7 @@ export async function closePosition({ position_address, reason }) {
         closeTxHashes.push(txHash);
       }
     } else {
-      log("close", `Step 2: No position liquidity detected, closing account`);
+      log("info", "close", `Step 2: No position liquidity detected, closing account`);
       const closeTx = await pool.closePosition({
         owner: wallet.publicKey,
         position: { publicKey: positionPubKey },
@@ -685,8 +685,8 @@ export async function closePosition({ position_address, reason }) {
       closeTxHashes.push(txHash);
     }
     const txHashes = [...claimTxHashes, ...closeTxHashes];
-    log("close", `Step 2 OK (close only): ${closeTxHashes.join(", ") || "none"}`);
-    log("close", `SUCCESS txs: ${txHashes.join(", ")}`);
+    log("info", "close", `Step 2 OK (close only): ${closeTxHashes.join(", ") || "none"}`);
+    log("info", "close", `SUCCESS txs: ${txHashes.join(", ")}`);
     // Wait for RPC to reflect withdrawn balances before returning — prevents
     // agent from seeing zero balance when attempting post-close swap
     await new Promise(r => setTimeout(r, 5000));
@@ -701,9 +701,9 @@ export async function closePosition({ position_address, reason }) {
           closedConfirmed = true;
           break;
         }
-        log("close_warn", `Position ${position_address} still appears open after close txs (attempt ${attempt + 1}/4)`);
+        log("warn", "close", `Position ${position_address} still appears open after close txs (attempt ${attempt + 1}/4)`);
       } catch (e) {
-        log("close_warn", `Close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
+        log("warn", "close", `Close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
       }
       if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
     }
@@ -750,13 +750,13 @@ export async function closePosition({ position_address, reason }) {
             finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
             initialUsd    = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
             feesUsd       = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
-            log("close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} USD (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)}, deposited=${initialUsd.toFixed(2)}`);
+            log("info", "close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} USD (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)}, deposited=${initialUsd.toFixed(2)}`);
           } else {
-            log("close_warn", `Position not found in status=closed response — may still be settling`);
+            log("warn", "close", `Position not found in status=closed response — may still be settling`);
           }
         }
       } catch (e) {
-        log("close_warn", `Closed PnL fetch failed: ${e.message}`);
+        log("warn", "close", `Closed PnL fetch failed: ${e.message}`);
       }
       // Fallback to pre-close cache snapshot if closed API had no data
       if (finalValueUsd === 0) {
@@ -774,7 +774,7 @@ export async function closePosition({ position_address, reason }) {
             finalValueUsd = cachedPos.total_value_true_usd ?? cachedPos.total_value_usd ?? 0;
             initialUsd = Math.max(0, finalValueUsd + feesUsd - pnlUsd);
           }
-          log("close_warn", `Using cached pnl fallback because closed API has not settled yet`);
+          log("warn", "close", `Using cached pnl fallback because closed API has not settled yet`);
         }
       }
 
@@ -827,7 +827,7 @@ export async function closePosition({ position_address, reason }) {
       quote_mint: pool.lbPair.tokenYMint.toString(),
     };
   } catch (error) {
-    log("close_error", error.message);
+    log("error", "close", error.message);
     return { success: false, error: error.message };
   }
 }

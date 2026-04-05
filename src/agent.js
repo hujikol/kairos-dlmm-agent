@@ -158,7 +158,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
   let emptyStreak = 0;
   for (let step = 0; step < maxSteps; step++) {
-    log("agent", `Step ${step + 1}/${maxSteps}`);
+    log("info", "agent", `Step ${step + 1}/${maxSteps}`);
 
     try {
       const activeModel = model || DEFAULT_MODEL;
@@ -188,9 +188,9 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           const wait = (attempt + 1) * 5000;
           if (attempt === 1 && usedModel !== FALLBACK_MODEL) {
             usedModel = FALLBACK_MODEL;
-            log("agent", `Switching to fallback model ${FALLBACK_MODEL}`);
+            log("info", "agent", `Switching to fallback model ${FALLBACK_MODEL}`);
           } else {
-            log("agent", `Provider error ${errCode}, retrying in ${wait / 1000}s (attempt ${attempt + 1}/3)`);
+            log("info", "agent", `Provider error ${errCode}, retrying in ${wait / 1000}s (attempt ${attempt + 1}/3)`);
             await new Promise((r) => setTimeout(r, wait));
           }
         } else {
@@ -229,13 +229,13 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         // Hermes sometimes returns null content — pop the empty message and retry once
         if (!msg.content) {
           messages.pop(); // remove the empty assistant message
-          log("agent", "Empty response, retrying...");
+          log("info", "agent", "Empty response, retrying...");
           continue;
         }
         if (mustUseRealTool && !sawToolCall) {
           noToolRetryCount += 1;
           messages.pop();
-          log("agent", `Rejected no-tool final answer (${noToolRetryCount}/2) for tool-required request`);
+          log("info", "agent", `Rejected no-tool final answer (${noToolRetryCount}/2) for tool-required request`);
           if (noToolRetryCount >= 2) {
             return {
               content: "I couldn't complete that reliably because no tool call was made. Please retry after checking the logs.",
@@ -248,8 +248,8 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           });
           continue;
         }
-        log("agent", "Final answer reached");
-        log("agent", msg.content);
+        log("info", "agent", "Final answer reached");
+        log("info", "agent", msg.content);
         return { content: msg.content, userMessage: goal };
       }
       sawToolCall = true;
@@ -273,7 +273,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
         // Block once-per-session tools from firing a second time
         if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
-          log("agent", `Blocked duplicate ${functionName} call — already executed this session`);
+          log("info", "agent", `Blocked duplicate ${functionName} call — already executed this session`);
           return {
             role: "tool",
             tool_call_id: toolCall.id,
@@ -300,7 +300,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
       // If it's a rate limit, wait and retry
       if (error.status === 429) {
-        log("agent", "Rate limited, waiting 30s...");
+        log("info", "agent", "Rate limited, waiting 30s...");
         await sleep(30000);
         continue;
       }
@@ -310,7 +310,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
     }
   }
 
-  log("agent", "Max steps reached without final answer");
+  log("info", "agent", "Max steps reached without final answer");
   return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
 }
 

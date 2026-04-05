@@ -45,7 +45,7 @@ export function addToBlacklist({ mint, symbol, reason }) {
     VALUES (?, ?, ?, ?, ?)
   `).run(mint, symbol || "UNKNOWN", reason || "no reason provided", new Date().toISOString(), "agent");
 
-  log("blacklist", `Blacklisted ${symbol || mint}: ${reason}`);
+  log("info", "blacklist", `Blacklisted ${symbol || mint}: ${reason}`);
   return { blacklisted: true, mint, symbol, reason };
 }
 
@@ -63,7 +63,7 @@ export function removeFromBlacklist({ mint }) {
   }
 
   db.prepare('DELETE FROM token_blacklist WHERE mint = ?').run(mint);
-  log("blacklist", `Removed ${entry.symbol || mint} from blacklist`);
+  log("info", "blacklist", `Removed ${entry.symbol || mint} from blacklist`);
   return { removed: true, mint, was: entry };
 }
 

@@ -33,7 +33,7 @@ export function blockDev({ wallet, reason, label }) {
     VALUES (?, ?, ?, ?)
   `).run(wallet, label || "unknown", reason || "no reason provided", new Date().toISOString());
   
-  log("dev_blocklist", `Blocked deployer ${label || wallet}: ${reason}`);
+  log("info", "dev_blocklist", `Blocked deployer ${label || wallet}: ${reason}`);
   return { blocked: true, wallet, label, reason };
 }
 
@@ -44,7 +44,7 @@ export function unblockDev({ wallet }) {
   if (!entry) return { error: `Wallet ${wallet} not on dev blocklist` };
   
   db.prepare('DELETE FROM dev_blocklist WHERE wallet = ?').run(wallet);
-  log("dev_blocklist", `Removed deployer ${entry.label || wallet} from blocklist`);
+  log("info", "dev_blocklist", `Removed deployer ${entry.label || wallet} from blocklist`);
   return { unblocked: true, wallet, was: entry };
 }
 

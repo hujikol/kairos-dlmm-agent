@@ -9,7 +9,7 @@ import { getTopCandidates } from "./screening/discovery.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { registerCronRestarter } from "./tools/executor.js";
-import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled } from "./notifications/telegram.js";
+import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled } from "./telegram.js";
 import { generateBriefing } from "./notifications/briefing.js";
 import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits } from "./core/state.js";
 import { getActiveStrategy } from "./core/strategy-library.js";
@@ -104,7 +104,7 @@ async function maybeRunMissedBriefing() {
   const briefingHourUtc = 1;
   if (nowUtc.getUTCHours() < briefingHourUtc) return; // too early, cron will handle it
 
-  log("cron", `Missed briefing detected (last sent: ${lastSent || "never"}) — sending now`);
+  log("info", "cron", `Missed briefing detected (last sent: ${lastSent || "never"}) — sending now`);
   await runBriefing();
 }
 
@@ -118,7 +118,7 @@ export async function runManagementCycle({ silent = false } = {}) {
   if (_managementBusy) return null;
   _managementBusy = true;
   timers.managementLastRun = Date.now();
-  log("cron", "Starting management cycle");
+  log("info", "cron", "Starting management cycle");
   let mgmtReport = null;
   let positions = [];
   const screeningCooldownMs = 5 * 60 * 1000;
@@ -128,7 +128,7 @@ export async function runManagementCycle({ silent = false } = {}) {
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
-      log("cron", "No open positions — triggering screening cycle");
+      log("info", "cron", "No open positions — triggering screening cycle");
       runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
       return null;
     }
@@ -145,7 +145,7 @@ export async function runManagementCycle({ silent = false } = {}) {
       const exit = updatePnlAndCheckExits(p.position, p, config.management);
       if (exit) {
         exitMap.set(p.position, exit.reason);
-        log("state", `Exit alert for ${p.pair}: ${exit.reason}`);
+        log("info", "state", `Exit alert for ${p.pair}: ${exit.reason}`);
       }
     }
 
@@ -172,7 +172,7 @@ export async function runManagementCycle({ silent = false } = {}) {
         if (p.pnl_pct > -90) return false; // only flag extreme negatives
         // Cross-check: if we have a tracked deposit and current value isn't near zero, it's bad data
         if (tracked?.amount_sol && (p.total_value_usd ?? 0) > 0.01) {
-          log("cron_warn", `Suspect PnL for ${p.pair}: ${p.pnl_pct}% but position still has value — skipping PnL rules`);
+          log("warn", "cron", `Suspect PnL for ${p.pair}: ${p.pnl_pct}% but position still has value — skipping PnL rules`);
           return true;
         }
         return false;
@@ -257,7 +257,7 @@ export async function runManagementCycle({ silent = false } = {}) {
     });
 
     if (actionPositions.length > 0) {
-      log("cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
+      log("info", "cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
 
       const actionBlocks = actionPositions.map((p) => {
         const act = actionMap.get(p.position);
@@ -297,28 +297,28 @@ After executing, write a brief one-line result per position.
       });
 
       if (executedActions.length > 0) {
-        log("post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
+        log("info", "post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
         const swapResult = await autoSwapRewardFees();
         if (swapResult.swapped && swapResult.swapped.length > 0) {
-          log("post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
+          log("info", "post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
           for (const swap of swapResult.swapped) {
             if (swap.success) {
               mgmtReport += `\n🔁 Swapped → SOL: tx ${swap.tx}`;
             } else {
-              log("post_trade_warn", `Swap failed: ${swap.error}`);
+              log("warn", "post_trade", `Swap failed: ${swap.error}`);
             }
           }
         }
       }
     } else {
-      log("cron", "Management: all positions STAY — skipping LLM");
+      log("info", "cron", "Management: all positions STAY — skipping LLM");
     }
 
     // Trigger screening after management if we expect to be under max positions
     const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
     const afterCount = Math.max(0, positions.length - closesAttempted);
     if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > screeningCooldownMs) {
-      log("cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
+      log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
       runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
     }
   } catch (error) {
@@ -340,7 +340,7 @@ After executing, write a brief one-line result per position.
 
 export async function runScreeningCycle({ silent = false } = {}) {
   if (_screeningBusy) {
-    log("cron", "Screening skipped — previous cycle still running");
+    log("info", "screening", "Screening skipped — previous cycle still running");
     return null;
   }
   _screeningBusy = true; // set immediately — prevents TOCTOU race with concurrent callers
@@ -351,18 +351,18 @@ export async function runScreeningCycle({ silent = false } = {}) {
   try {
     [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
     if (prePositions.total_positions >= config.risk.maxPositions) {
-      log("cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
+      log("info", "cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
       _screeningBusy = false;
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
     if (preBalance.sol < minRequired && process.env.DRY_RUN !== "true") {
-      log("cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
+      log("info", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
       _screeningBusy = false;
       return null;
     }
     if (preBalance.sol < minRequired && process.env.DRY_RUN === "true") {
-      log("cron", `DRY RUN — bypassing SOL check (${preBalance.sol.toFixed(3)} SOL, would need ${minRequired})`);
+      log("info", "cron", `DRY RUN — bypassing SOL check (${preBalance.sol.toFixed(3)} SOL, would need ${minRequired})`);
     }
   } catch (e) {
     log("error", "cron", `Screening pre-check failed: ${e.message}`);
@@ -370,13 +370,13 @@ export async function runScreeningCycle({ silent = false } = {}) {
     return null;
   }
   timers.screeningLastRun = Date.now();
-  log("cron", `Starting screening cycle [model: ${config.llm.screeningModel}]`);
+  log("info", "cron", `Starting screening cycle [model: ${config.llm.screeningModel}]`);
   let screenReport = null;
   try {
     // Reuse pre-fetched balance — no extra RPC call needed
     const currentBalance = preBalance;
     const deployAmount = computeDeployAmount(currentBalance.sol);
-    log("cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
+    log("info", "cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
 
     // Load active strategy
     const activeStrategy = getActiveStrategy();
@@ -409,19 +409,19 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const passing = allCandidates.filter(({ pool, ti }) => {
       const launchpad = ti?.launchpad ?? null;
       if (launchpad && config.screening.blockedLaunchpads.includes(launchpad)) {
-        log("screening", `Skipping ${pool.name} — blocked launchpad (${launchpad})`);
+        log("info", "screening", `Skipping ${pool.name} — blocked launchpad (${launchpad})`);
         return false;
       }
       const botPct = ti?.audit?.bot_holders_pct;
       const maxBotHoldersPct = config.screening.maxBotHoldersPct;
       if (botPct != null && maxBotHoldersPct != null && botPct > maxBotHoldersPct) {
-        log("screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
+        log("info", "screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
         return false;
       }
       // Token toxicity check — skip tokens that consistently lose across pools
       const baseMint = pool.base?.mint;
       if (baseMint && isTokenToxic(baseMint)) {
-        log("screening", `Toxic token filter: dropped ${pool.name} — base token has >66% loss rate across 3+ deploys`);
+        log("info", "screening", `Toxic token filter: dropped ${pool.name} — base token has >66% loss rate across 3+ deploys`);
         return false;
       }
       return true;
@@ -564,10 +564,10 @@ export function startCronJobs() {
           const sinceLastTrigger = Date.now() - _pollTriggeredAt;
           if (sinceLastTrigger >= cooldownMs) {
             _pollTriggeredAt = Date.now();
-            log("state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
+            log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
             runManagementCycle({ silent: true }).catch((e) => log("error", "cron", `Poll-triggered management failed: ${e.message}`));
           } else {
-            log("state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
+            log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
           }
           break;
         }
@@ -580,17 +580,17 @@ export function startCronJobs() {
   _cronTasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
   // Store interval ref so stopCronJobs can clear it
   _cronTasks._pnlPollInterval = pnlPollInterval;
-  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
+  log("info", "cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
 }
 
 // ═══════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
 // ═══════════════════════════════════════════
 async function shutdown(signal) {
-  log("shutdown", `Received ${signal}. Shutting down...`);
+  log("info", "shutdown", `Received ${signal}. Shutting down...`);
   stopPolling();
   const positions = await getMyPositions();
-  log("shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+  log("info", "shutdown", `Open positions at shutdown: ${positions.total_positions}`);
   process.exit(0);
 }
 
@@ -969,7 +969,7 @@ if (isTTY) {
 
     busy = true;
     try {
-      log("telegram", `Incoming: ${text}`);
+      log("info", "telegram", `Incoming: ${text}`);
       const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
       const isDeployRequest = !hasCloseIntent && /\bdeploy\b|\bopen position\b|\blp into\b|\badd liquidity\b/i.test(text);
       const agentRole = isDeployRequest ? "SCREENER" : "GENERAL";
@@ -1234,7 +1234,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
 
     // ── Free-form chat ───────────────────────
     await runBusy(async () => {
-      log("user", input);
+      log("info", "user", input);
       const { content } = await agentLoop(input, config.llm.maxSteps, sessionHistory, "GENERAL", config.llm.generalModel, null, { requireTool: true });
       appendHistory(input, content);
       console.log(`\n${content}\n`);
@@ -1245,7 +1245,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
 
 } else {
   // Non-TTY: start immediately
-  log("startup", "Non-TTY mode — starting cron cycles immediately.");
+  log("info", "startup", "Non-TTY mode — starting cron cycles immediately.");
   startCronJobs();
   maybeRunMissedBriefing().catch(() => { });
   (async () => {
@@ -1255,7 +1255,7 @@ STARTUP CHECK
 1. get_wallet_balance. 2. get_my_positions. 3. If SOL >= ${config.management.minSolToOpen}: get_top_candidates then deploy ${DEPLOY} SOL. 4. Report.
       `, config.llm.maxSteps, [], "SCREENER");
     } catch (e) {
-      log("startup_error", e.message);
+      log("error", "startup", e.message);
     }
   })();
 }
