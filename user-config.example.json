@@ -1,11 +1,16 @@
 {
   "preset": "custom",
-  "rpcUrl": "https://pump.helius-rpc.com",
+
+  "_comment_rpc": "Solana RPC — can also be set via RPC_URL in .env",
+  "rpcUrl": "https://mainnet.helius-rpc.com/?api-key=YOUR_KEY",
   "llmBaseUrl": "",
   "llmApiKey": "",
-  "llmModel": "minimax/minimax-m2.7",
+
+  "_comment_model": "Default model — overrides per-role models below",
+  "llmModel": "openrouter/healer-alpha",
   "dryRun": true,
 
+  "─── Risk Limits ────────────────────────────────────────────────": "",
   "deployAmountSol": 0.5,
   "maxPositions": 3,
   "minSolToOpen": 0.55,
@@ -13,9 +18,11 @@
   "gasReserve": 0.2,
   "positionSizePct": 0.35,
 
+  "─── Strategy Defaults ─────────────────────────────────────────": "",
   "strategy": "bid_ask",
   "binsBelow": 69,
 
+  "─── Pool Screening ────────────────────────────────────────────": "",
   "timeframe": "5m",
   "category": "trending",
   "minTvl": 10000,
@@ -37,6 +44,7 @@
   "maxTokenAgeHours": null,
   "athFilterPct": null,
 
+  "─── Position Management ───────────────────────────────────────": "",
   "minClaimAmount": 5,
   "autoSwapAfterClaim": false,
   "outOfRangeBinsToClose": 10,
@@ -52,17 +60,20 @@
   "trailingDropPct": 1.5,
   "solMode": false,
 
+  "─── Scheduling ────────────────────────────────────────────────": "",
   "managementIntervalMin": 10,
   "screeningIntervalMin": 30,
   "healthCheckIntervalMin": 60,
 
+  "─── LLM Settings ──────────────────────────────────────────────": "",
   "temperature": 0.373,
   "maxTokens": 4096,
   "maxSteps": 20,
-  "managementModel": "minimax/minimax-m2.5",
-  "screeningModel": "minimax/minimax-m2.5",
-  "generalModel": "minimax/minimax-m2.7",
+  "managementModel": "openrouter/healer-alpha",
+  "screeningModel": "openrouter/hunter-alpha",
+  "generalModel": "openrouter/healer-alpha",
 
+  "─── Integrations ──────────────────────────────────────────────": "",
   "telegramChatId": "",
   "hiveMindUrl": "",
   "hiveMindApiKey": ""
