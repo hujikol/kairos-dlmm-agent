@@ -1,1 +1,1 @@
-export { log, logAction } from "./src/logger.js";
+export { log, logAction } from "./src/core/logger.js";
