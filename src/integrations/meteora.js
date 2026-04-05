@@ -8,9 +8,10 @@ import { getConnection as getRpcConnection } from "./solana.js";
 import BN from "bn.js";
 import bs58 from "bs58";
 import { config } from "../config.js";
-import { log } from "../logger.js";
+import { log } from "../core/logger.js";
 import {
   trackPosition,
+  updatePositionStatus,
   markOutOfRange,
   markInRange,
   recordClaim,
@@ -262,21 +263,25 @@ export async function deployPosition({
     log("info", "deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
 
     _positionsCacheAt = 0;
+    const newPositionKey = newPosition.publicKey.toString();
     trackPosition({
-      position: newPosition.publicKey.toString(),
+      position: newPositionKey,
       pool: pool_address,
       pool_name,
-      strategy: activeStrategy,
-      bin_range: { min: minBinId, max: maxBinId, bins_below: activeBinsBelow, bins_above: activeBinsAbove },
+      strategy: activeStrategy || "Unknown",
+      bin_range: { lower: activeBinsBelow, upper: activeBinsAbove },
+      amount_sol: finalAmountY,
+      amount_x: finalAmountX,
+      active_bin: activeBin.binId,
       bin_step,
       volatility,
       fee_tvl_ratio,
       organic_score,
-      amount_sol: finalAmountY,
-      amount_x: finalAmountX,
-      active_bin: activeBin.binId,
       initial_value_usd,
+      base_mint,
     });
+    // Transition from pending -> active now that on-chain tx is confirmed
+    updatePositionStatus(newPositionKey, "active");
 
     const actualBinStep = pool.lbPair.binStep;
     const activePrice = parseFloat(activeBin.price);
@@ -589,7 +594,20 @@ export async function claimFees({ position_address }) {
     }
     log("info", "claim", `SUCCESS txs: ${txHashes.join(", ")}`);
     _positionsCacheAt = 0; // invalidate cache after claim
-    recordClaim(position_address);
+
+    // Read claimed fee amount from PnL API for accurate tracking
+    let claimedFeesUsd = null;
+    try {
+      const walletAddr = wallet.publicKey.toString();
+      const pnlData = await fetchDlmmPnlForPool(poolAddress.toString(), walletAddr);
+      const entry = pnlData[position_address];
+      if (entry) {
+        claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
+      }
+    } catch (_) { /* non-critical — position record will just not update fee total */ }
+    if (claimedFeesUsd !== null) {
+      recordClaim(position_address, claimedFeesUsd);
+    }
 
     return { success: true, position: position_address, txs: txHashes, base_mint: pool.lbPair.tokenXMint.toString(), quote_mint: pool.lbPair.tokenYMint.toString() };
   } catch (error) {
@@ -637,6 +655,17 @@ export async function closePosition({ position_address, reason }) {
             claimTxHashes.push(claimHash);
           }
           log("info", "close", `Step 1 OK (claim only): ${claimTxHashes.join(", ")}`);
+
+          // Track the fees we just claimed
+          try {
+            const walletAddr = wallet.publicKey.toString();
+            const pnlData = await fetchDlmmPnlForPool(poolAddress.toString(), walletAddr);
+            const entry = pnlData[position_address];
+            if (entry) {
+              const claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
+              if (claimedFeesUsd > 0) recordClaim(position_address, claimedFeesUsd);
+            }
+          } catch (_) {}
         }
       }
     } catch (e) {

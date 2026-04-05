@@ -6,7 +6,7 @@ import {
 } from "@solana/web3.js";
 import { getConnection as getRpcConnection } from "./solana.js";
 import bs58 from "bs58";
-import { log } from "../logger.js";
+import { log } from "../core/logger.js";
 import { config } from "../config.js";
 
 let _wallet = null;
@@ -41,15 +41,17 @@ export async function getWalletBalances() {
   }
 
   const HELIUS_KEY = process.env.HELIUS_API_KEY;
+
+  // ─── Try Helius first ────────────────────────────────────────
   if (!HELIUS_KEY) {
-    log("error", "wallet", "HELIUS_API_KEY not set in .env");
-    return { wallet: walletAddress, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Helius API key missing" };
+    log("warn", "wallet", "HELIUS_API_KEY not set — falling back to RPC balance check");
+    return await getBalancesViaRpc(walletAddress);
   }
 
   try {
     const url = `https://api.helius.xyz/v1/wallet/${walletAddress}/balances?api-key=${HELIUS_KEY}`;
     const res = await fetch(url);
-    
+
     if (!res.ok) {
       throw new Error(`Helius API error: ${res.status} ${res.statusText}`);
     }
@@ -84,7 +86,33 @@ export async function getWalletBalances() {
       total_usd: Math.round((data.totalUsdValue || 0) * 100) / 100,
     };
   } catch (error) {
-    log("error", "wallet", error.message);
+    log("warn", "wallet", `Helius error, falling back to RPC: ${error.message}`);
+    return await getBalancesViaRpc(walletAddress);
+  }
+}
+
+/**
+ * Fallback balance check using direct Solana RPC — no external API needed.
+ * Returns SOL balance accurately even without Helius.
+ */
+async function getBalancesViaRpc(walletAddress) {
+  try {
+    const connection = getConnection();
+    const lamports = await connection.getBalance(new PublicKey(walletAddress));
+    const solBalance = lamports / LAMPORTS_PER_SOL;
+
+    return {
+      wallet: walletAddress,
+      sol: Math.round(solBalance * 1e6) / 1e6,
+      sol_price: 0,
+      sol_usd: 0,
+      usdc: 0,
+      tokens: [],
+      total_usd: 0,
+      error: null,
+    };
+  } catch (e) {
+    log("error", "wallet", `RPC balance fallback failed: ${e.message}`);
     return {
       wallet: walletAddress,
       sol: 0,
@@ -93,7 +121,7 @@ export async function getWalletBalances() {
       usdc: 0,
       tokens: [],
       total_usd: 0,
-      error: error.message,
+      error: e.message,
     };
   }
 }
