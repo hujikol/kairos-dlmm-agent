@@ -1,35 +1,34 @@
-import fs from "fs";
-import { log } from "./logger.js";
-import { getPerformanceSummary } from "./lessons.js";
-
-const STATE_FILE = "./state.json";
-const LESSONS_FILE = "./lessons.json";
+import { getDB } from "./db.js";
+import { getPerformanceSummary, getPerformanceHistory } from "./lessons.js";
 
 export async function generateBriefing() {
-  const state = loadJson(STATE_FILE) || { positions: {}, recentEvents: [] };
-  const lessonsData = loadJson(LESSONS_FILE) || { lessons: [], performance: [] };
-
+  const db = getDB();
   const now = new Date();
-  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
-  // 1. Positions Activity
-  const allPositions = Object.values(state.positions || {});
-  const openedLast24h = allPositions.filter(p => new Date(p.deployed_at) > last24h);
-  const closedLast24h = allPositions.filter(p => p.closed && new Date(p.closed_at) > last24h);
+  const openedLast24h = db.prepare(
+    'SELECT * FROM positions WHERE deployed_at >= ? AND closed = 0'
+  ).all(last24h);
 
-  // 2. Performance Activity (from performance log)
-  const perfLast24h = (lessonsData.performance || []).filter(p => new Date(p.recorded_at) > last24h);
-  const totalPnLUsd = perfLast24h.reduce((sum, p) => sum + (p.pnl_usd || 0), 0);
-  const totalFeesUsd = perfLast24h.reduce((sum, p) => sum + (p.fees_earned_usd || 0), 0);
+  const closedLast24h = db.prepare(
+    'SELECT * FROM performance WHERE closed_at >= ?'
+  ).all(last24h);
 
-  // 3. Lessons Learned
-  const lessonsLast24h = (lessonsData.lessons || []).filter(l => new Date(l.created_at) > last24h);
+  const totalPnLUsd = closedLast24h.reduce((sum, p) => sum + (p.pnl_usd || 0), 0);
+  const totalFeesUsd = closedLast24h.reduce((sum, p) => sum + (p.fees_earned_usd || 0), 0);
 
-  // 4. Current State
-  const openPositions = allPositions.filter(p => !p.closed);
+  const openPositions = db.prepare('SELECT * FROM positions WHERE closed = 0').all();
   const perfSummary = getPerformanceSummary();
+  const perf24h = getPerformanceHistory({ hours: 24, limit: 50 });
 
-  // 5. Format Message
+  const winRate24h = closedLast24h.length > 0
+    ? Math.round((closedLast24h.filter(p => p.pnl_usd > 0).length / closedLast24h.length) * 100)
+    : null;
+
+  const lessonsLast24h = db.prepare(
+    'SELECT * FROM lessons WHERE created_at >= ?'
+  ).all(last24h);
+
   const lines = [
     "☀️ <b>Morning Briefing</b> (Last 24h)",
     "────────────────",
@@ -40,8 +39,8 @@ export async function generateBriefing() {
     `<b>Performance:</b>`,
     `💰 Net PnL: ${totalPnLUsd >= 0 ? "+" : ""}$${totalPnLUsd.toFixed(2)}`,
     `💎 Fees Earned: $${totalFeesUsd.toFixed(2)}`,
-    perfLast24h.length > 0
-      ? `📈 Win Rate (24h): ${Math.round((perfLast24h.filter(p => p.pnl_usd > 0).length / perfLast24h.length) * 100)}%`
+    winRate24h !== null
+      ? `📈 Win Rate (24h): ${winRate24h}%`
       : "📈 Win Rate (24h): N/A",
     "",
     `<b>Lessons Learned:</b>`,
@@ -58,14 +57,4 @@ export async function generateBriefing() {
   ];
 
   return lines.join("\n");
-}
-
-function loadJson(file) {
-  if (!fs.existsSync(file)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (err) {
-    log("briefing_error", `Failed to read ${file}: ${err.message}`);
-    return null;
-  }
 }

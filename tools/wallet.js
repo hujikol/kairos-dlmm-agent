@@ -28,7 +28,7 @@ function getWallet() {
 const JUPITER_PRICE_API = "https://api.jup.ag/price/v3";
 const JUPITER_ULTRA_API = "https://api.jup.ag/ultra/v1";
 const JUPITER_QUOTE_API = "https://api.jup.ag/swap/v1";
-const JUPITER_API_KEY = "b15d42e9-e0e4-4f90-a424-ae41ceeaa382";
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY;
 
 /**
  * Get current wallet balances: SOL, USDC, and all SPL tokens using Helius Wallet API.
@@ -154,6 +154,11 @@ export async function swapToken({
 }) {
   input_mint  = normalizeMint(input_mint);
   output_mint = normalizeMint(output_mint);
+
+  if (input_mint === output_mint) {
+    log("swap", `Skipping swap: input and output mints are the same (${input_mint})`);
+    return { success: true, message: "Input and output mints are the same — skipped." };
+  }
 
   if (process.env.DRY_RUN === "true") {
     return {
@@ -283,8 +288,10 @@ async function swapViaQuoteApi({ wallet, connection, input_mint, output_mint, am
 export async function autoSwapRewardFees(mints = null) {
   try {
     const balances = await getWalletBalances();
+    const solMint = normalizeMint(config.tokens.SOL);
+
     let tokensToSwap = balances.tokens?.filter(t => 
-      t.mint !== config.tokens.SOL && 
+      normalizeMint(t.mint) !== solMint && 
       (mints === null || mints.includes(t.mint)) && 
       t.usd >= 0.10
     );

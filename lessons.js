@@ -4,6 +4,7 @@
  */
 
 import fs from "fs";
+import crypto from "crypto";
 import writeFileAtomic from "write-file-atomic";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -40,7 +41,7 @@ export async function recordPerformance(perf) {
     ? (pnl_usd / perf.initial_value_usd) * 100
     : 0;
   const range_efficiency = perf.minutes_held > 0
-    ? (perf.minutes_in_range / perf.minutes_held) * 100
+    ? Math.min(100, (perf.minutes_in_range / perf.minutes_held) * 100)
     : 0;
 
   const entry = {
@@ -172,7 +173,7 @@ function derivLesson(perf) {
   if (!rule) return null;
 
   return {
-    id: Date.now(),
+    id: crypto.randomUUID(),
     rule,
     tags,
     outcome,
@@ -328,10 +329,10 @@ export function evolveThresholds(perfData, config) {
     INSERT INTO lessons (id, rule, tags, outcome, pinned, role, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
-    Date.now(),
+    crypto.randomUUID(),
     `[AUTO-EVOLVED @ ${perfData.length} positions] ${Object.entries(changes).map(([k, v]) => `${k}=${v}`).join(", ")} — ${Object.values(rationale).join("; ")}`,
     JSON.stringify(["evolution", "config_change"]),
-    "manual",
+    "evolution",
     0,
     null,
     new Date().toISOString()
@@ -391,7 +392,7 @@ export function addLesson(rule, tags = [], { pinned = false, role = null } = {})
   db.prepare(`
     INSERT INTO lessons (id, rule, tags, outcome, pinned, role, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(Date.now(), rule, JSON.stringify(tags), "manual", pinned ? 1 : 0, role || null, new Date().toISOString());
+  `).run(crypto.randomUUID(), rule, JSON.stringify(tags), "manual", pinned ? 1 : 0, role || null, new Date().toISOString());
   log("lessons", `Manual lesson added${pinned ? " [PINNED]" : ""}${role ? ` [${role}]` : ""}: ${rule}`);
 }
 
