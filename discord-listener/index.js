@@ -38,7 +38,6 @@ const FALSE_POSITIVE_SKIP = new Set([
 function isLikelySolanaAddress(str) {
   if (str.length < 32 || str.length > 44) return false;
   if (FALSE_POSITIVE_SKIP.has(str.toLowerCase())) return false;
-  // Must contain digits (pure alpha strings are usually words)
   if (!/\d/.test(str)) return false;
   return true;
 }
@@ -51,7 +50,6 @@ function loadSignals() {
 function saveSignal(record) {
   const signals = loadSignals();
   signals.unshift(record); // newest first
-  // Keep last 100 signals
   writeFileAtomic.sync(SIGNALS_FILE, JSON.stringify(signals.slice(0, 100), null, 2));
 }
 
@@ -79,14 +77,13 @@ async function processAddress(address, message) {
   saveSignal(record);
   console.log(`\n[QUEUED] ${record.base_symbol} → ${record.pool_address}`);
   console.log(`  from: @${record.discord_author} in #${record.discord_channel}`);
-  console.log(`  → Check with: node ../cli.js discord-signals`);
 }
 
-// ─── Main ────────────────────────────────────────────────────────────────────
+// ─── Config ───────────────────────────────────────────────────
 
 const TOKEN = process.env.DISCORD_USER_TOKEN;
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
-const CHANNEL_IDS = (process.env.DISCORD_CHANNEL_IDS || "").split(",").map(s => s.trim()).filter(Boolean);
+const CHANNEL_IDS = new Set((process.env.DISCORD_CHANNEL_IDS || "").split(",").map(s => s.trim()).filter(Boolean));
 
 if (!TOKEN) {
   console.error("ERROR: DISCORD_USER_TOKEN not set in ../.env");
@@ -96,10 +93,12 @@ if (!GUILD_ID) {
   console.error("ERROR: DISCORD_GUILD_ID not set in ../.env");
   process.exit(1);
 }
-if (CHANNEL_IDS.length === 0) {
+if (CHANNEL_IDS.size === 0) {
   console.error("ERROR: DISCORD_CHANNEL_IDS not set in ../.env (comma-separated channel IDs)");
   process.exit(1);
 }
+
+// ─── Client ───────────────────────────────────────────────────
 
 const client = new Client({ checkUpdate: false });
 
@@ -110,7 +109,7 @@ client.on("ready", () => {
     console.warn(`WARNING: Guild ${GUILD_ID} not found in cache. Check DISCORD_GUILD_ID.`);
   } else {
     console.log(`Watching guild: ${guild.name}`);
-    const channelNames = CHANNEL_IDS.map(id => {
+    const channelNames = [...CHANNEL_IDS].map(id => {
       const ch = guild.channels.cache.get(id);
       return ch ? `#${ch.name}` : `#${id} (not found)`;
     });
@@ -120,12 +119,9 @@ client.on("ready", () => {
 });
 
 client.on("messageCreate", async (message) => {
-  // Only process messages from configured guild + channels
   if (message.guildId !== GUILD_ID) return;
-  if (!CHANNEL_IDS.includes(message.channelId)) return;
-  // Skip own messages
+  if (!CHANNEL_IDS.has(message.channelId)) return;
   if (message.author?.id === client.user?.id) return;
-  // Only process messages from Metlex Pool Bot
   if (message.author?.username !== "Metlex Pool Bot") return;
 
   const content = message.content || "";
@@ -140,7 +136,6 @@ client.on("messageCreate", async (message) => {
   console.log(`\n[message] @${message.author?.username} in #${message.channel?.name}: "${content.slice(0, 80)}"`);
   console.log(`  Addresses found: ${unique.join(", ")}`);
 
-  // Process each address independently (don't await — handle concurrently but logged sequentially)
   for (const addr of unique) {
     await processAddress(addr, message);
   }
@@ -149,5 +144,14 @@ client.on("messageCreate", async (message) => {
 client.on("error", (err) => {
   console.error("[discord error]", err.message);
 });
+
+// ─── Graceful shutdown ──────────────────────────────────────────
+function shutdown() {
+  console.log("\n[listener] Shutting down...");
+  client.destroy();
+  process.exit(0);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 client.login(TOKEN);
