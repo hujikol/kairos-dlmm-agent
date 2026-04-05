@@ -57,7 +57,7 @@ function getWallet() {
       throw new Error("WALLET_PRIVATE_KEY not set");
     }
     _wallet = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
-    log("init", `Wallet: ${_wallet.publicKey.toString()}`);
+    log("info", "init", `Wallet: ${_wallet.publicKey.toString()}`);
   }
   return _wallet;
 }
@@ -116,7 +116,7 @@ export async function deployPosition({
 
 
   if (isPoolOnCooldown(pool_address)) {
-    log("deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown (closed for low yield) — skipping`);
+    log("info", "deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown (closed for low yield) — skipping`);
     return { success: false, error: "Pool on cooldown — was recently closed for low yield. Try a different pool." };
   }
 
@@ -176,10 +176,10 @@ export async function deployPosition({
   const isWideRange = totalBins > 69;
   const newPosition = Keypair.generate();
 
-  log("deploy", `Pool: ${pool_address}`);
-  log("deploy", `Strategy: ${activeStrategy}, Bins: ${minBinId} to ${maxBinId} (${totalBins} bins${isWideRange ? " — WIDE RANGE" : ""})`);
-  log("deploy", `Amount: ${finalAmountX} X, ${finalAmountY} Y`);
-  log("deploy", `Position: ${newPosition.publicKey.toString()}`);
+  log("info", "deploy", `Pool: ${pool_address}`);
+  log("info", "deploy", `Strategy: ${activeStrategy}, Bins: ${minBinId} to ${maxBinId} (${totalBins} bins${isWideRange ? " — WIDE RANGE" : ""})`);
+  log("info", "deploy", `Amount: ${finalAmountX} X, ${finalAmountY} Y`);
+  log("info", "deploy", `Position: ${newPosition.publicKey.toString()}`);
 
   try {
     const txHashes = [];
@@ -203,7 +203,7 @@ export async function deployPosition({
         const signers = i === 0 ? [wallet, newPosition] : [wallet];
         const txHash = await sendAndConfirmTransaction(getConnection(), createTxArray[i], signers);
         txHashes.push(txHash);
-        log("deploy", `Create tx ${i + 1}/${createTxArray.length}: ${txHash}`);
+        log("info", "deploy", `Create tx ${i + 1}/${createTxArray.length}: ${txHash}`);
       }
 
       // Phase 2: Add liquidity (may be multiple txs)
@@ -219,7 +219,7 @@ export async function deployPosition({
       for (let i = 0; i < addTxArray.length; i++) {
         const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
         txHashes.push(txHash);
-        log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
+        log("info", "deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────
@@ -235,7 +235,7 @@ export async function deployPosition({
       txHashes.push(txHash);
     }
 
-    log("deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
+    log("info", "deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
 
     _positionsCacheAt = 0;
     trackPosition({
@@ -279,7 +279,7 @@ export async function deployPosition({
       txs: txHashes,
     };
   } catch (error) {
-    log("deploy_error", error.message);
+    log("error", "deploy", error.message);
     return { success: false, error: error.message };
   }
 }
@@ -297,13 +297,13 @@ async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
     const res = await fetch(url);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      log("pnl_api", `HTTP ${res.status} for pool ${poolAddress.slice(0, 8)}: ${body.slice(0, 120)}`);
+      log("info", "pnl_api", `HTTP ${res.status} for pool ${poolAddress.slice(0, 8)}: ${body.slice(0, 120)}`);
       return {};
     }
     const data = await res.json();
     const positions = data.positions || data.data || [];
     if (positions.length === 0) {
-      log("pnl_api", `No positions returned for pool ${poolAddress.slice(0, 8)} — keys: ${Object.keys(data).join(", ")}`);
+      log("info", "pnl_api", `No positions returned for pool ${poolAddress.slice(0, 8)} — keys: ${Object.keys(data).join(", ")}`);
     }
     const byAddress = {};
     for (const p of positions) {
@@ -312,7 +312,7 @@ async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
     }
     return byAddress;
   } catch (e) {
-    log("pnl_api", `Fetch error for pool ${poolAddress.slice(0, 8)}: ${e.message}`);
+    log("info", "pnl_api", `Fetch error for pool ${poolAddress.slice(0, 8)}: ${e.message}`);
     return {};
   }
 }
@@ -343,7 +343,7 @@ export async function getPositionPnl({ pool_address, position_address }) {
       age_minutes: p.createdAt ? Math.floor((Date.now() - p.createdAt * 1000) / 60000) : null,
     };
   } catch (error) {
-    log("pnl_error", error.message);
+    log("error", "pnl", error.message);
     return { error: error.message };
   }
 }
@@ -364,14 +364,14 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
 
   _positionsInflight = (async () => { try {
     // Single portfolio API call — returns all positions with full PnL data
-    if (!silent) log("positions", "Fetching portfolio via Meteora portfolio API...");
+    if (!silent) log("info", "positions", "Fetching portfolio via Meteora portfolio API...");
     const portfolioUrl = `https://dlmm.datapi.meteora.ag/portfolio/open?user=${walletAddress}`;
     const res = await fetch(portfolioUrl);
     if (!res.ok) throw new Error(`Portfolio API ${res.status}: ${await res.text().catch(() => "")}`);
     const portfolio = await res.json();
 
     const pools = portfolio.pools || [];
-    log("positions", `Found ${pools.length} pool(s) with open positions`);
+    log("info", "positions", `Found ${pools.length} pool(s) with open positions`);
 
     // Fetch bin data (lowerBinId, upperBinId, poolActiveBinId) for all pools in parallel
     // Needed for rules 3 & 4 (active_bin vs upper_bin comparison)
@@ -447,7 +447,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     _positionsCacheAt = Date.now();
     return result;
   } catch (error) {
-    log("positions_error", `Portfolio fetch failed: ${error.stack || error.message}`);
+    log("error", "positions", `Portfolio fetch failed: ${error.stack || error.message}`);
     return { wallet: walletAddress, total_positions: 0, positions: [], error: error.message };
   } finally {
     _positionsInflight = null;
@@ -500,7 +500,7 @@ export async function getWalletPositions({ wallet_address }) {
 
     return { wallet: wallet_address, total_positions: positions.length, positions };
   } catch (error) {
-    log("wallet_positions_error", error.message);
+    log("error", "wallet_positions", error.message);
     return { wallet: wallet_address, total_positions: 0, positions: [], error: error.message };
   }
 }
@@ -541,7 +541,7 @@ export async function claimFees({ position_address }) {
   }
 
   try {
-    log("claim", `Claiming fees for position: ${position_address}`);
+    log("info", "claim", `Claiming fees for position: ${position_address}`);
     const wallet = getWallet();
     const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     // Clear cached pool so SDK loads fresh position fee state
@@ -563,13 +563,13 @@ export async function claimFees({ position_address }) {
       const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet]);
       txHashes.push(txHash);
     }
-    log("claim", `SUCCESS txs: ${txHashes.join(", ")}`);
+    log("info", "claim", `SUCCESS txs: ${txHashes.join(", ")}`);
     _positionsCacheAt = 0; // invalidate cache after claim
     recordClaim(position_address);
 
     return { success: true, position: position_address, txs: txHashes, base_mint: pool.lbPair.tokenXMint.toString(), quote_mint: pool.lbPair.tokenYMint.toString() };
   } catch (error) {
-    log("claim_error", error.message);
+    log("error", "claim", error.message);
     return { success: false, error: error.message };
   }
 }
@@ -584,7 +584,7 @@ export async function closePosition({ position_address, reason }) {
   const tracked = getTrackedPosition(position_address);
 
   try {
-    log("close", `Closing position: ${position_address}`);
+    log("info", "close", `Closing position: ${position_address}`);
     const wallet = getWallet();
     const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     // Clear cached pool so SDK loads fresh position fee state

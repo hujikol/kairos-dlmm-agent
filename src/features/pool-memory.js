@@ -83,7 +83,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
         note: `Auto-blacklisted for ${cooldownHours}h: ${recentLosses.length} losses in last ${recentDeploys.length} deploys`,
         added_at: new Date().toISOString()
       });
-      log("pool-memory", `Extended cooldown for ${poolState.name}: ${cooldownHours}h (${recentLosses.length} recent losses)`);
+      log("info", "pool-memory", `Extended cooldown for ${poolState.name}: ${cooldownHours}h (${recentLosses.length} recent losses)`);
     } else if ((pnl_pct ?? 0) < -15) {
       cooldownHours = 8;
       extendedCooldown = true;

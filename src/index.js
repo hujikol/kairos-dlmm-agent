@@ -17,9 +17,9 @@ import { recordPositionSnapshot, recallForPool, addPoolNote, isTokenToxic } from
 import { checkSmartWalletsOnPool } from "./features/smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./integrations/jupiter.js";
 
-log("startup", "DLMM LP Agent starting...");
-log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
-log("startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
+log("info", "startup", "DLMM LP Agent starting...");
+log("info", "startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
+log("info", "startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
 
 const TP_PCT = config.management.takeProfitFeePct;
 const DEPLOY = config.management.deployAmountSol;
@@ -77,7 +77,7 @@ function escapeHTML(text) {
 }
 
 async function runBriefing() {
-  log("cron", "Starting morning briefing");
+  log("info", "cron", "Starting morning briefing");
   try {
     const briefing = await generateBriefing();
     if (telegramEnabled()) {
@@ -85,7 +85,7 @@ async function runBriefing() {
     }
     setLastBriefingDate();
   } catch (error) {
-    log("cron_error", `Morning briefing failed: ${error.message}`);
+    log("error", "cron", `Morning briefing failed: ${error.message}`);
   }
 }
 
@@ -129,7 +129,7 @@ export async function runManagementCycle({ silent = false } = {}) {
 
     if (positions.length === 0) {
       log("cron", "No open positions — triggering screening cycle");
-      runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
+      runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
       return null;
     }
 
@@ -319,10 +319,10 @@ After executing, write a brief one-line result per position.
     const afterCount = Math.max(0, positions.length - closesAttempted);
     if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > screeningCooldownMs) {
       log("cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
-      runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
+      runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
     }
   } catch (error) {
-    log("cron_error", `Management cycle failed: ${error.message}`);
+    log("error", "cron", `Management cycle failed: ${error.message}`);
     mgmtReport = `Management cycle failed: ${error.message}`;
   } finally {
     _managementBusy = false;
@@ -365,7 +365,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
       log("cron", `DRY RUN — bypassing SOL check (${preBalance.sol.toFixed(3)} SOL, would need ${minRequired})`);
     }
   } catch (e) {
-    log("cron_error", `Screening pre-check failed: ${e.message}`);
+    log("error", "cron", `Screening pre-check failed: ${e.message}`);
     _screeningBusy = false;
     return null;
   }
@@ -515,7 +515,7 @@ STEPS:
       `, Math.min(config.llm.maxSteps, 10), [], "SCREENER", config.llm.screeningModel, 2048);
     screenReport = content;
   } catch (error) {
-    log("cron_error", `Screening cycle failed: ${error.message}`);
+    log("error", "cron", `Screening cycle failed: ${error.message}`);
     screenReport = `Screening cycle failed: ${error.message}`;
   } finally {
     _screeningBusy = false;
@@ -565,7 +565,7 @@ export function startCronJobs() {
           if (sinceLastTrigger >= cooldownMs) {
             _pollTriggeredAt = Date.now();
             log("state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
-            runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Poll-triggered management failed: ${e.message}`));
+            runManagementCycle({ silent: true }).catch((e) => log("error", "cron", `Poll-triggered management failed: ${e.message}`));
           } else {
             log("state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
           }
@@ -830,7 +830,7 @@ if (isTTY) {
     }
 
     if (text === "/screen") {
-      runScreeningCycle().catch((e) => log("cron_error", `Manual screening failed: ${e.message}`));
+      runScreeningCycle().catch((e) => log("error", "cron", `Manual screening failed: ${e.message}`));
       await sendHTML("🔍 <b>Manual Screening Started</b>");
       return;
     }
@@ -1054,7 +1054,7 @@ Commands:
 
     // ── screen: manual trigger ─────
     if (input.toLowerCase() === "screen" || input.toLowerCase() === "/screen") {
-      runScreeningCycle().catch((e) => log("cron_error", `Manual screening failed: ${e.message}`));
+      runScreeningCycle().catch((e) => log("error", "cron", `Manual screening failed: ${e.message}`));
       console.log("\nManual screening cycle started.\n");
       rl.prompt();
       return;

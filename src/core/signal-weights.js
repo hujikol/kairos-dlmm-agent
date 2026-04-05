@@ -59,7 +59,7 @@ export function loadWeights() {
       history: [],
     };
     saveWeights(initial);
-    log("signal_weights", "Initialized signal weights in DB");
+    log("info", "signal_weights", "Initialized signal weights in DB");
     return initial;
   }
 
@@ -129,7 +129,7 @@ export function recalculateWeights(perfData, cfg = {}) {
   });
 
   if (recent.length < minSamples) {
-    log("signal_weights", `Only ${recent.length} records in ${windowDays}d window (need ${minSamples}), skipping recalc`);
+    log("info", "signal_weights", `Only ${recent.length} records in ${windowDays}d window (need ${minSamples}), skipping recalc`);
     return { changes: [], weights };
   }
 
@@ -138,7 +138,7 @@ export function recalculateWeights(perfData, cfg = {}) {
   const losses = recent.filter((p) => (p.pnl_usd ?? 0) <= 0);
 
   if (wins.length === 0 || losses.length === 0) {
-    log("signal_weights", `Need both wins (${wins.length}) and losses (${losses.length}) to compute lift, skipping`);
+    log("info", "signal_weights", `Need both wins (${wins.length}) and losses (${losses.length}) to compute lift, skipping`);
     return { changes: [], weights };
   }
 
@@ -152,7 +152,7 @@ export function recalculateWeights(perfData, cfg = {}) {
   const ranked = Object.entries(lifts).sort((a, b) => b[1] - a[1]);
 
   if (ranked.length === 0) {
-    log("signal_weights", "No signals had enough samples for lift calculation");
+    log("info", "signal_weights", "No signals had enough samples for lift calculation");
     return { changes: [], weights };
   }
 
@@ -180,7 +180,7 @@ export function recalculateWeights(perfData, cfg = {}) {
       const dir = next > prev ? "boosted" : "decayed";
       changes.push({ signal, from: prev, to: next, lift: Math.round(lift * 1000) / 1000, action: dir });
       weights[signal] = next;
-      log("signal_weights", `${signal}: ${prev} -> ${next} (${dir}, lift=${lift.toFixed(3)})`);
+      log("info", "signal_weights", `${signal}: ${prev} -> ${next} (${dir}, lift=${lift.toFixed(3)})`);
     }
   }
 
@@ -206,7 +206,7 @@ export function recalculateWeights(perfData, cfg = {}) {
     }
   })();
 
-  log("signal_weights", `${changes.length > 0 ? "Recalculated" : "Evaluated"}: ${changes.length} weight(s) adjusted from ${recent.length} records`);
+  log("info", "signal_weights", `${changes.length > 0 ? "Recalculated" : "Evaluated"}: ${changes.length} weight(s) adjusted from ${recent.length} records`);
 
   return { changes, weights };
 }

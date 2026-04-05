@@ -13,17 +13,17 @@ if (!fs.existsSync(LOG_DIR)) {
 }
 
 /**
- * General log function.
+ * General log function with explicit level.
  */
-export function log(category, message) {
-  const level = category.includes("error") ? "error"
-    : category.includes("warn") ? "warn"
-    : "info";
-
+export function log(level, category, message, meta = {}) {
+  if (LEVELS[level] === undefined) {
+    throw new Error(`Unknown log level: ${level}`);
+  }
   if (LEVELS[level] < currentLevel) return;
 
   const timestamp = new Date().toISOString();
-  const line = `[${timestamp}] [${category.toUpperCase()}] ${message}`;
+  const corrId = meta.correlationId ? ` [${meta.correlationId.slice(0, 8)}]` : "";
+  const line = `[${timestamp}] [${category.toUpperCase().padEnd(20)}]${corrId} ${message}`;
 
   // Console output
   console.log(line);
@@ -32,7 +32,24 @@ export function log(category, message) {
   const dateStr = timestamp.split("T")[0];
   const logFile = path.join(LOG_DIR, `agent-${dateStr}.log`);
   fs.appendFileSync(logFile, line + "\n");
+
+  // Separate error file
+  if (level === "error") {
+    const errorFile = path.join(LOG_DIR, `errors-${dateStr}.log`);
+    fs.appendFileSync(errorFile, line + "\n");
+  }
 }
+
+/**
+ * Convenience helpers
+ */
+export const logInfo  = (cat, msg, meta) => log("info",  cat, msg, meta);
+export const logWarn  = (cat, msg, meta) => log("warn",  cat, msg, meta);
+export const logError = (cat, msgOrErr, meta) => {
+  const message = msgOrErr instanceof Error && msgOrErr.stack ? msgOrErr.stack : String(msgOrErr);
+  log("error", cat, message, meta);
+};
+export const logDebug = (cat, msg, meta) => log("debug", cat, msg, meta);
 
 /**
  * Log a tool action with full details (for audit trail).

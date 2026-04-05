@@ -31,7 +31,7 @@ function saveChatId(id) {
     cfg.telegramChatId = id;
     fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(cfg, null, 2));
   } catch (e) {
-    log("telegram_error", `Failed to persist chatId: ${e.message}`);
+    log("error", "telegram", `Failed to persist chatId: ${e.message}`);
   }
 }
 
@@ -50,7 +50,7 @@ async function processQueue() {
     try {
       await task();
     } catch (e) {
-      log("telegram_error", `Queue task failed: ${e.message}`);
+      log("error", "telegram", `Queue task failed: ${e.message}`);
     }
     await sleep(1500); // 1.5s delay between messages to respect Telegram limits
   }
@@ -87,14 +87,14 @@ export async function sendMessage(text, parseMode = "Markdown") {
         if (!res.ok) {
           const err = await res.text();
           if (res.status === 429) {
-            log("telegram_error", `Rate limited (429). Stalling queue...`);
+            log("error", "telegram", `Rate limited (429). Stalling queue...`);
             await sleep(5000);
           } else {
-            log("telegram_error", `sendMessage ${res.status}: ${err.slice(0, 100)}`);
+            log("error", "telegram", `sendMessage ${res.status}: ${err.slice(0, 100)}`);
           }
         }
       } catch (e) {
-        log("telegram_error", `sendMessage failed: ${e.message}`);
+        log("error", "telegram", `sendMessage failed: ${e.message}`);
       }
       resolve();
     });
@@ -118,14 +118,14 @@ export async function sendHTML(html) {
         if (!res.ok) {
           const err = await res.text();
           if (res.status === 429) {
-            log("telegram_error", `Rate limited (429). Stalling queue...`);
+            log("error", "telegram", `Rate limited (429). Stalling queue...`);
             await sleep(5000);
           } else {
-            log("telegram_error", `sendHTML ${res.status}: ${err.slice(0, 100)}`);
+            log("error", "telegram", `sendHTML ${res.status}: ${err.slice(0, 100)}`);
           }
         }
       } catch (e) {
-        log("telegram_error", `sendHTML failed: ${e.message}`);
+        log("error", "telegram", `sendHTML failed: ${e.message}`);
       }
       resolve();
     });
@@ -154,7 +154,7 @@ async function poll(onMessage) {
         if (!chatId) {
           chatId = incomingChatId;
           saveChatId(chatId);
-          log("telegram", `Registered chat ID: ${chatId}`);
+          log("info", "telegram", `Registered chat ID: ${chatId}`);
           await sendMessage("Connected! I'm your LP agent. Ask me anything or use commands like /status.");
         }
 
@@ -165,7 +165,7 @@ async function poll(onMessage) {
       }
     } catch (e) {
       if (!e.message?.includes("aborted")) {
-        log("telegram_error", `Poll error: ${e.message}`);
+        log("error", "telegram", `Poll error: ${e.message}`);
       }
       await sleep(5000);
     }
@@ -176,7 +176,7 @@ export function startPolling(onMessage) {
   if (!TOKEN) return;
   _polling = true;
   poll(onMessage); // fire-and-forget
-  log("telegram", "Bot polling started");
+  log("info", "telegram", "Bot polling started");
 }
 
 export function stopPolling() {

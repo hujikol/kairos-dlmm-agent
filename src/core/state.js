@@ -77,7 +77,7 @@ export function trackPosition({
     touchLastUpdated();
   })();
   
-  log("state", `Tracked new position: ${position} in pool ${pool}`);
+  log("info", "state", `Tracked new position: ${position} in pool ${pool}`);
 }
 
 function updatePosition(position_address, updates) {
@@ -100,7 +100,7 @@ export function markOutOfRange(position_address) {
   const pos = db.prepare('SELECT out_of_range_since FROM positions WHERE position = ?').get(position_address);
   if (pos && !pos.out_of_range_since) {
     updatePosition(position_address, { out_of_range_since: new Date().toISOString() });
-    log("state", `Position ${position_address} marked out of range`);
+    log("info", "state", `Position ${position_address} marked out of range`);
   }
 }
 
@@ -112,7 +112,7 @@ export function markInRange(position_address) {
   const pos = db.prepare('SELECT out_of_range_since FROM positions WHERE position = ?').get(position_address);
   if (pos && pos.out_of_range_since) {
     updatePosition(position_address, { out_of_range_since: null });
-    log("state", `Position ${position_address} back in range`);
+    log("info", "state", `Position ${position_address} back in range`);
   }
 }
 
@@ -188,7 +188,7 @@ export function recordClose(position_address, reason) {
     appendNote(position_address, `Closed at ${closed_at}: ${reason}`);
     pushEvent({ action: "close", position: position_address, pool_name: pos.pool_name || pos.pool, reason });
   })();
-  log("state", `Position ${position_address} marked closed: ${reason}`);
+  log("info", "state", `Position ${position_address} marked closed: ${reason}`);
 }
 
 /**
@@ -222,7 +222,7 @@ export function setPositionInstruction(position_address, instruction) {
   if (!pos) return false;
   
   updatePosition(position_address, { instruction: instruction || null });
-  log("state", `Position ${position_address} instruction set: ${instruction}`);
+  log("info", "state", `Position ${position_address} instruction set: ${instruction}`);
   return true;
 }
 
@@ -318,7 +318,7 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     updates.trailing_active = 1;
     pos.trailing_active = true;
     changed = true;
-    log("state", `Position ${position_address} trailing TP activated at ${currentPnlPct}% (peak: ${pos.peak_pnl_pct}%)`);
+    log("info", "state", `Position ${position_address} trailing TP activated at ${currentPnlPct}% (peak: ${pos.peak_pnl_pct}%)`);
   }
 
   // Update OOR state
@@ -326,12 +326,12 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     updates.out_of_range_since = new Date().toISOString();
     pos.out_of_range_since = updates.out_of_range_since;
     changed = true;
-    log("state", `Position ${position_address} marked out of range`);
+    log("info", "state", `Position ${position_address} marked out of range`);
   } else if (in_range === true && pos.out_of_range_since) {
     updates.out_of_range_since = null;
     pos.out_of_range_since = null;
     changed = true;
-    log("state", `Position ${position_address} back in range`);
+    log("info", "state", `Position ${position_address} back in range`);
   }
 
   if (changed) updatePosition(position_address, updates);
@@ -424,14 +424,14 @@ export function syncOpenPositions(active_addresses) {
 
       const deployedAt = pos.deployed_at ? new Date(pos.deployed_at).getTime() : 0;
       if (Date.now() - deployedAt < SYNC_GRACE_MS) {
-        log("state", `Position ${pos.position} not on-chain yet — within grace period, skipping auto-close`);
+        log("info", "state", `Position ${pos.position} not on-chain yet — within grace period, skipping auto-close`);
         continue;
       }
 
       const closed_at = new Date().toISOString();
       updatePosition(pos.position, { closed: 1, closed_at });
       appendNote(pos.position, `Auto-closed during state sync (not found on-chain)`);
-      log("state", `Position ${pos.position} auto-closed (missing from on-chain data)`);
+      log("info", "state", `Position ${pos.position} auto-closed (missing from on-chain data)`);
     }
   })();
 }

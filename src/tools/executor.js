@@ -116,18 +116,18 @@ const toolMap = {
   clear_lessons: ({ mode, keyword }) => {
     if (mode === "all") {
       const n = clearAllLessons();
-      log("lessons", `Cleared all ${n} lessons`);
+      log("info", "lessons", `Cleared all ${n} lessons`);
       return { cleared: n, mode: "all" };
     }
     if (mode === "performance") {
       const n = clearPerformance();
-      log("lessons", `Cleared ${n} performance records`);
+      log("info", "lessons", `Cleared ${n} performance records`);
       return { cleared: n, mode: "performance" };
     }
     if (mode === "keyword") {
       if (!keyword) return { error: "keyword required for mode=keyword" };
       const n = removeLessonsByKeyword(keyword);
-      log("lessons", `Cleared ${n} lessons matching "${keyword}"`);
+      log("info", "lessons", `Cleared ${n} lessons matching "${keyword}"`);
       return { cleared: n, mode: "keyword", keyword };
     }
     return { error: "invalid mode" };
@@ -202,7 +202,7 @@ const toolMap = {
     }
 
     if (Object.keys(applied).length === 0) {
-      log("config", `update_config failed — unknown keys: ${JSON.stringify(unknown)}, raw changes: ${JSON.stringify(changes)}`);
+      log("info", "config", `update_config failed — unknown keys: ${JSON.stringify(unknown)}, raw changes: ${JSON.stringify(changes)}`);
       return { success: false, unknown, reason };
     }
 
@@ -211,7 +211,7 @@ const toolMap = {
       const [section, field] = CONFIG_MAP[key];
       const before = config[section][field];
       config[section][field] = val;
-      log("config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
+      log("info", "config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
     }
 
     // Persist to user-config.json
@@ -227,7 +227,7 @@ const toolMap = {
     const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null;
     if (intervalChanged && _cronRestarter) {
       _cronRestarter();
-      log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
+      log("info", "config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
     }
 
     // Save as a lesson — but skip ephemeral per-deploy interval changes
@@ -241,7 +241,7 @@ const toolMap = {
       addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
     }
 
-    log("config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
+    log("info", "config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
     return { success: true, applied, unknown, reason };
   },
 };
@@ -275,7 +275,7 @@ export async function executeTool(name, args) {
   if (WRITE_TOOLS.has(name)) {
     const safetyCheck = await runSafetyChecks(name, args);
     if (!safetyCheck.pass) {
-      log("safety_block", `${name} blocked: ${safetyCheck.reason}`);
+      log("warn", "safety_block", `${name} blocked: ${safetyCheck.reason}`);
       return {
         blocked: true,
         reason: safetyCheck.reason,
@@ -321,10 +321,10 @@ export async function executeTool(name, args) {
                 result.auto_swap_note = `Non-SOL tokens already auto-swapped back to SOL. Do NOT call swap_token again.`;
                 result.sol_received = swapResult.swapped.reduce((acc, s) => acc + (s.amount_out || 0), 0);
               } else {
-                log("executor", `Auto-swap after close: No eligible tokens found to swap (or balance not yet indexed).`);
+                log("info", "executor", `Auto-swap after close: No eligible tokens found to swap (or balance not yet indexed).`);
               }
             } catch (e) {
-              log("executor_warn", `Auto-swap after close failed: ${e.message}`);
+              log("warn", "executor", `Auto-swap after close failed: ${e.message}`);
             }
         }
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
@@ -334,7 +334,7 @@ export async function executeTool(name, args) {
             
             await autoSwapRewardFees(mintsToSwap);
         } catch (e) {
-          log("executor_warn", `Auto-swap after claim failed: ${e.message}`);
+          log("warn", "executor", `Auto-swap after claim failed: ${e.message}`);
         }
       }
     }

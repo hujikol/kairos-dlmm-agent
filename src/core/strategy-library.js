@@ -95,7 +95,7 @@ function ensureDefaultStrategies() {
       }
       db.prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)').run('active_strategy', 'custom_ratio_spot');
     })();
-    log("strategy", "Preloaded default strategies into SQLite");
+    log("info", "strategy", "Preloaded default strategies into SQLite");
   }
 }
 
@@ -153,7 +153,7 @@ export function addStrategy({
     db.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)").run('active_strategy', slug);
   }
 
-  log("strategy", `Strategy saved to DB: ${name} (${slug})`);
+  log("info", "strategy", `Strategy saved to DB: ${name} (${slug})`);
   return { saved: true, id: slug, name, active: (active || slug) === slug };
 }
 
@@ -205,7 +205,7 @@ export function setActiveStrategy({ id }) {
   }
   
   db.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)").run('active_strategy', id);
-  log("strategy", `Active strategy set in DB to: ${row.name}`);
+  log("info", "strategy", `Active strategy set in DB to: ${row.name}`);
   return { active: id, name: row.name };
 }
 
@@ -227,7 +227,7 @@ export function removeStrategy({ id }) {
     db.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)").run('active_strategy', newActive);
   }
   
-  log("strategy", `Strategy removed from DB: ${row.name}`);
+  log("info", "strategy", `Strategy removed from DB: ${row.name}`);
   return { removed: true, id, name: row.name, new_active: newActive };
 }
 

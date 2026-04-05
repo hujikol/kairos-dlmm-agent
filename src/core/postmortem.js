@@ -76,7 +76,7 @@ export function analyzeClose(perfRecord, allPerformance) {
     }
 
     saveRules(existing);
-    log("postmortem", `Generated ${newRules.length} rule(s) from close of ${perfRecord.pool_name}`);
+    log("info", "postmortem", `Generated ${newRules.length} rule(s) from close of ${perfRecord.pool_name}`);
   }
 
   return newRules;

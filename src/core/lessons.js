@@ -32,7 +32,7 @@ export async function recordPerformance(perf) {
     perf.final_value_usd <= perf.amount_sol * 2;
 
   if (suspiciousUnitMix) {
-    log("lessons_warn", `Skipped suspicious performance record for ${perf.pool_name || perf.pool}`);
+    log("warn", "lessons", `Skipped suspicious performance record for ${perf.pool_name || perf.pool}`);
     return;
   }
 
@@ -80,7 +80,7 @@ export async function recordPerformance(perf) {
         lesson.id, lesson.rule, JSON.stringify(lesson.tags), lesson.outcome, lesson.context,
         lesson.pnl_pct, lesson.range_efficiency, lesson.pool, lesson.created_at, 0, null
       );
-      log("lessons", `New lesson: ${lesson.rule}`);
+      log("info", "lessons", `New lesson: ${lesson.rule}`);
     }
   })();
 
@@ -107,7 +107,7 @@ export async function recordPerformance(perf) {
     const { analyzeClose } = await import("./postmortem.js");
     analyzeClose(entry, allPerformance);
   } catch (e) {
-    log("postmortem_error", `Post-mortem analysis failed: ${e.message}`);
+    log("error", "postmortem", `Post-mortem analysis failed: ${e.message}`);
   }
 
   if (allPerformance.length % MIN_EVOLVE_POSITIONS === 0) {
@@ -115,14 +115,14 @@ export async function recordPerformance(perf) {
     const result = evolveThresholds(allPerformance, config);
     if (result?.changes && Object.keys(result.changes).length > 0) {
       reloadScreeningThresholds();
-      log("evolve", `Auto-evolved thresholds: ${JSON.stringify(result.changes)}`);
+      log("info", "evolve", `Auto-evolved thresholds: ${JSON.stringify(result.changes)}`);
     }
 
     if (config.darwin?.enabled) {
       const { recalculateWeights } = await import("./signal-weights.js");
       const wResult = recalculateWeights(allPerformance, config);
       if (wResult.changes.length > 0) {
-        log("evolve", `Darwin: adjusted ${wResult.changes.length} signal weight(s)`);
+        log("info", "evolve", `Darwin: adjusted ${wResult.changes.length} signal weight(s)`);
       }
     }
   }
@@ -393,7 +393,7 @@ export function addLesson(rule, tags = [], { pinned = false, role = null } = {})
     INSERT INTO lessons (id, rule, tags, outcome, pinned, role, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(crypto.randomUUID(), rule, JSON.stringify(tags), "manual", pinned ? 1 : 0, role || null, new Date().toISOString());
-  log("lessons", `Manual lesson added${pinned ? " [PINNED]" : ""}${role ? ` [${role}]` : ""}: ${rule}`);
+  log("info", "lessons", `Manual lesson added${pinned ? " [PINNED]" : ""}${role ? ` [${role}]` : ""}: ${rule}`);
 }
 
 export function pinLesson(id) {
@@ -401,7 +401,7 @@ export function pinLesson(id) {
   const res = db.prepare('UPDATE lessons SET pinned = 1 WHERE id = ?').run(id);
   if (res.changes === 0) return { found: false };
   const l = db.prepare('SELECT rule FROM lessons WHERE id = ?').get(id);
-  log("lessons", `Pinned lesson ${id}: ${l.rule.slice(0, 60)}`);
+  log("info", "lessons", `Pinned lesson ${id}: ${l.rule.slice(0, 60)}`);
   return { found: true, pinned: true, id, rule: l.rule };
 }
 

@@ -44,7 +44,7 @@ export async function getWalletBalances() {
 
   const HELIUS_KEY = process.env.HELIUS_API_KEY;
   if (!HELIUS_KEY) {
-    log("wallet_error", "HELIUS_API_KEY not set in .env");
+    log("error", "wallet", "HELIUS_API_KEY not set in .env");
     return { wallet: walletAddress, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Helius API key missing" };
   }
 
@@ -86,7 +86,7 @@ export async function getWalletBalances() {
       total_usd: Math.round((data.totalUsdValue || 0) * 100) / 100,
     };
   } catch (error) {
-    log("wallet_error", error.message);
+    log("error", "wallet", error.message);
     return {
       wallet: walletAddress,
       sol: 0,
@@ -122,7 +122,7 @@ export async function getMintBalance(mint) {
       return sum + (acc.account.data.parsed.info.tokenAmount.uiAmount || 0);
     }, 0);
   } catch (e) {
-    log("wallet_error", `Failed to fetch balance for ${mint}: ${e.message}`);
+    log("error", "wallet", `Failed to fetch balance for ${mint}: ${e.message}`);
     return 0;
   }
 }
@@ -156,7 +156,7 @@ export async function swapToken({
   output_mint = normalizeMint(output_mint);
 
   if (input_mint === output_mint) {
-    log("swap", `Skipping swap: input and output mints are the same (${input_mint})`);
+    log("info", "swap", `Skipping swap: input and output mints are the same (${input_mint})`);
     return { success: true, message: "Input and output mints are the same — skipped." };
   }
 
@@ -169,7 +169,7 @@ export async function swapToken({
   }
 
   try {
-    log("swap", `${amount} of ${input_mint} → ${output_mint}`);
+    log("info", "swap", `${amount} of ${input_mint} → ${output_mint}`);
     const wallet = getWallet();
     const connection = getConnection();
 
@@ -195,7 +195,7 @@ export async function swapToken({
     if (!orderRes.ok) {
       const body = await orderRes.text();
       if (orderRes.status === 500) {
-        log("swap", `Ultra failed for ${input_mint}, falling back to regular swap API`);
+        log("info", "swap", `Ultra failed for ${input_mint}, falling back to regular swap API`);
         return await swapViaQuoteApi({ wallet, connection, input_mint, output_mint, amountStr });
       }
       throw new Error(`Ultra order failed: ${orderRes.status} ${body}`);
@@ -203,7 +203,7 @@ export async function swapToken({
 
     const order = await orderRes.json();
     if (order.errorCode || order.errorMessage) {
-      log("swap", `Ultra error for ${input_mint}, falling back to regular swap API`);
+      log("info", "swap", `Ultra error for ${input_mint}, falling back to regular swap API`);
       return await swapViaQuoteApi({ wallet, connection, input_mint, output_mint, amountStr });
     }
 
@@ -232,7 +232,7 @@ export async function swapToken({
       throw new Error(`Swap failed on-chain: code=${result.code}`);
     }
 
-    log("swap", `SUCCESS tx: ${result.signature}`);
+    log("info", "swap", `SUCCESS tx: ${result.signature}`);
 
     return {
       success: true,
@@ -243,7 +243,7 @@ export async function swapToken({
       amount_out: result.outputAmountResult,
     };
   } catch (error) {
-    log("swap_error", error.message);
+    log("error", "swap", error.message);
     return { success: false, error: error.message };
   }
 }
@@ -277,7 +277,7 @@ async function swapViaQuoteApi({ wallet, connection, input_mint, output_mint, am
   const txHash = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
   await connection.confirmTransaction(txHash, "confirmed");
 
-  log("swap", `SUCCESS (fallback) tx: ${txHash}`);
+  log("info", "swap", `SUCCESS (fallback) tx: ${txHash}`);
   return { success: true, tx: txHash, input_mint, output_mint };
 }
 
@@ -302,27 +302,27 @@ export async function autoSwapRewardFees(mints = null) {
       const missingMints = mints.filter(m => !foundMints.has(m) && m !== config.tokens.SOL);
       
       if (missingMints.length > 0) {
-        log("wallet", `Checking direct balance for ${missingMints.length} missing mint(s) due to Helius API lag...`);
+        log("info", "wallet", `Checking direct balance for ${missingMints.length} missing mint(s) due to Helius API lag...`);
         for (const mint of missingMints) {
           const bal = await getMintBalance(mint);
           if (bal > 0) {
             // We don't have the USD value here, but if it's a known mint from close_position, we swap it.
             tokensToSwap.push({ mint, balance: bal, symbol: mint.slice(0, 8), usd: 1.0 }); // Dummy USD > 0.10
           } else {
-            log("wallet", `Skipped ${mint.slice(0, 8)}: Direct balance is 0.`);
+            log("info", "wallet", `Skipped ${mint.slice(0, 8)}: Direct balance is 0.`);
           }
         }
       }
     }
 
     if (!tokensToSwap || tokensToSwap.length === 0) {
-      log("wallet", "No tokens found to auto-swap.");
+      log("info", "wallet", "No tokens found to auto-swap.");
       return { success: true, swapped: [] };
     }
 
     const swapResults = [];
     for (const token of tokensToSwap) {
-      log("wallet", `Auto-swapping token ${token.symbol || token.mint.slice(0, 8)} (${token.balance}) to SOL`);
+      log("info", "wallet", `Auto-swapping token ${token.symbol || token.mint.slice(0, 8)} (${token.balance}) to SOL`);
       const result = await swapToken({ 
         input_mint: token.mint, 
         output_mint: config.tokens.SOL, 
@@ -332,7 +332,7 @@ export async function autoSwapRewardFees(mints = null) {
     }
     return { success: true, swapped: swapResults };
   } catch (e) {
-    log("wallet_error", `Auto-swap failed: ${e.message}`);
+    log("error", "wallet", `Auto-swap failed: ${e.message}`);
     return { success: false, error: e.message };
   }
 }
@@ -341,6 +341,6 @@ export async function autoSwapRewardFees(mints = null) {
  * Sweeps all tokens in the wallet back to SOL (manual command).
  */
 export async function swapAllTokensToSol() {
-  log("wallet", "Manual 'Swap All' triggered — sweeping wallet to SOL...");
+  log("info", "wallet", "Manual 'Swap All' triggered — sweeping wallet to SOL...");
   return await autoSwapRewardFees(null);
 }
