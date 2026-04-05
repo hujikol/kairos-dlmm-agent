@@ -518,8 +518,9 @@ export async function runScreeningCycle({ silent = false } = {}) {
   try {
     // Reuse pre-fetched balance — no extra RPC call needed
     const currentBalance = preBalance;
-    const deployAmount = computeDeployAmount(currentBalance.sol);
-    log("info", "cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
+    const deployAmountResult = computeDeployAmount(currentBalance.sol, prePositions.total_positions || 0);
+    const deployAmount = deployAmountResult.amount || 0;
+    log("info", "cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL, positions: ${prePositions.total_positions || 0})`);
 
     // Load active strategy (phase info injected later after candidate recon)
     const activeStrategy = getActiveStrategy();
@@ -662,6 +663,13 @@ export async function runScreeningCycle({ silent = false } = {}) {
 SCREENING CYCLE${modeNote}
 ${strategyBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
+
+CONVICTION SIZING MATRIX (enforced by safety check):
+- very_high: LPers confirm + smart wallets present + strong fundamentals → ${prePositions.total_positions === 0 ? '1.05' : '0.70'} SOL
+  (3x = 1.05 SOL only allowed at 0 positions; 1+ positions caps at 0.70 SOL)
+- high: Good fundamentals, LPers match → 0.53 SOL
+- normal: Standard pass → 0.35 SOL
+Declare conviction in deploy_position. The safety layer computes the exact amount from this matrix — if you specify a different amount_y, it will be overridden.
 Daily PnL today: $${circuit.pnl?.toFixed(2) ?? "0"}.00 (profit target: $${circuit.threshold}, loss limit: $${circuit.lossLimit})
 
 PRE-LOADED CANDIDATES (${passing.length} pools):

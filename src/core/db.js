@@ -262,11 +262,13 @@ function initSchema(db) {
   `);
 
   // ─── Strategies: Phase 13 columns (nullable — ALTER for existing tables) ───
-  db.exec(`ALTER TABLE strategies ADD COLUMN phase TEXT CHECK (phase IN ('any','pump','pullback','runner','bear','bull','consolidation'))`);
-  db.exec(`ALTER TABLE strategies ADD COLUMN bin_count INTEGER`);
-  db.exec(`ALTER TABLE strategies ADD COLUMN fee_tier_target REAL`);
-  db.exec(`ALTER TABLE strategies ADD COLUMN max_hold_hours INTEGER`);
-  db.exec(`ALTER TABLE strategies ADD COLUMN confidence INTEGER DEFAULT 0`);
+  const phaseCols = db.prepare("PRAGMA table_info(strategies)").all();
+  const hasCol = (name) => phaseCols.some(c => c.name === name);
+  if (!hasCol('phase')) db.exec(`ALTER TABLE strategies ADD COLUMN phase TEXT CHECK (phase IN ('any','pump','pullback','runner','bear','bull','consolidation'))`);
+  if (!hasCol('bin_count')) db.exec(`ALTER TABLE strategies ADD COLUMN bin_count INTEGER`);
+  if (!hasCol('fee_tier_target')) db.exec(`ALTER TABLE strategies ADD COLUMN fee_tier_target REAL`);
+  if (!hasCol('max_hold_hours')) db.exec(`ALTER TABLE strategies ADD COLUMN max_hold_hours INTEGER`);
+  if (!hasCol('confidence')) db.exec(`ALTER TABLE strategies ADD COLUMN confidence INTEGER DEFAULT 0`);
 
   // ─── Signal Weights ───
   db.exec(`

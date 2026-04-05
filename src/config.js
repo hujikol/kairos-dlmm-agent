@@ -21,7 +21,6 @@ export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
     maxPositions:        u.maxPositions        ?? 3,
-    maxDeployAmount:     u.maxDeployAmount     ?? 50,
     dailyProfitTarget:   u.dailyProfitTarget   ?? 2,      // $2/day minimum
     dailyLossLimit:      u.dailyLossLimit      ?? -5,     // -$5/day stop trading
     maxPositionsPerToken: u.maxPositionsPerToken ?? 1,     // max open positions per token
@@ -64,9 +63,9 @@ export const config = {
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
     minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
     minSolToOpen:          u.minSolToOpen          ?? 0.55,
-    deployAmountSol:       u.deployAmountSol       ?? 0.5,
     gasReserve:            u.gasReserve            ?? 0.2,
-    positionSizePct:       u.positionSizePct       ?? 0.35,
+    baseDeployAmount:      u.baseDeployAmount      ?? 0.35,
+    maxDeployAmount:       u.maxDeployAmount       ?? 50,
     // Trailing take-profit
     trailingTakeProfit:    u.trailingTakeProfit    ?? true,
     trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
@@ -108,33 +107,38 @@ export const config = {
 };
 
 /**
- * Compute the optimal deploy amount for a given wallet balance.
- * Scales position size with wallet growth (compounding) and conviction level.
+ * Conviction Sizing Matrix — fixed position sizing based on conviction level
+ * and number of open positions. 3x sizing (very_high) only when 0 positions open.
  *
- * @param {number} walletSol - Current wallet SOL balance
- * @param {string} conviction - "low" | "medium" | "high" — scales position size
+ * | Positions | Conviction | Amount    |
+ * |-----------|------------|-----------|
+ * | 0         | very_high  | 1.05 SOL  |
+ * | 1+        | very_high  | 0.70 SOL  |
+ * | any       | high       | 0.53 SOL  |
+ * | any       | normal     | 0.35 SOL  |
  *
- * Formula: clamp(deployable × positionSizePct × convictionMult, floor=deployAmountSol, ceil=maxDeployAmount)
- *
- * Examples (defaults: gasReserve=0.2, positionSizePct=0.35, floor=0.5):
- *   0.8 SOL wallet, medium → 0.6 SOL deploy  (floor)
- *   2.0 SOL wallet, medium → 0.63 SOL deploy
- *   3.0 SOL wallet, high   → 1.27 SOL deploy  (1.3× boost)
- *   4.0 SOL wallet, low    → 0.80 SOL deploy  (0.6× reduction)
+ * Amounts are clamped to wallet balance minus gasReserve.
  */
-export function computeDeployAmount(walletSol, conviction = "medium") {
-  const reserve  = config.management.gasReserve      ?? 0.2;
-  const pct      = config.management.positionSizePct ?? 0.35;
-  const floor    = config.management.deployAmountSol;
-  const ceil     = config.risk.maxDeployAmount;
+const SIZING_MATRIX = {
+  very_high: { 0: 1.05, other: 0.70 },
+  high:      { any: 0.53 },
+  normal:    { any: 0.35 },
+};
 
-  // Conviction scaling: low=0.6x, medium=1.0x, high=1.3x
-  const convictionMultiplier = { low: 0.6, medium: 1.0, high: 1.3 }[conviction] || 1.0;
-
+export function computeDeployAmount(walletSol, openPositions = 0, conviction = "normal") {
+  const reserve  = config.management.gasReserve  ?? 0.2;
   const deployable = Math.max(0, walletSol - reserve);
-  const dynamic    = deployable * pct * convictionMultiplier;
-  const result     = Math.min(ceil, Math.max(floor, dynamic));
-  return parseFloat(result.toFixed(2));
+  if (deployable <= 0) return { amount: 0, error: "Insufficient SOL after gas reserve" };
+
+  const level = SIZING_MATRIX[conviction] ?? SIZING_MATRIX.normal;
+  // For very_high: use 1.05 if 0 positions, otherwise 0.70
+  const target = level[openPositions] ?? level.other ?? level.any;
+
+  const ceil = Math.min(config.management.maxDeployAmount, deployable);
+  const amount = Math.min(ceil, target);
+  if (amount < 0.1) return { amount: 0, error: `Insufficient SOL: only ${deployable.toFixed(2)} SOL available after reserve` };
+
+  return { amount: parseFloat(amount.toFixed(2)), error: null };
 }
 
 /**
@@ -168,11 +172,10 @@ export function reloadScreeningThresholds() {
     // Reload management/risk settings
     const m = config.management;
     if (fresh.minSolToOpen !== undefined) m.minSolToOpen = fresh.minSolToOpen;
-    if (fresh.deployAmountSol !== undefined) m.deployAmountSol = fresh.deployAmountSol;
+    if (fresh.baseDeployAmount !== undefined) m.baseDeployAmount = fresh.baseDeployAmount;
     if (fresh.gasReserve !== undefined) m.gasReserve = fresh.gasReserve;
-    if (fresh.positionSizePct !== undefined) m.positionSizePct = fresh.positionSizePct;
     if (fresh.maxPositions !== undefined) config.risk.maxPositions = fresh.maxPositions;
-    if (fresh.maxDeployAmount !== undefined) config.risk.maxDeployAmount = fresh.maxDeployAmount;
+    if (fresh.maxDeployAmount !== undefined) m.maxDeployAmount = fresh.maxDeployAmount;
     if (fresh.dailyProfitTarget !== undefined) config.risk.dailyProfitTarget = fresh.dailyProfitTarget;
     if (fresh.dailyLossLimit !== undefined) config.risk.dailyLossLimit = fresh.dailyLossLimit;
     if (fresh.maxPositionsPerToken !== undefined) config.risk.maxPositionsPerToken = fresh.maxPositionsPerToken;

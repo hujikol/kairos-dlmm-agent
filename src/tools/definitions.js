@@ -143,7 +143,12 @@ IMPORTANT: Only call this with a real pool address from get_my_positions or get_
           volatility: { type: "number", description: "Pool volatility at deploy time" },
           fee_tvl_ratio: { type: "number", description: "fee/TVL ratio at deploy time" },
           organic_score: { type: "number", description: "Base token organic score at deploy time" },
-          initial_value_usd: { type: "number", description: "Estimated USD value being deployed" }
+          initial_value_usd: { type: "number", description: "Estimated USD value being deployed" },
+          conviction: {
+            type: "string",
+            enum: ["very_high", "high", "normal"],
+            description: "Conviction level for sizing: very_high (LPers+smart_wallets+strong_fundamentals), high (good fundamentals), normal (passes filters)."
+          }
         },
         required: ["pool_address"]
       }

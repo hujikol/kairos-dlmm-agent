@@ -16,6 +16,12 @@ import writeFileAtomic from "write-file-atomic";
 import { log } from "./logger.js";
 import { getDB } from "./db.js";
 
+/** Coerce a value to a safe SQLite REAL (null when NaN or Infinity). */
+function safeNum(v) {
+  if (typeof v !== "number" || !isFinite(v)) return null;
+  return v;
+}
+
 const POSTMORTEM_FILE = "./postmortem-rules.json";
 const MAX_RULES = 50;
 
@@ -349,8 +355,8 @@ function writeAutopsyToLessons(perfRecord, allPerformance) {
     JSON.stringify(tags),
     "postmortem",
     JSON.stringify({ close_reason, strategy, bin_step, volatility, confidence, similar_count: similarCount }),
-    pnl_pct,
-    perfRecord.range_efficiency || 0,
+    safeNum(pnl_pct),
+    safeNum(perfRecord.range_efficiency) ?? 0,
     perfRecord.pool,
     new Date().toISOString(),
     0,

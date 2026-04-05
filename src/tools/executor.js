@@ -124,22 +124,28 @@ async function runSafetyChecks(name, args) {
         }
       }
 
-      const amountY = args.amount_y ?? args.amount_sol ?? 0;
-      if (amountY <= 0) {
-        return { pass: false, reason: `Must provide a positive SOL amount (amount_y).` };
-      }
-      const minDeploy = Math.max(0.1, config.management.deployAmountSol);
-      if (amountY < minDeploy) {
-        return { pass: false, reason: `Amount ${amountY} SOL is below the minimum deploy amount (${minDeploy} SOL). Use at least ${minDeploy} SOL.` };
-      }
-      if (amountY > config.risk.maxDeployAmount) {
-        return { pass: false, reason: `SOL amount ${amountY} exceeds maximum allowed per position (${config.risk.maxDeployAmount}).` };
-      }
-
+      // Fetch balance for conviction sizing
       const balanceAgeMs = getBalanceCacheAgeMs();
       const balance = balanceAgeMs !== null && balanceAgeMs < 30_000
         ? getCachedBalance()
         : await getWalletBalances();
+
+      // ─── Conviction Sizing Matrix ──────────────────────────────
+      const { computeDeployAmount } = await import("../config.js");
+      const conviction = args.conviction || "normal";
+      const sizingResult = computeDeployAmount(balance.sol, positions.total_positions, conviction);
+
+      if (sizingResult.error) {
+        return { pass: false, reason: sizingResult.error };
+      }
+
+      // Override amount_y with conviction-sized amount (prevents LLM hallucination)
+      const amountY = sizingResult.amount;
+      args.amount_y = amountY;
+      if (args.amount_sol) args.amount_sol = amountY;
+
+      log("info", "conviction_sizing", `Conviction: ${conviction} | Positions: ${positions.total_positions} | Deploy: ${amountY} SOL (wallet: ${balance.sol.toFixed(2)} SOL)`);
+
       const gasReserve = config.management.gasReserve;
       const minRequired = amountY + gasReserve;
       if (balance.sol < minRequired) {

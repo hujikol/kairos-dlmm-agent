@@ -23,7 +23,7 @@ export function log(level, category, message, meta = {}) {
 
   const timestamp = new Date().toISOString();
   const corrId = meta.correlationId ? ` [${meta.correlationId.slice(0, 8)}]` : "";
-  const line = `[${timestamp}] [${category.toUpperCase().padEnd(20)}]${corrId} ${message}`;
+  const line = `[${timestamp}] [${category.toUpperCase()}]${corrId} ${message}`;
 
   // Console output
   console.log(line);

@@ -69,7 +69,13 @@ function getWallet() {
 
 function applyPriorityFee(tx) {
   const microLamports = parseInt(process.env.PRIORITY_MICRO_LAMPORTS || "50000");
-  tx = tx.add(
+  // Strip any ComputeBudget instructions the SDK may have already added — adding
+  // duplicate setComputeUnitLimit / setComputeUnitPrice instructions causes
+  // "invalid transaction: Transaction contains a duplicate instruction (9)".
+  tx.instructions = tx.instructions.filter(
+    (ix) => !ix.programId.equals(ComputeBudgetProgram.programId)
+  );
+  tx.add(
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports }),
     ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 })
   );
@@ -128,6 +134,7 @@ export async function deployPosition({
   pool_name,
   bin_step,
   base_fee,
+  base_mint,
   volatility,
   fee_tvl_ratio,
   organic_score,
