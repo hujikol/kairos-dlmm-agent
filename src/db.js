@@ -1,3 +1,4 @@
+import fs from "fs";
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -14,9 +15,11 @@ export function getDB() {
   _db = new Database(DB_PATH);
   _db.pragma("journal_mode = WAL");
   _db.pragma("synchronous = NORMAL"); // Better performance with WAL
+  _db.pragma("foreign_keys = ON"); // Enforce FK constraints
 
-  // Initialize schema
+  // Initialize schema + migrations
   initSchema(_db);
+  runMigrations(_db);
   
   return _db;
 }
@@ -175,6 +178,13 @@ function initSchema(db) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_pool_snapshots_pool ON pool_snapshots(pool_address)`);
 
+  // ─── Performance indexes ───
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_closed ON positions(closed)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_deployed_at ON positions(deployed_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_performance_recorded_at ON performance(recorded_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_role ON lessons(role)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_outcome ON lessons(outcome)`);
+
   // ─── Strategies ───
   db.exec(`
     CREATE TABLE IF NOT EXISTS strategies (
@@ -242,4 +252,50 @@ export function closeDB() {
     _db.close();
     _db = null;
   }
+}
+
+// ─── Migration system ──────────────────────────────────────────
+
+/**
+ * Apply forward-only migrations from the migrations/ directory.
+ * Simple approach: track applied migrations in a table, run each once.
+ */
+function runMigrations(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS migrations (
+      id INTEGER PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  const applied = db.prepare('SELECT name FROM migrations').all().map(r => r.name);
+
+  try {
+    const migrationsDir = path.join(__dirname, "../migrations");
+    if (!fs.existsSync(migrationsDir)) return;
+    const files = fs.readdirSync(migrationsDir)
+      .filter(f => f.endsWith(".sql"))
+      .sort();
+
+    for (const file of files) {
+      if (applied.includes(file)) continue;
+      const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
+      db.exec(sql);
+      db.prepare('INSERT INTO migrations (name) VALUES (?)').run(file);
+      log("info", "migration", `Applied migration: ${file}`);
+    }
+  } catch (e) {
+    // migrations dir may not exist — not fatal
+    log("warn", "migration", `Migration scan failed: ${e.message}`);
+  }
+}
+
+/**
+ * Validate an ISO 8601 timestamp string.
+ */
+export function isValidISO(str) {
+  if (typeof str !== "string") return false;
+  const d = new Date(str);
+  return !isNaN(d.getTime());
 }
