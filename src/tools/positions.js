@@ -5,7 +5,7 @@ import { blockDev, unblockDev, listBlockedDevs } from "../features/dev-blocklist
 import { addPoolNote, getPoolMemory } from "../features/pool-memory.js";
 import { config } from "../config.js";
 import { log, logAction } from "../core/logger.js";
-import { notifyDeploy, notifyClose, notifySwap } from "../notifications/telegram.js";
+import { pushNotification } from "../notifications/queue.js";
 import { setPositionInstruction } from "../core/state.js";
 
 export const positionWriteTools = new Set([
@@ -41,7 +41,13 @@ export function registerPositions(registerTool) {
     const result = await closePosition(args);
     const success = result?.success !== false && !result?.error;
     if (success) {
-      notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
+      pushNotification({
+        type: "close",
+        pair: result.pool_name || args.position_address?.slice(0, 8),
+        pnlUsd: result.pnl_usd ?? 0,
+        pnlPct: result.pnl_pct ?? 0,
+        reason: args.reason,
+      });
       if (args.reason && args.reason.toLowerCase().includes("yield")) {
         const poolAddr = result.pool || args.pool_address;
         if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0, 10)}` }).catch?.(() => {});
@@ -70,7 +76,16 @@ export function registerPositions(registerTool) {
     const result = await deployPosition(args);
     const success = result?.success !== false && !result?.error;
     if (success) {
-      notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
+      pushNotification({
+        type: "deploy",
+        pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8),
+        amountSol: args.amount_y ?? args.amount_sol ?? 0,
+        position: result.position,
+        tx: result.txs?.[0] ?? result.tx,
+        priceRange: result.price_range,
+        binStep: result.bin_step,
+        baseFee: result.base_fee,
+      });
     }
     return result;
   });

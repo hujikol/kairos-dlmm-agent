@@ -1,6 +1,6 @@
 import { getWalletBalances, swapToken, swapAllTokensToSol } from "../integrations/helius.js";
 import { log, logAction } from "../core/logger.js";
-import { notifySwap } from "../notifications/telegram.js";
+import { pushNotification } from "../notifications/queue.js";
 
 export const walletWriteTools = new Set(["swap_token"]);
 
@@ -13,13 +13,14 @@ export function registerWallet(registerTool) {
     const result = await swapToken(args);
     const success = result?.success !== false && !result?.error;
     if (success && result.tx) {
-      notifySwap({
-        inputSymbol: args.input_mint?.slice(0, 8),
-        outputSymbol: args.output_mint === SWAP_SOL_ADDRESS || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8),
+      pushNotification({
+        type: "swap",
+        from: args.input_mint?.slice(0, 8),
+        to: args.output_mint === SWAP_SOL_ADDRESS || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8),
         amountIn: result.amount_in,
         amountOut: result.amount_out,
         tx: result.tx,
-      }).catch(() => {});
+      });
     }
     return result;
   });
