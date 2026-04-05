@@ -61,6 +61,12 @@ export async function executeTool(name, args) {
     const duration = Date.now() - startTime;
     const success = result?.success !== false && !result?.error;
 
+    // Invalidate balance cache after balance-changing operations
+    if (success && ["deploy_position", "close_position", "claim_fees"].includes(name)) {
+      const { invalidateBalanceCache } = await import("../integrations/helius.js");
+      invalidateBalanceCache();
+    }
+
     logAction({
       tool: name,
       args,
@@ -94,7 +100,7 @@ async function runSafetyChecks(name, args) {
       // Lazy import to avoid circular dependency
       const { config } = await import("../config.js");
       const { getMyPositions } = await import("../integrations/meteora.js");
-      const { getWalletBalances } = await import("../integrations/helius.js");
+      const { getWalletBalances, getBalanceCacheAgeMs, getCachedBalance } = await import("../integrations/helius.js");
 
       const minStep = config.screening.minBinStep;
       const maxStep = config.screening.maxBinStep;
@@ -130,7 +136,10 @@ async function runSafetyChecks(name, args) {
         return { pass: false, reason: `SOL amount ${amountY} exceeds maximum allowed per position (${config.risk.maxDeployAmount}).` };
       }
 
-      const balance = await getWalletBalances();
+      const balanceAgeMs = getBalanceCacheAgeMs();
+      const balance = balanceAgeMs !== null && balanceAgeMs < 30_000
+        ? getCachedBalance()
+        : await getWalletBalances();
       const gasReserve = config.management.gasReserve;
       const minRequired = amountY + gasReserve;
       if (balance.sol < minRequired) {

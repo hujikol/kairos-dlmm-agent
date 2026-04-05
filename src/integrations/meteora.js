@@ -132,6 +132,8 @@ export async function deployPosition({
   fee_tvl_ratio,
   organic_score,
   initial_value_usd,
+  market_phase,
+  strategy_id,
 }) {
   pool_address = normalizeMint(pool_address);
   const activeStrategy = strategy || config.strategy.strategy;
@@ -279,6 +281,8 @@ export async function deployPosition({
       organic_score,
       initial_value_usd,
       base_mint,
+      market_phase,
+      strategy_id,
     });
     // Transition from pending -> active now that on-chain tx is confirmed
     updatePositionStatus(newPositionKey, "active");

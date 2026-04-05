@@ -6,8 +6,7 @@ export const tools = [
     type: "function",
     function: {
       name: "discover_pools",
-      description: `Fetch top DLMM pools from Meteora. Returns safe candidates pre-filtered by fees, volume, liquidity, etc.
-Use this as the primary tool for finding new LP opportunities.`,
+      description: "Fetch top DLMM pools from Meteora, pre-filtered by fees, volume, liquidity, etc.",
       parameters: {
         type: "object",
         properties: {

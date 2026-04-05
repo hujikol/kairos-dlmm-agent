@@ -20,8 +20,11 @@ if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
-    maxPositions:    u.maxPositions    ?? 3,
-    maxDeployAmount: u.maxDeployAmount ?? 50,
+    maxPositions:        u.maxPositions        ?? 3,
+    maxDeployAmount:     u.maxDeployAmount     ?? 50,
+    dailyProfitTarget:   u.dailyProfitTarget   ?? 2,      // $2/day minimum
+    dailyLossLimit:      u.dailyLossLimit      ?? -5,     // -$5/day stop trading
+    maxPositionsPerToken: u.maxPositionsPerToken ?? 1,     // max open positions per token
   },
 
   // ─── Pool Screening Thresholds ───────────
@@ -82,14 +85,15 @@ export const config = {
   schedule: {
     managementIntervalMin:  u.managementIntervalMin  ?? 10,
     screeningIntervalMin:   u.screeningIntervalMin   ?? 30,
-    healthCheckIntervalMin: u.healthCheckIntervalMin ?? 60,
   },
 
   // ─── LLM Settings ──────────────────────
   llm: {
     temperature: u.temperature ?? 0.373,
     maxTokens:   u.maxTokens   ?? 4096,
-    maxSteps:    u.maxSteps    ?? 20,
+    maxSteps:    u.maxSteps    ?? 10,
+    screenerMaxSteps: u.screenerMaxSteps ?? 5,
+    managerMaxSteps:  u.managerMaxSteps  ?? 4,
     managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
     screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "openrouter/hunter-alpha",
     generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
@@ -169,5 +173,8 @@ export function reloadScreeningThresholds() {
     if (fresh.positionSizePct !== undefined) m.positionSizePct = fresh.positionSizePct;
     if (fresh.maxPositions !== undefined) config.risk.maxPositions = fresh.maxPositions;
     if (fresh.maxDeployAmount !== undefined) config.risk.maxDeployAmount = fresh.maxDeployAmount;
+    if (fresh.dailyProfitTarget !== undefined) config.risk.dailyProfitTarget = fresh.dailyProfitTarget;
+    if (fresh.dailyLossLimit !== undefined) config.risk.dailyLossLimit = fresh.dailyLossLimit;
+    if (fresh.maxPositionsPerToken !== undefined) config.risk.maxPositionsPerToken = fresh.maxPositionsPerToken;
   } catch { /* ignore */ }
 }

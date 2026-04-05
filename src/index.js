@@ -9,13 +9,20 @@ import { getTopCandidates } from "./screening/discovery.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { registerCronRestarter } from "./tools/executor.js";
-import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled } from "./notifications/telegram.js";
+import { startPolling, stopPolling, sendMessage, sendHTML, isEnabled as telegramEnabled } from "./notifications/telegram.js";
+import { flushNotifications, hasPendingNotifications } from "./notifications/queue.js";
 import { generateBriefing } from "./notifications/briefing.js";
 import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits } from "./core/state.js";
 import { getActiveStrategy } from "./core/strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote, isTokenToxic } from "./features/pool-memory.js";
 import { checkSmartWalletsOnPool } from "./features/smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./integrations/jupiter.js";
+import { detectMarketPhase, PHASE_CONFIG } from "./core/phases.js";
+import { computeTokenScore } from "./core/token-score.js";
+import { findStrategiesForPhase } from "./core/lparmy-strategies.js";
+import { checkDailyCircuitBreaker } from "./core/daily-tracker.js";
+import { simulatePoolDeploy } from "./core/simulator.js";
+import { checkTokenCorrelation } from "./core/correlation.js";
 
 log("info", "startup", "DLMM LP Agent starting...");
 log("info", "startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
@@ -124,7 +131,18 @@ export async function runManagementCycle({ silent = false } = {}) {
   const screeningCooldownMs = 5 * 60 * 1000;
 
   try {
-    const livePositions = await getMyPositions({ force: true }).catch(() => null);
+    // Daily PnL circuit breaker
+    const circuit = checkDailyCircuitBreaker();
+    log("info", "daily-pnl", `Circuit breaker: ${circuit.action} (realized: ${circuit.pnl?.toFixed(2) ?? "N/A"} USD, reason: ${circuit.reason || "normal"})`);
+    if (circuit.action === "halt") {
+      log("warn", "daily-pnl", `CIRCUIT BREAKER: daily loss limit hit — skipping new deployments this cycle`);
+      // Still manage existing positions (close/claim) in halt mode
+    }
+
+    const [livePositions, currentBalance] = await Promise.all([
+      getMyPositions({ force: true }).catch(() => null),
+      getWalletBalances(),
+    ]);
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
@@ -284,7 +302,7 @@ RULES:
 
 Execute the required actions. Do NOT re-evaluate CLOSE/CLAIM — rules already applied. Just execute.
 After executing, write a brief one-line result per position.
-      `, Math.min(config.llm.maxSteps, 10), [], "MANAGER", config.llm.managementModel, 2048, { positions: livePositions });
+      `, Math.min(config.llm.maxSteps, 10), [], "MANAGER", config.llm.managementModel, 2048, { portfolio: currentBalance, positions: livePositions });
 
       mgmtReport += `\n\n${content}`;
 
@@ -303,7 +321,14 @@ After executing, write a brief one-line result per position.
           log("info", "post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
           for (const swap of swapResult.swapped) {
             if (swap.success) {
-              mgmtReport += `\n🔁 Swapped → SOL: tx ${swap.tx}`;
+              pushNotification({
+                type: "swap",
+                from: swap.input_mint?.slice(0, 8) || "FEE",
+                to: "SOL",
+                amountIn: swap.amount_in,
+                amountOut: swap.amount_out,
+                tx: swap.tx,
+              });
             } else {
               log("warn", "post_trade", `Swap failed: ${swap.error}`);
             }
@@ -315,9 +340,10 @@ After executing, write a brief one-line result per position.
     }
 
     // Trigger screening after management if we expect to be under max positions
+    // Skip if circuit breaker is in halt mode
     const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
     const afterCount = Math.max(0, positions.length - closesAttempted);
-    if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > screeningCooldownMs) {
+    if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > screeningCooldownMs && circuit.action !== "halt") {
       log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
       runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
     }
@@ -327,15 +353,115 @@ After executing, write a brief one-line result per position.
   } finally {
     _managementBusy = false;
     if (!silent && telegramEnabled()) {
-      if (mgmtReport) sendHTML(`<b>🔄 Management Cycle</b>\n\n<pre>${escapeHTML(stripThink(mgmtReport))}</pre>`).catch(() => { });
-      for (const p of positions) {
-        if (!p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes) {
-          notifyOutOfRange({ pair: p.pair, minutesOOR: p.minutes_out_of_range }).catch(() => { });
-        }
+      // Batch OOR positions
+      const oorPositions = positions.filter(
+        (p) => !p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes
+      );
+      for (const p of oorPositions) {
+        pushNotification({
+          type: "oor",
+          pair: p.pair,
+          position: p.position,
+          minutesOOR: p.minutes_out_of_range,
+          feeTvl: p.fee_per_tvl_24h ?? null,
+        });
+      }
+
+      // Build consolidated message if there's anything to say
+      const isAllHealthy = positions.length > 0 &&
+        oorPositions.length === 0 &&
+        !hasPendingNotifications();
+
+      if (!isAllHealthy || mgmtReport) {
+        buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions }).catch(() => {});
       }
     }
   }
   return mgmtReport;
+}
+
+// ═══════════════════════════════════════════
+//  CONSOLIDATED NOTIFICATION REPORT
+// ═══════════════════════════════════════════
+
+function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions }) {
+  const notes = flushNotifications();
+  const closes = notes.filter((n) => n.type === "close");
+  const swaps = notes.filter((n) => n.type === "swap");
+  const deploys = notes.filter((n) => n.type === "deploy");
+  const oors = notes.filter((n) => n.type === "oor");
+  const claims = notes.filter((n) => n.type === "claim");
+
+  const now = new Date();
+  const ts = now.toISOString().slice(11, 16) + " UTC";
+
+  const parts = [];
+  parts.push(`<b>⚙️ Management Cycle — ${ts}</b>`);
+
+  // Deploys
+  for (const d of deploys) {
+    const range = d.priceRange
+      ? ` | ${d.priceRange.min < 0.0001 ? d.priceRange.min.toExponential(3) : d.priceRange.min.toFixed(6)}–${d.priceRange.max < 0.0001 ? d.priceRange.max.toExponential(3) : d.priceRange.max.toFixed(6)}`
+      : "";
+    parts.push(`\n✅ <b>Deployed</b> ${escapeHTML(d.pair)}\n` +
+      `  ${d.amountSol} SOL${range}\n` +
+      (d.tx ? `  tx: <code>${escapeHTML(d.tx.slice(0, 12))}...</code>` : ""));
+  }
+
+  // Closes + related swaps
+  for (const c of closes) {
+    const sign = c.pnlUsd >= 0 ? "+" : "";
+    parts.push(
+      `\n🔒 <b>Closed</b> ${escapeHTML(c.pair)}\n` +
+      `  PnL ${sign}$${(c.pnlUsd ?? 0).toFixed(2)} (${sign}${(c.pnlPct ?? 0).toFixed(2)}%)${c.reason ? ` — ${escapeHTML(c.reason)}` : ""}`
+    );
+  }
+
+  // Swaps not associated with a close
+  for (const s of swaps) {
+    parts.push(
+      `\n🔄 <b>Swap</b> ${escapeHTML(String(s.from))} → ${escapeHTML(String(s.to))}\n` +
+      `  ${s.amountIn} → ${s.amountOut}\n` +
+      (s.tx ? `  tx: <code>${escapeHTML(s.tx.slice(0, 12))}...</code>` : "")
+    );
+  }
+
+  // OOR alerts
+  const allOors = [...oors];
+  if (allOors.length > 0) {
+    const headerParts = [allOors.length === 1 ? "Out of Range" : `Out of Range — ${allOors.length} positions`];
+    parts.push(`\n⚠️ <b>${headerParts}</b>`);
+    for (const o of allOors) {
+      const feeStr = o.feeTvl != null ? ` | fee/TVL ${o.feeTvl}%` : "";
+      parts.push(`  • ${escapeHTML(o.pair)} | OOR ${o.minutesOOR}m${feeStr}`);
+    }
+  }
+
+  // Claims
+  for (const c of claims) {
+    parts.push(`\n💰 <b>Fees claimed</b> ${escapeHTML(c.pair)} — $${(c.usd ?? 0).toFixed(2)}`);
+  }
+
+  // LLM report snippet (management cycle output, truncated)
+  if (mgmtReport) {
+    const cleaned = stripThink(mgmtReport);
+    if (cleaned && cleaned.length > 5) {
+      const maxLen = 2000;
+      const text = cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
+      parts.push(`\n\n<pre>${escapeHTML(text)}</pre>`);
+    }
+  }
+
+  // Healthy positions note
+  const healthyCount = positions.length - oorPositions.length;
+  if (healthyCount > 0 && closes.length === 0 && deploys.length === 0) {
+    parts.push(`\nℹ️ No action needed: ${healthyCount} position${healthyCount === 1 ? "" : "s"} healthy`);
+  }
+
+  const html = parts.join("\n");
+  if (html && html.length < 4096) {
+    sendHTML(html).catch(() => {});
+  }
 }
 
 export async function runScreeningCycle({ silent = false } = {}) {
@@ -372,17 +498,31 @@ export async function runScreeningCycle({ silent = false } = {}) {
   timers.screeningLastRun = Date.now();
   log("info", "cron", `Starting screening cycle [model: ${config.llm.screeningModel}]`);
   let screenReport = null;
+  let canDeploy = true; // circuit breaker may block new deployments
+  let screeningMode = "normal";
+
+  // Daily PnL circuit breaker
+  const circuit = checkDailyCircuitBreaker();
+  log("info", "daily-pnl", `Screening circuit: ${circuit.action} (realized: $${(circuit.pnl || 0).toFixed(2)}, reason: ${circuit.reason || "normal"})`);
+  if (circuit.action === "halt") {
+    log("warn", "daily-pnl", `CIRCUIT BREAKER (screening): daily loss limit hit — skipping screening entirely`);
+    _screeningBusy = false;
+    return null;
+  }
+  if (circuit.action === "preserve") {
+    log("info", "daily-pnl", `Daily profit target met — skipping new deployments this cycle`);
+    canDeploy = false;
+    screeningMode = "preserve";
+  }
+
   try {
     // Reuse pre-fetched balance — no extra RPC call needed
     const currentBalance = preBalance;
     const deployAmount = computeDeployAmount(currentBalance.sol);
     log("info", "cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
 
-    // Load active strategy
+    // Load active strategy (phase info injected later after candidate recon)
     const activeStrategy = getActiveStrategy();
-    const strategyBlock = activeStrategy
-      ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}`
-      : `No active strategy — use default bid_ask, bins_above: 0, SOL only.`;
 
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
     const topCandidates = await getTopCandidates({ limit: 10 }).catch(() => null);
@@ -402,6 +542,8 @@ export async function runScreeningCycle({ silent = false } = {}) {
         n: narrative.status === "fulfilled" ? narrative.value : null,
         ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
         mem: recallForPool(pool.pool),
+        phase: detectMarketPhase(pool),
+        score: computeTokenScore(pool, tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null),
       };
     }));
 
@@ -424,6 +566,14 @@ export async function runScreeningCycle({ silent = false } = {}) {
         log("info", "screening", `Toxic token filter: dropped ${pool.name} — base token has >66% loss rate across 3+ deploys`);
         return false;
       }
+      // Cross-portfolio correlation: skip tokens with existing exposure
+      if (baseMint) {
+        const corr = checkTokenCorrelation(prePositions.positions || [], baseMint);
+        if (corr.exceeds) {
+          log("info", "screening", `Correlation filter: dropped ${pool.name} — already ${corr.count} position(s) on token`);
+          return false;
+        }
+      }
       return true;
     });
 
@@ -437,8 +587,25 @@ export async function runScreeningCycle({ silent = false } = {}) {
       passing.map(({ pool }) => getActiveBin({ pool_address: pool.pool }))
     );
 
+    // Determine dominant market phase (most common among passing candidates)
+    const phaseCounts = {};
+    for (const c of passing) { phaseCounts[c.phase] = (phaseCounts[c.phase] || 0) + 1; }
+    const dominantPhase = Object.entries(phaseCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "normal";
+    const phaseMeta = PHASE_CONFIG[dominantPhase];
+    const phaseStrategies = findStrategiesForPhase(dominantPhase, 5);
+
+    // Build the strategy + phase prompt block (requires dominantPhase from candidates)
+    const strategyNames = phaseStrategies.map(s => s.name).join(", ");
+    const phaseBlock = `MARKET PHASE: ${dominantPhase} — ${phaseMeta.description}\nPhase-matched strategies: ${strategyNames}\nToken scores are included per candidate — prefer GOOD or EXCELLENT tokens.`;
+    const strategyBlock = activeStrategy
+      ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}\n${phaseBlock}`
+      : `No active strategy — use default bid_ask, bins_above: 0, SOL only.\n${phaseBlock}`;
+
+    // Run simulator for all passing candidates
+    const simulations = passing.map(({ pool }) => simulatePoolDeploy(pool, deployAmount, preBalance.usd ?? 0));
+
     // Build compact candidate blocks
-    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem }, i) => {
+    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem, phase, score }, i) => {
       const botPct = ti?.audit?.bot_holders_pct ?? "?";
       const top10Pct = ti?.audit?.top_holders_pct ?? "?";
       const feesSol = ti?.global_fees_sol ?? "?";
@@ -446,6 +613,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const priceChange = ti?.stats_1h?.price_change;
       const netBuyers = ti?.stats_1h?.net_buyers;
       const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
+      const sim = simulations[i];
 
       // OKX signals
       const okxParts = [
@@ -474,7 +642,9 @@ export async function runScreeningCycle({ silent = false } = {}) {
         okxTags  ? `  tags: ${okxTags}` : null,
         pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
         `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
+        `  market_phase: ${phase} | token_score: ${score.score}/${score.max} (${score.label})`,
         activeBin != null ? `  active_bin: ${activeBin}` : null,
+        `  sim: daily_fees=$${sim.daily_fees_usd} | est_IL=$${sim.expected_il_usd} | net_daily=$${sim.net_daily_usd} | risk=${sim.risk_score}/100 | confidence=${sim.confidence}/100 | passes=${sim.passes ? "YES" : "NO"}`,
         priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
         n?.narrative ? `  narrative: ${n.narrative.slice(0, 500)}` : `  narrative: none`,
         mem ? `  memory: ${mem}` : null,
@@ -483,19 +653,26 @@ export async function runScreeningCycle({ silent = false } = {}) {
       return block;
     });
 
+    // Build mode flag for prompt
+    const modeNote = !canDeploy
+      ? `\nNOTE: Daily profit target has been met. This is a REDUCED screening cycle — review candidates but do NOT deploy new positions today.`
+      : "";
+
     const { content } = await agentLoop(`
-SCREENING CYCLE
+SCREENING CYCLE${modeNote}
 ${strategyBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
+Daily PnL today: $${circuit.pnl?.toFixed(2) ?? "0"}.00 (profit target: $${circuit.threshold}, loss limit: $${circuit.lossLimit})
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
 
 STEPS:
-1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-2. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+1. Review each candidate's simulation results (sim: line). Prefer pools with passes=YES, low risk_score, and high confidence.
+2. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and simulation output.
+3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
    bins_below = round(35 + (volatility/5)*55) clamped to [35,90].
-3. Report in this exact format (no tables, no extra sections):
+4. Report in this exact format (no tables, no extra sections):
     *Decision:* DEPLOYED PAIR
     *pool:* <name> | <pool address>
     *amount:* <deploy amount> SOL | *strategy*=<strategy> | *active_bin*=<bin>
@@ -504,15 +681,16 @@ STEPS:
     *okx:* risk=X | bundle=X% | sniper=X% | suspicious=X% | ath=X% | rugpull=Y/N | wash=Y/N
     *smart_wallets:* <names or none>
     *range:* minPrice→maxPrice (downside=(minPrice/maxPrice-1)*100%)
+    *sim:* daily_fees=$X | est_IL=$X | net_daily=$X | risk=X/100 | confidence=X/100
     *narrative:* <1-2 sentences on what the token/pool is and why it has attention>
     *analysis:* <2-4 sentences covering why this setup is attractive right now, key risks, and what outweighed the alternatives>
     *reason:* <one decisive sentence explaining why this pool won over the rest>
     *rejected:* <one short sentence on why the next best alternatives were passed over>
-4. If no pool qualifies, report in this exact format instead:
+5. If no pool qualifies, report in this exact format instead:
     *Decision:* NO DEPLOY
     *analysis:* <2-4 sentences explaining why current candidates were rejected>
     *rejected:* <short semicolon-separated reasons for the top candidates that were skipped>
-      `, Math.min(config.llm.maxSteps, 10), [], "SCREENER", config.llm.screeningModel, 2048);
+      `, config.llm.screenerMaxSteps, [], "SCREENER", config.llm.screeningModel, 2048, { portfolio: preBalance, positions: prePositions });
     screenReport = content;
   } catch (error) {
     log("error", "cron", `Screening cycle failed: ${error.message}`);
@@ -520,7 +698,10 @@ STEPS:
   } finally {
     _screeningBusy = false;
     if (!silent && telegramEnabled()) {
-      if (screenReport) sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${escapeHTML(stripThink(screenReport))}</pre>`).catch(() => { });
+      // Only send if agent actually deployed a position (action taken)
+      if (screenReport && /DEPLOYED/i.test(screenReport)) {
+        sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${escapeHTML(stripThink(screenReport))}</pre>`).catch(() => { });
+      }
     }
   }
   return screenReport;
@@ -963,6 +1144,96 @@ if (isTTY) {
         const pos = positions[idx];
         setPositionInstruction(pos.position, note);
         await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
+      } catch (e) { await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { }); }
+      return;
+    }
+
+    // ─── /teach lesson management ──────────────────────────────
+    const teachMatch = text.match(/^\/teach\s+(.+)$/i);
+    if (teachMatch) {
+      try {
+        const sub = teachMatch[1].trim();
+        const { pinLesson, unpinLesson, rateLesson, getLearningStats, listLessons } = await import("./core/lessons.js");
+
+        // /teach pin <id>
+        const pinMatch = sub.match(/^pin\s+(.+)$/i);
+        if (pinMatch) {
+          const result = pinLesson(pinMatch[1].trim());
+          if (result.found) {
+            await sendHTML(`📌 Lesson pinned:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
+          } else {
+            await sendHTML(`Lesson <code>${escapeHTML(pinMatch[1])}</code> not found.`);
+          }
+          return;
+        }
+
+        // /teach unpin <id>
+        const unpinMatch = sub.match(/^unpin\s+(.+)$/i);
+        if (unpinMatch) {
+          const result = unpinLesson(unpinMatch[1].trim());
+          if (result.found) {
+            await sendHTML(` Lesson unpinned:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
+          } else {
+            await sendHTML(`Lesson <code>${escapeHTML(unpinMatch[1])}</code> not found.`);
+          }
+          return;
+        }
+
+        // /teach rate <id> useful|useless
+        const rateMatch = sub.match(/^rate\s+(\S+)\s+(useful|useless)$/i);
+        if (rateMatch) {
+          const result = rateLesson(rateMatch[1], rateMatch[2].toLowerCase());
+          if (result.error) {
+            await sendHTML(`<code>${escapeHTML(result.error)}</code>`);
+          } else if (result.found) {
+            const icon = result.rating === "useful" ? "👍" : "👎";
+            await sendHTML(`${icon} Lesson rated as <b>${result.rating}</b>:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
+          } else {
+            await sendHTML(`Lesson <code>${escapeHTML(rateMatch[1])}</code> not found.`);
+          }
+          return;
+        }
+
+        // /teach stats
+        if (/^stats$/i.test(sub)) {
+          const stats = getLearningStats();
+          let msg = `<b>Learning System Status</b>\n\n`;
+          msg += `Closed positions: <b>${stats.performance_records}</b>\n`;
+          msg += `Near-miss records: <b>${stats.near_misses}</b>\n`;
+          msg += `Total lessons: <b>${stats.total_lessons}</b>\n`;
+          msg += `Archived records: <b>${stats.archived_records}</b>\n`;
+          if (stats.overall_win_rate != null) msg += `\nWin rate: <b>${stats.overall_win_rate}%</b>\n`;
+          if (stats.total_pnl_usd != null) msg += `Total PnL: <b>$${stats.total_pnl_usd}</b>\n`;
+          if (stats.avg_pnl_pct != null) msg += `Avg PnL: <b>${stats.avg_pnl_pct}%</b>\n`;
+          if (stats.near_miss_avg_pnl_pct != null) msg += `Near-miss avg PnL: <b>${stats.near_miss_avg_pnl_pct}%</b>\n`;
+          msg += `\nPinned: ${stats.pinned_lessons} | Useful: ${stats.rated_useful} | Useless: ${stats.rated_useless}\n`;
+          msg += `Evolution cycles: ${stats.evolution_cycles}\n`;
+          if (stats.current_thresholds && Object.keys(stats.current_thresholds).length > 0) {
+            msg += `\n<b>Current thresholds:</b>\n`;
+            msg += `maxBinStep: ${stats.current_thresholds.maxBinStep}\n`;
+            msg += `minFeeActiveTvlRatio: ${stats.current_thresholds.minFeeActiveTvlRatio}\n`;
+            msg += `minOrganic: ${stats.current_thresholds.minOrganic}`;
+          }
+          await sendHTML(msg);
+          return;
+        }
+
+        // /teach list [role]
+        if (/^list/i.test(sub)) {
+          const roleArg = sub.split(/\s+/)[1]?.toUpperCase() || null;
+          const result = listLessons({ role: roleArg, limit: 15 });
+          if (result.total === 0) { await sendHTML("No lessons found."); return; }
+          let msg = `<b>Lessons</b> (${result.total} total, showing ${result.lessons.length})\n\n`;
+          for (const l of result.lessons) {
+            const pinIcon = l.pinned ? "📌" : "";
+            msg += `<code>${escapeHTML(l.id.slice(0, 8))}</code> ${pinIcon}[${l.outcome}] ${escapeHTML(l.rule.slice(0, 60))}\n`;
+          }
+          msg += `\n<i>Use /teach pin|rate|stats to manage</i>`;
+          await sendHTML(msg);
+          return;
+        }
+
+        await sendHTML(`<b>/teach</b> subcommands:\n<pre>  pin &lt;id&gt;       — pin a lesson\n  unpin &lt;id&gt;     — unpin a lesson\n  rate &lt;id&gt; useful|useless  — rate a lesson\n  stats          — learning system status\n  list [role]    — list lessons (optionally by role)</pre>`);
       } catch (e) { await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { }); }
       return;
     }

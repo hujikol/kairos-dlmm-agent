@@ -126,7 +126,13 @@ function shouldRequireRealToolUse(goal, agentType, requireTool) {
  * @param {number} maxSteps - Safety limit on iterations (default 20)
  * @returns {string} - The agent's final text response
  */
-export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
+export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
+  // Per-role max step defaults if not explicitly passed
+  const effectiveMaxSteps = maxSteps ?? (
+    agentType === "SCREENER" ? config.llm.screenerMaxSteps ?? 5
+    : agentType === "MANAGER" ? config.llm.managerMaxSteps ?? 4
+    : config.llm.maxSteps ?? 10
+  );
   const { requireTool = false, portfolio: prePortfolio, positions: prePositions } = options;
   // Build dynamic system prompt with current portfolio state
   const [portfolio, positions] = agentType === "SCREENER"
@@ -157,8 +163,8 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   let noToolRetryCount = 0;
 
   let emptyStreak = 0;
-  for (let step = 0; step < maxSteps; step++) {
-    log("info", "agent", `Step ${step + 1}/${maxSteps}`);
+  for (let step = 0; step < effectiveMaxSteps; step++) {
+    log("info", "agent", `Step ${step + 1}/${effectiveMaxSteps}`);
 
     try {
       const activeModel = model || DEFAULT_MODEL;
@@ -201,6 +207,17 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       if (!response.choices?.length) {
         log("error", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
         throw new Error(`API returned no choices: ${response.error?.message || JSON.stringify(response)}`);
+      }
+      const usage = response.usage;
+      if (usage) {
+        log("info", "token_usage", JSON.stringify({
+          role: agentType,
+          steps: step,
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
+          total_tokens: usage.total_tokens,
+          model: usedModel,
+        }));
       }
       const msg = response.choices[0].message;
       // Repair malformed tool call JSON before pushing to history —

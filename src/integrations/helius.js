@@ -11,6 +11,31 @@ import { config } from "../config.js";
 
 let _wallet = null;
 
+// ─── 5-minute TTL cache for getWalletBalances() ─────────────────
+let _balanceCache = null;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+export function invalidateBalanceCache() {
+  _balanceCache = null;
+}
+
+/**
+ * Returns age of cached balance in ms, or null if cache is empty/expired.
+ */
+export function getBalanceCacheAgeMs() {
+  if (!_balanceCache) return null;
+  const age = Date.now() - _balanceCache.timestamp;
+  if (age >= CACHE_TTL) return null; // expired
+  return age;
+}
+
+/**
+ * Returns the cached balance object directly, or null if cache is empty/expired.
+ */
+export function getCachedBalance() {
+  return getBalanceCacheAgeMs() !== null ? _balanceCache.data : null;
+}
+
 function getConnection() {
   return getRpcConnection("confirmed");
 }
@@ -33,11 +58,19 @@ const JUPITER_API_KEY = process.env.JUPITER_API_KEY;
  * Returns USD-denominated values provided by Helius.
  */
 export async function getWalletBalances() {
+  // ─── Check cache first ──────────────────────────────────────
+  if (_balanceCache && Date.now() - _balanceCache.timestamp < CACHE_TTL) {
+    log("info", "wallet", "Using cached balance (age: " + Math.round((Date.now() - _balanceCache.timestamp) / 1000) + "s)");
+    return _balanceCache.data;
+  }
+
   let walletAddress;
   try {
     walletAddress = getWallet().publicKey.toString();
   } catch {
-    return { wallet: null, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Wallet not configured" };
+    const errResult = { wallet: null, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Wallet not configured" };
+    _balanceCache = { data: errResult, timestamp: Date.now() };
+    return errResult;
   }
 
   const HELIUS_KEY = process.env.HELIUS_API_KEY;
@@ -45,7 +78,9 @@ export async function getWalletBalances() {
   // ─── Try Helius first ────────────────────────────────────────
   if (!HELIUS_KEY) {
     log("warn", "wallet", "HELIUS_API_KEY not set — falling back to RPC balance check");
-    return await getBalancesViaRpc(walletAddress);
+    const rpcResult = await getBalancesViaRpc(walletAddress);
+    _balanceCache = { data: rpcResult, timestamp: Date.now() };
+    return rpcResult;
   }
 
   try {
@@ -76,7 +111,7 @@ export async function getWalletBalances() {
       usd: b.usdValue ? Math.round(b.usdValue * 100) / 100 : null,
     }));
 
-    return {
+    const result = {
       wallet: walletAddress,
       sol: Math.round(solBalance * 1e6) / 1e6,
       sol_price: Math.round(solPrice * 100) / 100,
@@ -85,9 +120,13 @@ export async function getWalletBalances() {
       tokens: enrichedTokens,
       total_usd: Math.round((data.totalUsdValue || 0) * 100) / 100,
     };
+    _balanceCache = { data: result, timestamp: Date.now() };
+    return result;
   } catch (error) {
     log("warn", "wallet", `Helius error, falling back to RPC: ${error.message}`);
-    return await getBalancesViaRpc(walletAddress);
+    const rpcResult = await getBalancesViaRpc(walletAddress);
+    _balanceCache = { data: rpcResult, timestamp: Date.now() };
+    return rpcResult;
   }
 }
 
