@@ -243,6 +243,17 @@ function initSchema(db) {
       added_at TEXT
     )
   `);
+
+  // ─── Smart Wallets ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS smart_wallets (
+      address TEXT PRIMARY KEY,
+      name TEXT,
+      category TEXT DEFAULT 'alpha',
+      type TEXT DEFAULT 'lp',
+      added_at TEXT
+    )
+  `);
 }
 
 /**
