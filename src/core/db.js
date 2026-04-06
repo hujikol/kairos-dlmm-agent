@@ -357,9 +357,28 @@ function runMigrations(db) {
     for (const file of files) {
       if (applied.includes(file)) continue;
       const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
-      db.exec(sql);
-      db.prepare('INSERT INTO migrations (name) VALUES (?)').run(file);
-      log("info", "migration", `Applied migration: ${file}`);
+      // Execute each statement individually so we can swallow benign
+      // "duplicate column" errors from ALTER TABLE on DBs that already
+      // have the column (e.g. from initSchema on a newer install).
+      const stmts = sql.split(";").map(s => s.trim()).filter(s => s && !s.startsWith("--"));
+      let applied_ok = true;
+      for (const stmt of stmts) {
+        try {
+          db.exec(stmt);
+        } catch (stmtErr) {
+          if (stmtErr.message?.includes("duplicate column name")) {
+            log("info", "migration", `Column already exists (skipped): ${stmt.slice(0, 60)}`);
+          } else {
+            log("error", "migration", `Migration statement failed in ${file}: ${stmtErr.message}`);
+            applied_ok = false;
+            break;
+          }
+        }
+      }
+      if (applied_ok) {
+        db.prepare('INSERT INTO migrations (name) VALUES (?)').run(file);
+        log("info", "migration", `Applied migration: ${file}`);
+      }
     }
   } catch (e) {
     // migrations dir may not exist — not fatal
