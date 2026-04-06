@@ -94,10 +94,13 @@ async function sendTx(tx, signers) {
 }
 
 // ─── Pool Cache ────────────────────────────────────────────────
+// Cached per-address. Invalidated explicitly after mutations (claim/close/deploy).
+// No background timer — avoids clearing mid-operation.
 const poolCache = new Map();
 
-async function getPool(poolAddress) {
+async function getPool(poolAddress, { invalidate = false } = {}) {
   const key = poolAddress.toString();
+  if (invalidate) poolCache.delete(key);
   if (!poolCache.has(key)) {
     const { DLMM } = await getDLMM();
     const pool = await DLMM.create(getConnection(), new PublicKey(poolAddress));
@@ -105,8 +108,6 @@ async function getPool(poolAddress) {
   }
   return poolCache.get(key);
 }
-
-setInterval(() => poolCache.clear(), 5 * 60 * 1000);
 
 // ─── Get Active Bin ────────────────────────────────────────────
 export async function getActiveBin({ pool_address }) {
@@ -501,6 +502,12 @@ export async function getWalletPositions({ wallet_address }) {
   try {
     const DLMM_PROGRAM = new PublicKey("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
 
+    // DLMM Position account layout (LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo):
+    //   bytes 0-7   : 8-byte discriminator (Anchor account discriminator)
+    //   bytes 8-39  : 32-byte lb_pair (pool) public key
+    //   bytes 40-71 : 32-byte owner public key
+    // Reference: https://github.com/nicholasgasior/meteora-dlmm-sdk
+    // ⚠ If Meteora upgrades the program, these offsets may change.
     const accounts = await getConnection().getProgramAccounts(DLMM_PROGRAM, {
       filters: [{ memcmp: { offset: 40, bytes: new PublicKey(wallet_address).toBase58() } }],
     });
@@ -511,7 +518,7 @@ export async function getWalletPositions({ wallet_address }) {
 
     const raw = accounts.map((acc) => ({
       position: acc.pubkey.toBase58(),
-      pool: new PublicKey(acc.account.data.slice(8, 40)).toBase58(),
+      pool: new PublicKey(acc.account.data.slice(8, 40)).toBase58(), // lb_pair at offset 8
     }));
 
     // Enrich with PnL API

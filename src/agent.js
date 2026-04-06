@@ -161,9 +161,20 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, requireTool);
   let sawToolCall = false;
   let noToolRetryCount = 0;
+  let rateLimitRetryCount = 0;
+
+  // Wall-clock timeout — prevents a stuck/rate-limited loop from holding the management lock
+  const maxWallMs = (config.llm.maxWallSeconds ?? 480) * 1000; // default 8 minutes
+  const loopStartedAt = Date.now();
 
   let emptyStreak = 0;
   for (let step = 0; step < effectiveMaxSteps; step++) {
+    // Check wall-clock budget before each step
+    const elapsed = Date.now() - loopStartedAt;
+    if (elapsed >= maxWallMs) {
+      log("warn", "agent", `Wall-clock timeout reached (${Math.round(elapsed / 1000)}s >= ${Math.round(maxWallMs / 1000)}s) — aborting loop`);
+      return { content: "Agent loop timed out. Review logs for partial progress.", userMessage: goal };
+    }
     log("info", "agent", `Step ${step + 1}/${effectiveMaxSteps}`);
 
     try {
@@ -205,7 +216,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
       }
 
       if (!response.choices?.length) {
-        log("error", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
+        log("error", "agent", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
         throw new Error(`API returned no choices: ${response.error?.message || JSON.stringify(response)}`);
       }
       const usage = response.usage;
@@ -313,13 +324,21 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
 
       messages.push(...toolResults);
     } catch (error) {
-      log("error", `Agent loop error at step ${step}: ${error.message}`);
+      const errMsg = error.message || String(error);
+      log("error", "agent", `Agent loop error at step ${step}: ${errMsg}`);
 
-      // If it's a rate limit, wait and retry
-      if (error.status === 429) {
-        log("info", "agent", "Rate limited, waiting 30s...");
-        await sleep(30000);
-        continue;
+      // If it's a rate limit (OpenAI SDK sets error.status, or the message contains 429)
+      const isRateLimit = error.status === 429 || errMsg.includes("429") || errMsg.toLowerCase().includes("rate limit") || errMsg.toLowerCase().includes("too many requests");
+      if (isRateLimit) {
+        rateLimitRetryCount++;
+        // Exponential backoff: 30s, 60s, 120s — cap at 3 retries per step
+        const backoffMs = Math.min(30000 * Math.pow(2, Math.max(0, rateLimitRetryCount - 1)), 120000);
+        log("info", "agent", `Rate limited (429). Backing off ${backoffMs / 1000}s before retry (attempt ${rateLimitRetryCount})...`);
+        if (rateLimitRetryCount >= 3) {
+          throw new Error(`Rate limited 3 times consecutively — aborting agent loop`);
+        }
+        await sleep(backoffMs);
+        continue; // retry the same step
       }
 
       // For other errors, break the loop

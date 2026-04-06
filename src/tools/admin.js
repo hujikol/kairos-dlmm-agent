@@ -11,11 +11,8 @@ import {
 import {
   addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy,
 } from "../core/strategy-library.js";
-import { config } from "../config.js";
+import { config, USER_CONFIG_PATH } from "../config.js";
 import { log, logAction } from "../core/logger.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
 
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }

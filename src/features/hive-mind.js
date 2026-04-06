@@ -24,9 +24,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getDB } from "../core/db.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
+import { USER_CONFIG_PATH } from "../config.js";
 
 const SYNC_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
 const GET_TIMEOUT_MS = 5_000;

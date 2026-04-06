@@ -3,6 +3,7 @@ import path from "path";
 
 const LOG_DIR = "./logs";
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
+const LOG_FORMAT = process.env.LOG_FORMAT || "text"; // "text" or "json"
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const currentLevel = LEVELS[LOG_LEVEL] || 1;
@@ -23,17 +24,30 @@ export function log(level, category, message, meta = {}) {
 
   const timestamp = new Date().toISOString();
   const corrId = meta.correlationId ? ` [${meta.correlationId.slice(0, 8)}]` : "";
-  const line = `[${timestamp}] [${category.toUpperCase()}]${corrId} ${message}`;
 
-  // Console output
+  // Structured JSON output
+  if (LOG_FORMAT === "json") {
+    const entry = { timestamp, level, category: category.toUpperCase(), message, ...meta };
+    const json = JSON.stringify(entry);
+    console.log(json);
+    const dateStr = timestamp.split("T")[0];
+    const logFile = path.join(LOG_DIR, `agent-${dateStr}.log`);
+    fs.appendFileSync(logFile, json + "\n");
+    if (level === "error") {
+      const errorFile = path.join(LOG_DIR, `errors-${dateStr}.log`);
+      fs.appendFileSync(errorFile, json + "\n");
+    }
+    return;
+  }
+
+  // Human-readable text output (default)
+  const line = `[${timestamp}] [${category.toUpperCase()}]${corrId} ${message}`;
   console.log(line);
 
-  // File output (daily rotation)
   const dateStr = timestamp.split("T")[0];
   const logFile = path.join(LOG_DIR, `agent-${dateStr}.log`);
   fs.appendFileSync(logFile, line + "\n");
 
-  // Separate error file
   if (level === "error") {
     const errorFile = path.join(LOG_DIR, `errors-${dateStr}.log`);
     fs.appendFileSync(errorFile, line + "\n");

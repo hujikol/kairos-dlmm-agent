@@ -122,7 +122,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   const occupiedPools = new Set(positions.map((p) => p.pool));
   const occupiedMints = new Set(positions.map((p) => p.base_mint).filter(Boolean));
 
-  const eligible = pools
+  let eligible = pools
     .filter((p) => !occupiedPools.has(p.pool) && !occupiedMints.has(p.base?.mint))
     .slice(0, limit);
 
@@ -166,42 +166,42 @@ export async function getTopCandidates({ limit = 10 } = {}) {
       }
     }
     // Wash trading hard filter — fake volume = misleading fee yield
-    eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+    eligible = eligible.filter((p) => {
       if (p.is_wash) { log("info", "screening", `Risk filter: dropped ${p.name} — wash trading flagged`); return false; }
       return true;
-    }));
+    });
 
     // ATH filter — drop pools where price is too close to ATH
     const athFilter = config.screening.athFilterPct;
     if (athFilter != null) {
       const threshold = 100 + athFilter; // e.g. -20 → threshold = 80 (price must be <= 80% of ATH)
       const before = eligible.length;
-      eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+      eligible = eligible.filter((p) => {
         if (p.price_vs_ath_pct == null) return true; // no data → don't filter
         if (p.price_vs_ath_pct > threshold) {
           log("info", "screening", `ATH filter: dropped ${p.name} — ${p.price_vs_ath_pct}% of ATH (limit: ${threshold}%)`);
           return false;
         }
         return true;
-      }));
+      });
       if (eligible.length < before) log("info", "screening", `ATH filter removed ${before - eligible.length} pool(s)`);
     }
 
     // Drop any pools whose creator is on the dev blocklist (caught via advanced-info)
     const before = eligible.length;
-    const filtered = eligible.filter((p) => {
+    eligible = eligible.filter((p) => {
       if (p.dev && isDevBlocked(p.dev)) {
         log("info", "dev_blocklist", `Filtered blocked deployer (okx) ${p.dev.slice(0, 8)} token ${p.base?.symbol}`);
         return false;
       }
       return true;
     });
-    eligible.splice(0, eligible.length, ...filtered);
     if (eligible.length < before) log("info", "dev_blocklist", `Filtered ${before - eligible.length} pool(s) via OKX creator check`);
   }
 
   return {
     candidates: eligible,
+    total_eligible: eligible.length,
     total_screened: pools.length,
   };
 }

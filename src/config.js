@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
+export const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 
 const u = fs.existsSync(USER_CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
@@ -64,7 +64,8 @@ export const config = {
     minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
     minSolToOpen:          u.minSolToOpen          ?? 0.55,
     gasReserve:            u.gasReserve            ?? 0.2,
-    baseDeployAmount:      u.baseDeployAmount      ?? 0.35,
+    baseDeployAmount:      u.deployAmountSol   ?? u.baseDeployAmount ?? 0.35,
+    deployAmountSol:       u.deployAmountSol   ?? u.baseDeployAmount ?? 0.35,
     maxDeployAmount:       u.maxDeployAmount       ?? 50,
     // Trailing take-profit
     trailingTakeProfit:    u.trailingTakeProfit    ?? true,
@@ -150,34 +151,45 @@ export function reloadScreeningThresholds() {
   if (!fs.existsSync(USER_CONFIG_PATH)) return;
   try {
     const fresh = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
-    const s = config.screening;
-    if (fresh.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = fresh.minFeeActiveTvlRatio;
-    if (fresh.minOrganic     != null) s.minOrganic     = fresh.minOrganic;
-    if (fresh.minHolders     != null) s.minHolders     = fresh.minHolders;
-    if (fresh.minMcap        != null) s.minMcap        = fresh.minMcap;
-    if (fresh.maxMcap        != null) s.maxMcap        = fresh.maxMcap;
-    if (fresh.minTvl         != null) s.minTvl         = fresh.minTvl;
-    if (fresh.maxTvl         != null) s.maxTvl         = fresh.maxTvl;
-    if (fresh.minVolume      != null) s.minVolume      = fresh.minVolume;
-    if (fresh.minBinStep     != null) s.minBinStep     = fresh.minBinStep;
-    if (fresh.maxBinStep     != null) s.maxBinStep     = fresh.maxBinStep;
-    if (fresh.timeframe         != null) s.timeframe         = fresh.timeframe;
-    if (fresh.category          != null) s.category          = fresh.category;
-    if (fresh.minTokenAgeHours  !== undefined) s.minTokenAgeHours = fresh.minTokenAgeHours;
-    if (fresh.maxTokenAgeHours  !== undefined) s.maxTokenAgeHours = fresh.maxTokenAgeHours;
-    if (fresh.athFilterPct      !== undefined) s.athFilterPct     = fresh.athFilterPct;
-    if (fresh.maxBundlePct      != null) s.maxBundlePct     = fresh.maxBundlePct;
-    if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;
 
-    // Reload management/risk settings
-    const m = config.management;
-    if (fresh.minSolToOpen !== undefined) m.minSolToOpen = fresh.minSolToOpen;
-    if (fresh.baseDeployAmount !== undefined) m.baseDeployAmount = fresh.baseDeployAmount;
-    if (fresh.gasReserve !== undefined) m.gasReserve = fresh.gasReserve;
-    if (fresh.maxPositions !== undefined) config.risk.maxPositions = fresh.maxPositions;
-    if (fresh.maxDeployAmount !== undefined) m.maxDeployAmount = fresh.maxDeployAmount;
-    if (fresh.dailyProfitTarget !== undefined) config.risk.dailyProfitTarget = fresh.dailyProfitTarget;
-    if (fresh.dailyLossLimit !== undefined) config.risk.dailyLossLimit = fresh.dailyLossLimit;
-    if (fresh.maxPositionsPerToken !== undefined) config.risk.maxPositionsPerToken = fresh.maxPositionsPerToken;
+    // ── Section-to-key mapping: which user-config keys belong to which config section ──
+    const SECTION_MAP = {
+      screening: [
+        "minFeeActiveTvlRatio", "minOrganic", "minHolders", "minMcap", "maxMcap",
+        "minTvl", "maxTvl", "minVolume", "minBinStep", "maxBinStep", "timeframe",
+        "category", "minTokenFeesSol", "maxBundlePct", "maxBotHoldersPct",
+        "maxTop10Pct", "blockedLaunchpads", "minTokenAgeHours", "maxTokenAgeHours",
+        "athFilterPct",
+      ],
+      management: [
+        "minClaimAmount", "autoSwapAfterClaim", "autoSwapAfterClose",
+        "outOfRangeBinsToClose", "outOfRangeWaitMinutes", "minVolumeToRebalance",
+        "stopLossPct", "takeProfitFeePct", "minFeePerTvl24h", "minAgeBeforeYieldCheck",
+        "minSolToOpen", "gasReserve", "baseDeployAmount", "maxDeployAmount",
+        "trailingTakeProfit", "trailingTriggerPct", "trailingDropPct", "solMode",
+        "deployAmountSol",
+      ],
+      risk: [
+        "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
+      ],
+      schedule: [
+        "managementIntervalMin", "screeningIntervalMin",
+      ],
+      llm: [
+        "temperature", "maxTokens", "maxSteps", "screenerMaxSteps", "managerMaxSteps",
+        "managementModel", "screeningModel", "generalModel", "maxWallSeconds",
+      ],
+      strategy: [
+        "strategy", "binsBelow",
+      ],
+    };
+
+    for (const [section, keys] of Object.entries(SECTION_MAP)) {
+      for (const key of keys) {
+        if (fresh[key] !== undefined) {
+          config[section][key] = fresh[key];
+        }
+      }
+    }
   } catch { /* ignore */ }
 }

@@ -4,13 +4,13 @@ import readline from "readline";
 import { agentLoop } from "./agent.js";
 import { log } from "./core/logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./integrations/meteora.js";
-import { getWalletBalances, autoSwapRewardFees } from "./integrations/helius.js";
+import { getWalletBalances, autoSwapRewardFees, swapAllTokensToSol } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { registerCronRestarter } from "./tools/executor.js";
 import { startPolling, stopPolling, sendMessage, sendHTML, isEnabled as telegramEnabled } from "./notifications/telegram.js";
-import { flushNotifications, hasPendingNotifications } from "./notifications/queue.js";
+import { flushNotifications, hasPendingNotifications, pushNotification } from "./notifications/queue.js";
 import { generateBriefing } from "./notifications/briefing.js";
 import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits } from "./core/state.js";
 import { getActiveStrategy } from "./core/strategy-library.js";
@@ -331,6 +331,11 @@ After executing, write a brief one-line result per position.
               });
             } else {
               log("warn", "post_trade", `Swap failed: ${swap.error}`);
+              pushNotification({
+                type: "swap_failed",
+                from: swap.input_mint?.slice(0, 8) || "FEE",
+                error: swap.error || "unknown",
+              });
             }
           }
         }
@@ -440,6 +445,12 @@ function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions })
   // Claims
   for (const c of claims) {
     parts.push(`\n💰 <b>Fees claimed</b> ${escapeHTML(c.pair)} — $${(c.usd ?? 0).toFixed(2)}`);
+  }
+
+  // Failed swaps
+  const failedSwaps = notes.filter((n) => n.type === "swap_failed");
+  for (const f of failedSwaps) {
+    parts.push(`\n❌ <b>Swap failed</b> ${escapeHTML(String(f.from))} → SOL: ${escapeHTML(f.error)}`);  
   }
 
   // LLM report snippet (management cycle output, truncated)
