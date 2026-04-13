@@ -62,9 +62,7 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
         const { positions } = await getWalletPositions({ wallet_address: wallet.address });
         _cache.set(wallet.address, { positions: positions || [], fetchedAt: Date.now() });
         return { wallet, positions: positions || [] };
-      } catch {
-        return { wallet, positions: [] };
-      }
+      } catch (e) { log("warn", "smart-wallets", `Failed to get positions for ${wallet}: ${e?.message}`); return { wallet, positions: [] }; }
     })
   );
 

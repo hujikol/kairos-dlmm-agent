@@ -1,4 +1,3 @@
-import fs from "fs";
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -17,10 +16,9 @@ export function getDB() {
   _db.pragma("synchronous = NORMAL"); // Better performance with WAL
   _db.pragma("foreign_keys = ON"); // Enforce FK constraints
 
-  // Initialize schema + migrations
+  // Initialize schema
   initSchema(_db);
-  runMigrations(_db);
-  
+
   return _db;
 }
 
@@ -60,6 +58,7 @@ function initSchema(db) {
       closed_at TEXT,
       notes TEXT, -- JSON array of strings
       peak_pnl_pct REAL,
+      prev_pnl_pct REAL,  -- tracks previous PnL reading for bad-data detection
       trailing_active INTEGER, -- BOOLEAN
       instruction TEXT,
       status TEXT DEFAULT 'active', -- 'pending' -> 'active' -> 'closed'
@@ -239,6 +238,7 @@ function initSchema(db) {
   // ─── Performance indexes ───
   db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_closed ON positions(closed)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_deployed_at ON positions(deployed_at)`);
+
   db.exec(`CREATE INDEX IF NOT EXISTS idx_performance_recorded_at ON performance(recorded_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_role ON lessons(role)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_outcome ON lessons(outcome)`);
@@ -330,61 +330,7 @@ export function closeDB() {
   }
 }
 
-// ─── Migration system ──────────────────────────────────────────
 
-/**
- * Apply forward-only migrations from the migrations/ directory.
- * Simple approach: track applied migrations in a table, run each once.
- */
-function runMigrations(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS migrations (
-      id INTEGER PRIMARY KEY,
-      name TEXT UNIQUE NOT NULL,
-      applied_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  const applied = db.prepare('SELECT name FROM migrations').all().map(r => r.name);
-
-  try {
-    const migrationsDir = path.join(__dirname, "../migrations");
-    if (!fs.existsSync(migrationsDir)) return;
-    const files = fs.readdirSync(migrationsDir)
-      .filter(f => f.endsWith(".sql"))
-      .sort();
-
-    for (const file of files) {
-      if (applied.includes(file)) continue;
-      const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
-      // Execute each statement individually so we can swallow benign
-      // "duplicate column" errors from ALTER TABLE on DBs that already
-      // have the column (e.g. from initSchema on a newer install).
-      const stmts = sql.split(";").map(s => s.trim()).filter(s => s && !s.startsWith("--"));
-      let applied_ok = true;
-      for (const stmt of stmts) {
-        try {
-          db.exec(stmt);
-        } catch (stmtErr) {
-          if (stmtErr.message?.includes("duplicate column name")) {
-            log("info", "migration", `Column already exists (skipped): ${stmt.slice(0, 60)}`);
-          } else {
-            log("error", "migration", `Migration statement failed in ${file}: ${stmtErr.message}`);
-            applied_ok = false;
-            break;
-          }
-        }
-      }
-      if (applied_ok) {
-        db.prepare('INSERT INTO migrations (name) VALUES (?)').run(file);
-        log("info", "migration", `Applied migration: ${file}`);
-      }
-    }
-  } catch (e) {
-    // migrations dir may not exist — not fatal
-    log("warn", "migration", `Migration scan failed: ${e.message}`);
-  }
-}
 
 /**
  * Validate an ISO 8601 timestamp string.

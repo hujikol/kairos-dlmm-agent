@@ -167,9 +167,7 @@ export function generateInsights(perfData, nearMissData) {
     const db = getDB();
     try {
       nearMissData = db.prepare('SELECT * FROM near_misses').all();
-    } catch {
-      nearMissData = [];
-    }
+    } catch (e) { log("warn", "patterns", `Failed to read near_misses: ${e?.message}`); nearMissData = []; }
   }
 
   const clusters = analyzeClusters(perfData).filter(c => c.count >= 3);

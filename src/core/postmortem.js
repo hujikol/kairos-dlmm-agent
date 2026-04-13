@@ -29,9 +29,7 @@ function loadRules() {
   if (!fs.existsSync(POSTMORTEM_FILE)) return [];
   try {
     return JSON.parse(fs.readFileSync(POSTMORTEM_FILE, "utf8"));
-  } catch {
-    return [];
-  }
+  } catch (e) { log("warn", "postmortem", `Failed to read postmortem file: ${e?.message}`); return []; }
 }
 
 function saveRules(rules) {

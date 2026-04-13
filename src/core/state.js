@@ -10,6 +10,7 @@
 
 import { getDB } from "./db.js";
 import { log } from "./logger.js";
+import { addrShort } from "../tools/addrShort.js";
 
 const MAX_RECENT_EVENTS = 20;
 
@@ -33,7 +34,26 @@ export function touchLastUpdated() {
 // ─── Position Registry ─────────────────────────────────────────
 
 /**
- * Record a newly deployed position.
+ * Record a newly deployed position in the local SQLite registry.
+ * @param {Object} opts - Position details
+ * @param {string} opts.position - On-chain position address
+ * @param {string} opts.pool - Pool address
+ * @param {string} [opts.pool_name] - Human-readable pool name
+ * @param {string} [opts.strategy] - Strategy used (e.g. "bid_ask")
+ * @param {Object} [opts.bin_range] - { lower, upper } bin IDs
+ * @param {number} opts.amount_sol - SOL amount deployed
+ * @param {number} [opts.amount_x] - Token-X amount (if two-sided)
+ * @param {number} [opts.active_bin] - Active bin ID at deploy time
+ * @param {number} [opts.bin_step] - Pool bin step (basis points)
+ * @param {number} [opts.volatility] - Pool volatility score
+ * @param {number} [opts.fee_tvl_ratio] - Fee/TVL ratio at deploy
+ * @param {number} [opts.organic_score] - Organic score (0-100)
+ * @param {number} [opts.initial_value_usd] - Initial USD value of position
+ * @param {Object} [opts.signal_snapshot] - Signal data at deploy time
+ * @param {string} [opts.base_mint] - Base token mint address
+ * @param {string} [opts.market_phase] - Market phase at deploy
+ * @param {string} [opts.strategy_id] - Strategy identifier
+ * @returns {void}
  */
 export function trackPosition({
   position,
@@ -63,16 +83,16 @@ export function trackPosition({
         active_bin_at_deploy, bin_step, volatility, fee_tvl_ratio,
         organic_score, initial_value_usd, signal_snapshot, base_mint, deployed_at,
         out_of_range_since, last_claim_at, total_fees_claimed_usd, rebalance_count,
-        closed, closed_at, notes, peak_pnl_pct, trailing_active, instruction, status, market_phase, strategy_id
+        closed, closed_at, notes, peak_pnl_pct, prev_pnl_pct, trailing_active, instruction, status, market_phase, strategy_id
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       position, pool, pool_name, strategy, JSON.stringify(bin_range), amount_sol, amount_x,
       active_bin, bin_step, volatility, fee_tvl_ratio,
       organic_score, initial_value_usd, JSON.stringify(signal_snapshot || null), base_mint, new Date().toISOString(),
       null, null, 0, 0,
-      0, null, '[]', 0, 0, null, 'pending', market_phase, strategy_id
+      0, null, '[]', 0, null, 0, null, 'pending', market_phase, strategy_id
     );
 
     pushEvent({ action: "deploy", position, pool_name: pool_name || pool });
@@ -100,7 +120,7 @@ function updatePosition(position_address, updates) {
 export function updatePositionStatus(position_address, status) {
   const db = getDB();
   db.prepare('UPDATE positions SET status = ? WHERE position = ?').run(status, position_address);
-  log("info", "state", `Position ${position_address.slice(0,8)} status -> ${status}`);
+  log("info", "state", `Position ${addrShort(position_address)} status -> ${status}`);
 }
 
 /**
@@ -144,7 +164,7 @@ function appendNote(position_address, note) {
   const pos = db.prepare('SELECT notes FROM positions WHERE position = ?').get(position_address);
   if (!pos) return;
   let notes = [];
-  try { notes = JSON.parse(pos.notes || '[]'); } catch { notes = []; }
+  try { notes = JSON.parse(pos.notes || '[]'); } catch (e) { log("warn", "state", `Failed to parse position notes: ${e?.message}`); notes = []; }
   notes.push(note);
   updatePosition(position_address, { notes: JSON.stringify(notes) });
 }
@@ -249,7 +269,9 @@ function rowToPos(row) {
 }
 
 /**
- * Get all tracked positions (optionally filter open-only).
+ * Get all tracked positions from SQLite, optionally filtered to open positions only.
+ * @param {boolean} [openOnly=false] - If true, return only open (non-closed) positions
+ * @returns {Array<Object>} Array of position objects with bin_range, notes, etc. parsed from JSON
  */
 export function getTrackedPositions(openOnly = false) {
   const db = getDB();
@@ -270,6 +292,9 @@ export function getTrackedPosition(position_address) {
 
 /**
  * Summarize state for the agent system prompt.
+ * Returns open/closed position counts, total fees claimed, position list,
+ * and recent events from SQLite.
+ * @returns {Object} State summary { open_positions, closed_positions, total_fees_claimed_usd, positions, last_updated, recent_events }
  */
 export function getStateSummary() {
   const db = getDB();
@@ -306,7 +331,15 @@ export function getStateSummary() {
 
 /**
  * Check all exit conditions for a position (trailing TP, stop loss, OOR, low yield).
- * Updates peak_pnl_pct, trailing_active, and OOR state.
+ * Updates peak_pnl_pct, trailing_active, and OOR state in the SQLite registry.
+ * @param {string} position_address - On-chain position address
+ * @param {Object} positionData - Current position metrics from Meteora API
+ * @param {number} positionData.pnl_pct - Current PnL percentage
+ * @param {boolean} positionData.in_range - Whether position is currently in range
+ * @param {number} [positionData.fee_per_tvl_24h] - 24h fee per TVL percentage
+ * @param {number} [positionData.age_minutes] - Position age in minutes
+ * @param {Object} mgmtConfig - Management config from config.js
+ * @returns {Object|null} { action: "STOP_LOSS"|"TRAILING_TP"|"OUT_OF_RANGE"|"LOW_YIELD", reason: string } or null
  */
 export function updatePnlAndCheckExits(position_address, positionData, mgmtConfig) {
   const { pnl_pct: currentPnlPct, in_range, fee_per_tvl_24h } = positionData;
@@ -321,6 +354,13 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   if (currentPnlPct != null && currentPnlPct > (pos.peak_pnl_pct ?? 0)) {
     updates.peak_pnl_pct = currentPnlPct;
     pos.peak_pnl_pct = currentPnlPct;
+    changed = true;
+  }
+
+  // Persist current reading as prev_pnl_pct for the next call —
+  // enables runManagementCycle to detect implausible PnL jumps (e.g. -5% → -99%)
+  if (currentPnlPct != null) {
+    updates.prev_pnl_pct = currentPnlPct;
     changed = true;
   }
 
@@ -421,6 +461,9 @@ export function setLastBriefingDate() {
 /**
  * Reconcile local state with actual on-chain positions.
  * Marks any local open positions as closed if they are not in the on-chain list.
+ * Positions deployed within the last 5 minutes are excluded (grace period).
+ * @param {string[]} active_addresses - List of currently active on-chain position addresses
+ * @returns {void}
  */
 const SYNC_GRACE_MS = 5 * 60_000;
 

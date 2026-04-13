@@ -9,6 +9,7 @@
 
 import { getDB } from "../core/db.js";
 import { log } from "../core/logger.js";
+import { addrShort } from "../tools/addrShort.js";
 
 // ─── Write ─────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
           last_deployed_at, last_outcome, notes, cooldown_until
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        poolAddress, deployData.pool_name || poolAddress.slice(0, 8), deployData.base_mint || null,
+        poolAddress, deployData.pool_name || addrShort(poolAddress), deployData.base_mint || null,
         0, 0, 0, null, null, '[]', null
       );
     }
@@ -67,7 +68,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
     // Fetch latest pool state
     const poolState = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
     let notes = [];
-    try { notes = JSON.parse(poolState.notes || '[]'); } catch { notes = []; }
+    try { notes = JSON.parse(poolState.notes || '[]'); } catch (e) { log("warn", "pool-memory", `Failed to parse pool notes: ${e?.message}`); notes = []; }
     let cooldownUntil = poolState.cooldown_until;
 
     // ── Smart cooldown: learn from repeat losses ───────────────────
@@ -111,7 +112,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
       JSON.stringify(notes), cooldownUntil, poolAddress
     );
 
-    log("info", "pool-memory", `Recorded deploy for ${poolState.name || poolAddress.slice(0, 8)}: PnL ${pnl_pct}%`);
+    log("info", "pool-memory", `Recorded deploy for ${poolState.name || addrShort(poolAddress)}: PnL ${pnl_pct}%`);
   })();
 }
 
@@ -203,7 +204,7 @@ export function recordPositionSnapshot(poolAddress, snapshot) {
           last_deployed_at, last_outcome, notes, cooldown_until
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        poolAddress, snapshot.pair || poolAddress.slice(0, 8), null,
+        poolAddress, snapshot.pair || addrShort(poolAddress), null,
         0, 0, 0, null, null, '[]', null
       );
     }
@@ -287,19 +288,19 @@ export function addPoolNote({ pool_address, note }) {
           last_deployed_at, last_outcome, notes, cooldown_until
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        pool_address, pool_address.slice(0, 8), null, 0, 0, 0, null, null, '[]', null
+        pool_address, addrShort(pool_address), null, 0, 0, 0, null, null, '[]', null
       );
       entry = { notes: '[]' };
     }
 
     let notes = [];
-    try { notes = JSON.parse(entry.notes || '[]'); } catch { notes = []; }
-    
+    try { notes = JSON.parse(entry.notes || '[]'); } catch (e) { log("warn", "pool-memory", `Failed to parse entry notes: ${e?.message}`); notes = []; }
+
     notes.push({ note, added_at: new Date().toISOString() });
     
     db.prepare('UPDATE pool_memory SET notes = ? WHERE pool_address = ?').run(JSON.stringify(notes), pool_address);
   })();
 
-  log("info", "pool-memory", `Note added to ${pool_address.slice(0, 8)}: ${note}`);
+  log("info", "pool-memory", `Note added to ${addrShort(pool_address)}: ${note}`);
   return { saved: true, pool_address, note };
 }

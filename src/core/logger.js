@@ -4,6 +4,8 @@ import path from "path";
 const LOG_DIR = "./logs";
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
 const LOG_FORMAT = process.env.LOG_FORMAT || "text"; // "text" or "json"
+const LOG_MAX_SIZE_BYTES = parseInt(process.env.LOG_MAX_SIZE || "10000000", 10); // 10MB default
+const LOG_MAX_FILES = parseInt(process.env.LOG_MAX_FILES || "7", 10);
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const currentLevel = LEVELS[LOG_LEVEL] || 1;
@@ -11,6 +13,37 @@ const currentLevel = LEVELS[LOG_LEVEL] || 1;
 // Ensure log directory exists
 if (!fs.existsSync(LOG_DIR)) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
+}
+
+/**
+ * Rotate a log file if it exceeds the size threshold.
+ * Rename current file to .1, .2, ... up to LOG_MAX_FILES, then truncate current.
+ */
+function rotateLog(logFile) {
+  try {
+    if (!fs.existsSync(logFile)) return;
+    const stats = fs.statSync(logFile);
+    if (stats.size < LOG_MAX_SIZE_BYTES) return;
+
+    // Prune oldest
+    const base = logFile.replace(/\.\d+$/, "");
+    const oldest = base + "." + LOG_MAX_FILES;
+    if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
+
+    // Shift existing rotations
+    for (let i = LOG_MAX_FILES - 1; i >= 1; i--) {
+      const src = base + "." + i;
+      const dst = base + "." + (i + 1);
+      if (fs.existsSync(src)) fs.renameSync(src, dst);
+    }
+
+    // Rotate current to .1
+    fs.renameSync(logFile, base + ".1");
+    // Truncate current file
+    fs.writeFileSync(logFile, "");
+  } catch (err) {
+    console.error("Log rotation failed:", err.message);
+  }
 }
 
 /**
@@ -23,7 +56,7 @@ export function log(level, category, message, meta = {}) {
   if (LEVELS[level] < currentLevel) return;
 
   const timestamp = new Date().toISOString();
-  const corrId = meta.correlationId ? ` [${meta.correlationId.slice(0, 8)}]` : "";
+  const corrId = meta.correlationId ? ` [${addrShort(meta.correlationId)}]` : "";
 
   // Structured JSON output
   if (LOG_FORMAT === "json") {
@@ -32,9 +65,11 @@ export function log(level, category, message, meta = {}) {
     console.log(json);
     const dateStr = timestamp.split("T")[0];
     const logFile = path.join(LOG_DIR, `agent-${dateStr}.log`);
+    rotateLog(logFile);
     fs.appendFileSync(logFile, json + "\n");
     if (level === "error") {
       const errorFile = path.join(LOG_DIR, `errors-${dateStr}.log`);
+      rotateLog(errorFile);
       fs.appendFileSync(errorFile, json + "\n");
     }
     return;
@@ -46,10 +81,12 @@ export function log(level, category, message, meta = {}) {
 
   const dateStr = timestamp.split("T")[0];
   const logFile = path.join(LOG_DIR, `agent-${dateStr}.log`);
+  rotateLog(logFile);
   fs.appendFileSync(logFile, line + "\n");
 
   if (level === "error") {
     const errorFile = path.join(LOG_DIR, `errors-${dateStr}.log`);
+    rotateLog(errorFile);
     fs.appendFileSync(errorFile, line + "\n");
   }
 }
@@ -72,11 +109,11 @@ function actionHint(action) {
   const a = action.args || {};
   const r = action.result || {};
   switch (action.tool) {
-    case "deploy_position":   return ` ${a.pool_name || a.pool_address?.slice(0,8)} ${a.amount_sol} SOL`;
-    case "close_position":    return ` ${a.position_address?.slice(0,8)}${r.pnl_usd != null ? ` | PnL $${r.pnl_usd >= 0 ? "+" : ""}${r.pnl_usd} (${r.pnl_pct}%)` : ""}`;
-    case "claim_fees":        return ` ${a.position_address?.slice(0,8)}`;
+    case "deploy_position":   return ` ${a.pool_name || addrShort(a.pool_address)} ${a.amount_sol} SOL`;
+    case "close_position":    return ` ${addrShort(a.position_address)}${r.pnl_usd != null ? ` | PnL $${r.pnl_usd >= 0 ? "+" : ""}${r.pnl_usd} (${r.pnl_pct}%)` : ""}`;
+    case "claim_fees":        return ` ${addrShort(a.position_address)}`;
     case "get_active_bin":    return ` bin ${r.binId ?? ""}`;
-    case "get_pool_detail":   return ` ${r.name || a.pool_address?.slice(0,8) || ""}`;
+    case "get_pool_detail":   return ` ${r.name || addrShort(a.pool_address) || ""}`;
     case "get_my_positions":  return ` ${r.total_positions ?? ""} positions`;
     case "get_wallet_balance":return ` ${r.sol ?? ""} SOL`;
     case "get_top_candidates":return ` ${r?.candidates?.length ?? ""} pools`;
@@ -102,6 +139,7 @@ export function logAction(action) {
   // File: full JSON for audit trail
   const dateStr = timestamp.split("T")[0];
   const actionsFile = path.join(LOG_DIR, `actions-${dateStr}.jsonl`);
+  rotateLog(actionsFile);
   fs.appendFileSync(actionsFile, JSON.stringify(entry) + "\n");
 }
 
@@ -118,5 +156,6 @@ export function logSnapshot(snapshot) {
 
   const dateStr = timestamp.split("T")[0];
   const snapshotFile = path.join(LOG_DIR, `snapshots-${dateStr}.jsonl`);
+  rotateLog(snapshotFile);
   fs.appendFileSync(snapshotFile, JSON.stringify(entry) + "\n");
 }

@@ -25,10 +25,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getDB } from "../core/db.js";
 import { USER_CONFIG_PATH } from "../config.js";
+import { addrShort } from "../tools/addrShort.js";
 
-const SYNC_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
-const GET_TIMEOUT_MS = 5_000;
-const POST_TIMEOUT_MS = 10_000;
+const SYNC_DEBOUNCE_MS = parseInt(process.env.HIVE_MIND_SYNC_DEBOUNCE_MS || "300000"); // 5 minutes
+const GET_TIMEOUT_MS = parseInt(process.env.HIVE_MIND_GET_TIMEOUT_MS || "5000");
+const POST_TIMEOUT_MS = parseInt(process.env.HIVE_MIND_POST_TIMEOUT_MS || "10000");
 const MIN_AGENTS_FOR_CONSENSUS = 3;
 const MAX_CONSENSUS_CHARS = 500;
 
@@ -39,9 +40,7 @@ let _lastSyncTime = 0;
 function readConfig() {
   try {
     return JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
-  } catch {
-    return {};
-  }
+  } catch (e) { log("warn", "hive-mind", `Failed to read config: ${e?.message}`); return {}; }
 }
 
 function writeConfig(patch) {
@@ -53,9 +52,7 @@ function writeConfig(patch) {
 function readJsonFile(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
+  } catch (e) { log("warn", "hive-mind", `Failed to read state file: ${e?.message}`); return null; }
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = GET_TIMEOUT_MS) {
@@ -232,9 +229,7 @@ export async function queryPoolConsensus(poolAddress) {
 
     if (!res.ok) return null;
     return await res.json();
-  } catch {
-    return null;
-  }
+  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
 }
 
 /**
@@ -257,9 +252,7 @@ export async function queryLessonConsensus(tags) {
 
     if (!res.ok) return null;
     return await res.json();
-  } catch {
-    return null;
-  }
+  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
 }
 
 /**
@@ -280,9 +273,7 @@ export async function queryPatternConsensus(volatility) {
 
     if (!res.ok) return null;
     return await res.json();
-  } catch {
-    return null;
-  }
+  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
 }
 
 /**
@@ -301,9 +292,7 @@ export async function queryThresholdConsensus() {
 
     if (!res.ok) return null;
     return await res.json();
-  } catch {
-    return null;
-  }
+  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
 }
 
 /**
@@ -322,9 +311,7 @@ export async function getHivePulse() {
 
     if (!res.ok) return null;
     return await res.json();
-  } catch {
-    return null;
-  }
+  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
 }
 
 /**
@@ -352,7 +339,7 @@ export async function formatPoolConsensusForPrompt(poolAddresses) {
     for (const { addr, data } of results) {
       if (data && data.unique_agents >= MIN_AGENTS_FOR_CONSENSUS) {
         poolsWithData++;
-        const name = data.pool_name || addr.slice(0, 8);
+        const name = data.pool_name || addrShort(addr);
         const winPct = data.weighted_win_rate ?? 0;
         const avgPnl = data.weighted_avg_pnl != null
           ? (data.weighted_avg_pnl >= 0 ? "+" : "") + data.weighted_avg_pnl.toFixed(1) + "%"
