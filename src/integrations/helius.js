@@ -4,16 +4,18 @@ import {
   VersionedTransaction,
   Keypair,
 } from "@solana/web3.js";
+import { addrShort } from "../tools/addrShort.js";
 import { getConnection as getRpcConnection } from "./solana.js";
 import bs58 from "bs58";
 import { log } from "../core/logger.js";
 import { config } from "../config.js";
+import { SOL_MINT } from "../constants.js";
 
 let _wallet = null;
 
 // ─── 5-minute TTL cache for getWalletBalances() ─────────────────
 let _balanceCache = null;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+export const CACHE_TTL = parseInt(process.env.HELIUS_BALANCE_CACHE_TTL_MS || "300000"); // 5 minutes
 
 export function invalidateBalanceCache() {
   _balanceCache = null;
@@ -48,9 +50,9 @@ function getWallet() {
   return _wallet;
 }
 
-const JUPITER_PRICE_API = "https://api.jup.ag/price/v3";
-const JUPITER_ULTRA_API = "https://api.jup.ag/ultra/v1";
-const JUPITER_QUOTE_API = "https://api.jup.ag/swap/v1";
+const JUPITER_PRICE_API = process.env.JUPITER_PRICE_API_URL || "https://api.jup.ag/price/v3";
+const JUPITER_ULTRA_API = process.env.JUPITER_ULTRA_API_URL || "https://api.jup.ag/ultra/v1";
+const JUPITER_QUOTE_API = process.env.JUPITER_QUOTE_API_URL || "https://api.jup.ag/swap/v1";
 const JUPITER_API_KEY = process.env.JUPITER_API_KEY;
 
 /**
@@ -67,8 +69,7 @@ export async function getWalletBalances() {
   let walletAddress;
   try {
     walletAddress = getWallet().publicKey.toString();
-  } catch {
-    const errResult = { wallet: null, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Wallet not configured" };
+  } catch (e) { log("warn", "helius", `Failed to get wallet balances: ${e?.message}`); const errResult = { wallet: null, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Wallet not configured" };
     _balanceCache = { data: errResult, timestamp: Date.now() };
     return errResult;
   }
@@ -106,7 +107,7 @@ export async function getWalletBalances() {
     // ─── Map all tokens ───────────────────────────────────────
     const enrichedTokens = balances.map(b => ({
       mint: b.mint,
-      symbol: b.symbol || b.mint.slice(0, 8),
+      symbol: b.symbol || addrShort(b.mint),
       balance: b.balance,
       usd: b.usdValue ? Math.round(b.usdValue * 100) / 100 : null,
     }));
@@ -166,8 +167,10 @@ async function getBalancesViaRpc(walletAddress) {
 }
 
 /**
- * Get the direct real-time balance of a specific mint using the Solana connection.
- * Faster and more accurate than waiting for the Helius Wallet API to index.
+ * Get the direct real-time balance of a specific SPL mint via Solana RPC.
+ * Falls back to 0 on error. Does not use the balance cache.
+ * @param {string} mint - Mint address (use "SOL" or wrapped-SOL mint for native SOL)
+ * @returns {Promise<number>} Token balance (SOL-denominated for native SOL)
  */
 export async function getMintBalance(mint) {
   const connection = getConnection();
@@ -194,17 +197,21 @@ export async function getMintBalance(mint) {
 
 /**
  * Swap tokens via Jupiter Ultra API (order → sign → execute).
+ * Falls back to the standard Jupiter quote API if Ultra is unavailable.
+ * Respects DRY_RUN env var — returns early without sending transactions.
+ * @param {Object} opts - Swap parameters
+ * @param {string} opts.input_mint - Source mint address
+ * @param {string} opts.output_mint - Destination mint address
+ * @param {number} opts.amount - Amount to swap (in token units, not lamports)
+ * @returns {Promise<Object>} { success, tx, input_mint, output_mint, amount_in, amount_out } or { success: false, error }
  */
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-
 // Normalize any SOL-like address to the correct wrapped SOL mint
 export function normalizeMint(mint) {
   if (!mint) return mint;
-  const SOL_MINT = "So11111111111111111111111111111111111111112";
   if (
-    mint === "SOL" || 
-    mint === "native" || 
-    /^So1+$/.test(mint) || 
+    mint === "SOL" ||
+    mint === "native" ||
+    /^So1+$/.test(mint) ||
     (mint.length >= 32 && mint.length <= 44 && mint.startsWith("So1") && mint !== SOL_MINT)
   ) {
     return SOL_MINT;
@@ -347,8 +354,11 @@ async function swapViaQuoteApi({ wallet, connection, input_mint, output_mint, am
 }
 
 /**
- * Automatically swaps non-SOL tokens (reward fees or closed position principal) to SOL.
- * If mints are provided, only those are checked. Otherwise, all non-SOL tokens with USD >= 0.10 are swapped.
+ * Automatically swap non-SOL tokens (fees or closed principal) to SOL.
+ * If mints are provided, only those are checked. Otherwise all non-SOL tokens
+ * with USD value >= $0.10 are swapped via Jupiter.
+ * @param {string[]|null} [mints=null] - Specific mints to swap, or null to auto-detect
+ * @returns {Promise<Object>} { success, swapped: [{ success, tx, ... }, ...] } or { success: false, error }
  */
 export async function autoSwapRewardFees(mints = null) {
   try {
@@ -371,10 +381,10 @@ export async function autoSwapRewardFees(mints = null) {
         for (const mint of missingMints) {
           const bal = await getMintBalance(mint);
           if (bal > 0) {
-            // We don't have the USD value here, but if it's a known mint from close_position, we swap it.
-            tokensToSwap.push({ mint, balance: bal, symbol: mint.slice(0, 8), usd: 1.0 }); // Dummy USD > 0.10
+            // usd=1.0 is a Helius placeholder — only set when balance > 0 (skip dust/zero-value tokens)
+            tokensToSwap.push({ mint, balance: bal, symbol: addrShort(mint), usd: bal > 0 ? 1.0 : 0 });
           } else {
-            log("info", "wallet", `Skipped ${mint.slice(0, 8)}: Direct balance is 0.`);
+            log("info", "wallet", `Skipped ${addrShort(mint)}: Direct balance is 0.`);
           }
         }
       }
@@ -387,7 +397,7 @@ export async function autoSwapRewardFees(mints = null) {
 
     const swapResults = [];
     for (const token of tokensToSwap) {
-      log("info", "wallet", `Auto-swapping token ${token.symbol || token.mint.slice(0, 8)} (${token.balance}) to SOL`);
+      log("info", "wallet", `Auto-swapping token ${token.symbol || token.addrShort(mint)} (${token.balance}) to SOL`);
       const result = await swapToken({ 
         input_mint: token.mint, 
         output_mint: config.tokens.SOL, 

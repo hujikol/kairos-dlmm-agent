@@ -1,4 +1,4 @@
-const DATAPI_BASE = "https://datapi.jup.ag/v1";
+const DATAPI_BASE = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 
 /**
  * Get the narrative/story behind a token from Jupiter ChainInsight.

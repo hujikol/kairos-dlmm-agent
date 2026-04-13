@@ -4,12 +4,28 @@
  * Docs: https://web3.okx.com/build/dev-docs/
  */
 
-const BASE = "https://web3.okx.com";
+const BASE = process.env.OKX_API_BASE || "https://web3.okx.com";
 const CHAIN_SOLANA = "501";
 const PUBLIC_HEADERS = { "Ok-Access-Client-type": "agent-cli" };
 
+/**
+ * Wrap a fetch call with an AbortController timeout.
+ */
+async function withTimeout(fetchPromise, ms) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetchPromise(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function okxGet(path) {
-  const res = await fetch(`${BASE}${path}`, { headers: PUBLIC_HEADERS });
+  const res = await withTimeout(
+    fetch(`${BASE}${path}`, { headers: PUBLIC_HEADERS }),
+    12_000,
+  );
   if (!res.ok) throw new Error(`OKX API ${res.status}: ${path}`);
   const json = await res.json();
   if (json.code !== "0" && json.code !== 0) throw new Error(`OKX error ${json.code}: ${json.msg}`);
@@ -17,11 +33,14 @@ async function okxGet(path) {
 }
 
 async function okxPost(path, body) {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: { ...PUBLIC_HEADERS, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await withTimeout(
+    fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: { ...PUBLIC_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    12_000,
+  );
   if (!res.ok) throw new Error(`OKX API ${res.status}: ${path}`);
   const json = await res.json();
   if (json.code !== "0" && json.code !== 0) throw new Error(`OKX error ${json.code}: ${json.msg}`);

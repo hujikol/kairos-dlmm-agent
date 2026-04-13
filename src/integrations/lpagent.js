@@ -2,8 +2,11 @@
  * Study top LPers for a pool and extract behavioural patterns.
  * Used by the /learn command — not called on every cycle.
  */
+import { addrShort } from "../tools/addrShort.js";
 
-const LPAGENT_API = "https://api.lpagent.io/open-api/v1";
+import { enqueueLPAgent } from '../lpagent-queue.js';
+
+const LPAGENT_API = process.env.LPAGENT_API_BASE || "https://api.lpagent.io/open-api/v1";
 const LPAGENT_KEYS = (process.env.LPAGENT_API_KEY || "").split(",").map(k => k.trim()).filter(Boolean);
 let _keyIndex = 0;
 function nextKey() {
@@ -20,6 +23,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * and return condensed behaviour patterns for LLM consumption.
  */
 export async function studyTopLPers({ pool_address, limit = 4 }) {
+  return enqueueLPAgent(() => _studyTopLPersImpl({ pool_address, limit }));
+}
+
+async function _studyTopLPersImpl({ pool_address, limit = 4 }) {
   if (!LPAGENT_KEYS.length) {
     return { pool: pool_address, message: "LPAGENT_API_KEY not set in .env — study_top_lpers is disabled.", patterns: [], lpers: [] };
   }
@@ -65,7 +72,7 @@ export async function studyTopLPers({ pool_address, limit = 4 }) {
   for (const lper of top) {
     const sample = {
       owner: lper.owner,
-      owner_short: lper.owner.slice(0, 8) + "...",
+      owner_short: addrShort(lper.owner) + "...",
       summary: {
         total_positions: lper.total_lp,
         win_rate: Math.round(lper.win_rate * 100) + "%",
@@ -79,7 +86,7 @@ export async function studyTopLPers({ pool_address, limit = 4 }) {
 
     try {
       // Small buffer to avoid race conditions on the 5-req limit
-      await sleep(1000); 
+      await sleep(parseInt(process.env.LPAGENT_RATE_LIMIT_BUFFER_MS || "1000")); 
 
       const histRes = await fetch(
         `${LPAGENT_API}/lp-positions/historical?owner=${lper.owner}&page=1&limit=50`,

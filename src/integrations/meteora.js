@@ -8,6 +8,7 @@ import { getConnection as getRpcConnection } from "./solana.js";
 import BN from "bn.js";
 import bs58 from "bs58";
 import { config } from "../config.js";
+import { addrShort } from "../tools/addrShort.js";
 import { log } from "../core/logger.js";
 import {
   trackPosition,
@@ -23,6 +24,10 @@ import {
 import { recordPerformance } from "../core/lessons.js";
 import { isPoolOnCooldown } from "../features/pool-memory.js";
 import { normalizeMint } from "./helius.js";
+
+// ─── Constants ───────────────────────────────────────────────────
+/** Meteora DLMM program ID (LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo) */
+const DLMM_PROGRAM = new PublicKey("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
@@ -77,7 +82,7 @@ function applyPriorityFee(tx) {
   );
   tx.add(
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports }),
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 })
+    ComputeBudgetProgram.setComputeUnitLimit({ units: parseInt(process.env.METEORA_COMPUTE_UNIT_LIMIT || "1400000") })
   );
   return tx;
 }
@@ -96,20 +101,38 @@ async function sendTx(tx, signers) {
 // ─── Pool Cache ────────────────────────────────────────────────
 // Cached per-address. Invalidated explicitly after mutations (claim/close/deploy).
 // No background timer — avoids clearing mid-operation.
+// Evicted automatically after POOL_CACHE_TTL_MS to prevent unbounded growth.
 const poolCache = new Map();
+const poolCacheTimestamps = new Map();
+const POOL_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 async function getPool(poolAddress, { invalidate = false } = {}) {
   const key = poolAddress.toString();
-  if (invalidate) poolCache.delete(key);
+  if (invalidate) {
+    poolCache.delete(key);
+    poolCacheTimestamps.delete(key);
+    return;
+  }
+  const ts = poolCacheTimestamps.get(key);
+  if (ts && Date.now() - ts > POOL_CACHE_TTL_MS) {
+    poolCache.delete(key);
+    poolCacheTimestamps.delete(key);
+  }
   if (!poolCache.has(key)) {
     const { DLMM } = await getDLMM();
     const pool = await DLMM.create(getConnection(), new PublicKey(poolAddress));
     poolCache.set(key, pool);
+    poolCacheTimestamps.set(key, Date.now());
   }
   return poolCache.get(key);
 }
 
-// ─── Get Active Bin ────────────────────────────────────────────
+/**
+ * Get the current active bin for a Meteora DLMM pool.
+ * @param {Object} opts - Parameters
+ * @param {string} opts.pool_address - Pool address
+ * @returns {Promise<Object>} { binId, price, pricePerLamport }
+ */
 export async function getActiveBin({ pool_address }) {
   pool_address = normalizeMint(pool_address);
   const pool = await getPool(pool_address);
@@ -122,7 +145,30 @@ export async function getActiveBin({ pool_address }) {
   };
 }
 
-// ─── Deploy Position ───────────────────────────────────────────
+/**
+ * Deploy a new liquidity position into a Meteora DLMM pool.
+ * Handles wide-range positions (>69 bins) via multi-transaction chunking.
+ * Records the position in SQLite state and transitions it from pending to active.
+ * @param {Object} opts - Deploy parameters
+ * @param {string} opts.pool_address - Meteora pool address
+ * @param {number} [opts.amount_sol] - SOL amount (used as amount_y if amount_y not set)
+ * @param {number} [opts.amount_x] - Token-X amount for two-sided positions
+ * @param {number} [opts.amount_y] - Token-Y (SOL) amount
+ * @param {string} [opts.strategy] - "spot"|"curve"|"bid_ask" (default from config)
+ * @param {number} [opts.bins_below] - Bins below active bin (default from config)
+ * @param {number} [opts.bins_above] - Bins above active bin (default 0)
+ * @param {string} [opts.pool_name] - Human-readable pool name (for learning)
+ * @param {number} [opts.bin_step] - Pool bin step (for learning)
+ * @param {number} [opts.base_fee] - Pool base fee (for learning)
+ * @param {string} [opts.base_mint] - Base token mint (for learning)
+ * @param {number} [opts.volatility] - Pool volatility (for learning)
+ * @param {number} [opts.fee_tvl_ratio] - Fee/TVL ratio (for learning)
+ * @param {number} [opts.organic_score] - Organic score (for learning)
+ * @param {number} [opts.initial_value_usd] - Initial USD value (for learning)
+ * @param {string} [opts.market_phase] - Market phase at deploy (for learning)
+ * @param {string} [opts.strategy_id] - Strategy identifier (for learning)
+ * @returns {Promise<Object>} { success, position, pool, bin_range, price_range, bin_step, base_fee, strategy, wide_range, txs } or { success: false, error }
+ */
 export async function deployPosition({
   pool_address,
   amount_sol, // legacy: will be used as amount_y if amount_y is not provided
@@ -151,21 +197,45 @@ export async function deployPosition({
 
 
   if (isPoolOnCooldown(pool_address)) {
-    log("info", "deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown (closed for low yield) — skipping`);
+    log("info", "deploy", `Pool ${addrShort(pool_address)} is on cooldown (closed for low yield) — skipping`);
     return { success: false, error: "Pool on cooldown — was recently closed for low yield. Try a different pool." };
   }
 
   if (process.env.DRY_RUN === "true") {
     const totalBins = activeBinsBelow + activeBinsAbove;
+    const finalAmountY = amount_y ?? amount_sol ?? 0;
+    const finalAmountX = amount_x ?? 0;
+    // Generate a stable fake position key so subsequent dry-run management calls can find it
+    const fakePosition = "dry_" + addrShort(pool_address) + "_" + Date.now();
+    trackPosition({
+      position: fakePosition,
+      pool: pool_address,
+      pool_name,
+      strategy: activeStrategy || "Unknown",
+      bin_range: { lower: activeBinsBelow, upper: activeBinsAbove },
+      amount_sol: finalAmountY,
+      amount_x: finalAmountX,
+      active_bin: null,
+      bin_step,
+      volatility,
+      fee_tvl_ratio,
+      organic_score,
+      initial_value_usd,
+      base_mint,
+      market_phase,
+      strategy_id,
+    });
+    updatePositionStatus(fakePosition, "active");
     return {
       dry_run: true,
+      position: fakePosition,
       would_deploy: {
         pool_address,
         strategy: activeStrategy,
         bins_below: activeBinsBelow,
         bins_above: activeBinsAbove,
-        amount_x: amount_x || 0,
-        amount_y: amount_y || amount_sol || 0,
+        amount_x: finalAmountX,
+        amount_y: finalAmountY,
         wide_range: totalBins > 69,
       },
       message: "DRY RUN — no transaction sent",
@@ -264,7 +334,7 @@ export async function deployPosition({
         totalXAmount: totalXLamports,
         totalYAmount: totalYLamports,
         strategy: { maxBinId, minBinId, strategyType },
-        slippage: 1000, // 10% in bps
+        slippage: parseInt(process.env.METEORA_SLIPPAGE_BPS || "1000"), // 10% in bps
       });
       const txHash = await sendTx(tx, [wallet, newPosition]);
       txHashes.push(txHash);
@@ -325,7 +395,7 @@ export async function deployPosition({
   }
 }
 
-const POSITIONS_CACHE_TTL = 5 * 60_000; // 5 minutes
+const POSITIONS_CACHE_TTL = parseInt(process.env.METEORA_POSITIONS_CACHE_TTL_MS || "300000"); // 5 minutes
 
 let _positionsCache = null;
 let _positionsCacheAt = 0;
@@ -333,32 +403,42 @@ let _positionsInflight = null; // deduplicates concurrent calls
 
 // ─── Fetch DLMM PnL API for all positions in a pool ────────────
 async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
-  const url = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${walletAddress}&status=open&pageSize=100&page=1`;
+  const url = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/positions/${poolAddress}/pnl?user=${walletAddress}&status=open&pageSize=100&page=1`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const byAddress = {};
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      log("info", "pnl_api", `HTTP ${res.status} for pool ${poolAddress.slice(0, 8)}: ${body.slice(0, 120)}`);
-      return {};
+      log("info", "pnl_api", `HTTP ${res.status} for pool ${addrShort(poolAddress)}: ${body.slice(0, 120)}`);
+      return byAddress;
     }
     const data = await res.json();
     const positions = data.positions || data.data || [];
     if (positions.length === 0) {
-      log("info", "pnl_api", `No positions returned for pool ${poolAddress.slice(0, 8)} — keys: ${Object.keys(data).join(", ")}`);
+      log("info", "pnl_api", `No positions returned for pool ${addrShort(poolAddress)} — keys: ${Object.keys(data).join(", ")}`);
     }
-    const byAddress = {};
     for (const p of positions) {
       const addr = p.positionAddress || p.address || p.position;
       if (addr) byAddress[addr] = p;
     }
     return byAddress;
   } catch (e) {
-    log("info", "pnl_api", `Fetch error for pool ${poolAddress.slice(0, 8)}: ${e.message}`);
-    return {};
+    log("info", "pnl_api", `Fetch error for pool ${addrShort(poolAddress)}: ${e.message}`);
+    return byAddress;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-// ─── Get Position PnL (Meteora API) ─────────────────────────────
+/**
+ * Get real-time PnL and position metrics for a single open Meteora DLMM position via Meteora PnL API.
+ * @param {Object} opts - Parameters
+ * @param {string} opts.pool_address - Pool address
+ * @param {string} opts.position_address - Position address
+ * @returns {Promise<Object>} { pnl_usd, pnl_pct, current_value_usd, unclaimed_fee_usd, all_time_fees_usd, fee_per_tvl_24h, in_range, lower_bin, upper_bin, active_bin, age_minutes } or { error }
+ */
 export async function getPositionPnl({ pool_address, position_address }) {
   pool_address = normalizeMint(pool_address);
   position_address = normalizeMint(position_address);
@@ -389,7 +469,15 @@ export async function getPositionPnl({ pool_address, position_address }) {
   }
 }
 
-// ─── Get My Positions ──────────────────────────────────────────
+/**
+ * Get all open Meteora DLMM positions for the configured wallet.
+ * Uses a 5-minute cache by default; pass force=true to bypass.
+ * Syncs open positions with local SQLite state (auto-closes missing positions after grace period).
+ * @param {Object} [opts={}] - Options
+ * @param {boolean} [opts.force=false] - Bypass cache and fetch fresh from Meteora API
+ * @param {boolean} [opts.silent=false] - Suppress verbose logging
+ * @returns {Promise<Object>} { wallet, total_positions, positions: [{ position, pool, pair, base_mint, lower_bin, upper_bin, active_bin, in_range, unclaimed_fees_usd, total_value_usd, pnl_usd, pnl_pct, fee_per_tvl_24h, age_minutes, minutes_out_of_range, instruction }, ...] }
+ */
 export async function getMyPositions({ force = false, silent = false } = {}) {
   if (!force && _positionsCache && Date.now() - _positionsCacheAt < POSITIONS_CACHE_TTL) {
     return _positionsCache;
@@ -399,14 +487,12 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
   let walletAddress;
   try {
     walletAddress = getWallet().publicKey.toString();
-  } catch {
-    return { wallet: null, total_positions: 0, positions: [], error: "Wallet not configured" };
-  }
+  } catch (e) { log("warn", "meteora", `Failed to get positions: ${e?.message}`); return { wallet: null, total_positions: 0, positions: [], error: "Wallet not configured" }; }
 
   _positionsInflight = (async () => { try {
     // Single portfolio API call — returns all positions with full PnL data
     if (!silent) log("info", "positions", "Fetching portfolio via Meteora portfolio API...");
-    const portfolioUrl = `https://dlmm.datapi.meteora.ag/portfolio/open?user=${walletAddress}`;
+    const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
     const res = await fetch(portfolioUrl);
     if (!res.ok) throw new Error(`Portfolio API ${res.status}: ${await res.text().catch(() => "")}`);
     const portfolio = await res.json();
@@ -497,11 +583,15 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
   return _positionsInflight;
 }
 
-// ─── Get Positions for Any Wallet ─────────────────────────────
+/**
+ * Get all DLMM positions for any wallet address (not just the configured one).
+ * Uses program account scan with manual PnL enrichment.
+ * @param {Object} opts - Parameters
+ * @param {string} opts.wallet_address - Wallet public key string
+ * @returns {Promise<Object>} { wallet, total_positions, positions: [{ position, pool, lower_bin, upper_bin, active_bin, in_range, unclaimed_fees_usd, total_value_usd, pnl_usd, pnl_pct, age_minutes }, ...] }
+ */
 export async function getWalletPositions({ wallet_address }) {
   try {
-    const DLMM_PROGRAM = new PublicKey("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
-
     // DLMM Position account layout (LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo):
     //   bytes 0-7   : 8-byte discriminator (Anchor account discriminator)
     //   bytes 8-39  : 32-byte lb_pair (pool) public key
@@ -552,9 +642,15 @@ export async function getWalletPositions({ wallet_address }) {
   }
 }
 
-// ─── Search Pools by Query ─────────────────────────────────────
+/**
+ * Search Meteora DLMM pools by token query string.
+ * @param {Object} opts - Parameters
+ * @param {string} opts.query - Search query (token symbol or pool name)
+ * @param {number} [opts.limit=10] - Maximum number of results
+ * @returns {Promise<Object>} { query, total, pools: [{ pool, name, bin_step, fee_pct, tvl, volume_24h, token_x: { symbol, mint }, token_y: { symbol, mint } }, ...] }
+ */
 export async function searchPools({ query, limit = 10 }) {
-  const url = `https://dlmm.datapi.meteora.ag/pools?query=${encodeURIComponent(query)}`;
+  const url = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/pools?query=${encodeURIComponent(query)}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Pool search API error: ${res.status} ${res.statusText}`);
   const data = await res.json();
@@ -575,10 +671,16 @@ export async function searchPools({ query, limit = 10 }) {
   };
 }
 
-// ─── Claim Fees ────────────────────────────────────────────────
+/**
+ * Claim swap fees for a single open Meteora DLMM position.
+ * @param {Object} opts - Parameters
+ * @param {string} opts.position_address - On-chain position address
+ * @returns {Promise<Object>} { success, position, txs, base_mint, quote_mint } or { success: false, error }
+ */
 export async function claimFees({ position_address }) {
   position_address = normalizeMint(position_address);
   if (process.env.DRY_RUN === "true") {
+    recordClaim(position_address, 0);
     return { dry_run: true, would_claim: position_address, message: "DRY RUN — no transaction sent" };
   }
 
@@ -634,14 +736,23 @@ export async function claimFees({ position_address }) {
   }
 }
 
-// ─── Close Position ────────────────────────────────────────────
+/**
+ * Close a Meteora DLMM position: claim remaining fees, remove liquidity, close the account.
+ * Records performance to lessons.js, auto-swaps base token to SOL if configured,
+ * and sends Telegram notification.
+ * @param {Object} opts - Parameters
+ * @param {string} opts.position_address - On-chain position address
+ * @param {string} [opts.reason] - Human-readable close reason (for learning/audit)
+ * @returns {Promise<Object>} { success, position, pool, claim_txs, close_txs, txs } or { success: false, error }
+ */
 export async function closePosition({ position_address, reason }) {
   position_address = normalizeMint(position_address);
+  const tracked = getTrackedPosition(position_address);
+
   if (process.env.DRY_RUN === "true") {
+    // Dry run — skip on-chain txs and learning DB writes (zero/fake values corrupt lesson generation)
     return { dry_run: true, would_close: position_address, message: "DRY RUN — no transaction sent" };
   }
-
-  const tracked = getTrackedPosition(position_address);
 
   try {
     log("info", "close", `Closing position: ${position_address}`);
@@ -683,11 +794,17 @@ export async function closePosition({ position_address, reason }) {
               const claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
               if (claimedFeesUsd > 0) recordClaim(position_address, claimedFeesUsd);
             }
-          } catch (_) {}
+          } catch (_) { /* best-effort — quote refresh failed */ }
         }
       }
     } catch (e) {
-      log("warn", "close", `Step 1 (Claim) failed or nothing to claim: ${e.message}`);
+      const msg = e.message || String(e);
+      if (msg.includes("nothing to claim") || msg.includes("no fees") || msg.includes("empty")) {
+        log("warn", "close", `Step 1 (Claim): nothing to claim — ${msg}`);
+      } else {
+        log("error", "close", `Step 1 (Claim) failed — ${msg}`);
+        throw e;
+      }
     }
 
     // ─── Step 2: Remove Liquidity & Close ──────────────────────
@@ -736,7 +853,7 @@ export async function closePosition({ position_address, reason }) {
     log("info", "close", `SUCCESS txs: ${txHashes.join(", ")}`);
     // Wait for RPC to reflect withdrawn balances before returning — prevents
     // agent from seeing zero balance when attempting post-close swap
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise(r => setTimeout(r, parseInt(process.env.METEORA_CLOSE_SYNC_WAIT_MS || "5000")));
     _positionsCacheAt = 0;
 
     let closedConfirmed = false;
@@ -752,7 +869,7 @@ export async function closePosition({ position_address, reason }) {
       } catch (e) {
         log("warn", "close", `Close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
       }
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
+      if (attempt < 3) await new Promise((r) => setTimeout(r, parseInt(process.env.METEORA_CLOSE_RETRY_DELAY_MS || "3000")));
     }
 
     if (!closedConfirmed) {
@@ -786,7 +903,7 @@ export async function closePosition({ position_address, reason }) {
       let initialUsd = 0;
       let feesUsd = tracked.total_fees_claimed_usd || 0;
       try {
-        const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
+        const closedUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
         const res = await fetch(closedUrl);
         if (res.ok) {
           const data = await res.json();
@@ -828,7 +945,7 @@ export async function closePosition({ position_address, reason }) {
       await recordPerformance({
         position: position_address,
         pool: poolAddress,
-        pool_name: tracked.pool_name || poolAddress.slice(0, 8),
+        pool_name: tracked.pool_name || addrShort(poolAddress),
         strategy: tracked.strategy,
         bin_range: tracked.bin_range,
         bin_step: tracked.bin_step || null,
