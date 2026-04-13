@@ -1,11 +1,11 @@
 import "dotenv/config";
-import cron from "node-cron";
 import readline from "readline";
 import { agentLoop } from "./agent.js";
 import { log } from "./core/logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./integrations/meteora.js";
 import { getWalletBalances, autoSwapRewardFees, swapAllTokensToSol } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
+import { addrShort } from "./tools/addrShort.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { registerCronRestarter } from "./tools/executor.js";
@@ -23,34 +23,67 @@ import { findStrategiesForPhase } from "./core/lparmy-strategies.js";
 import { checkDailyCircuitBreaker } from "./core/daily-tracker.js";
 import { simulatePoolDeploy } from "./core/simulator.js";
 import { checkTokenCorrelation } from "./core/correlation.js";
+import { startWatchdog } from "./watchdog.js";
+import { caveman, stripThink } from "./tools/caveman.js";
+import { initSentry, captureError } from "./instrument.js";
+
+import {
+  startCronJobs,
+  stopCronJobs,
+  timers,
+  nextRunIn,
+  formatCountdown,
+  _cronTasks,
+  _managementBusy,
+  _screeningBusy,
+  _screeningLastTriggered,
+  runBriefing,
+  maybeRunMissedBriefing,
+} from "./core/scheduler.js";
+
+// Initialize Sentry after config loads
+initSentry();
+
+const IS_DRY_RUN = process.env.DRY_RUN === "true";
 
 log("info", "startup", "DLMM LP Agent starting...");
-log("info", "startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
+log("info", "startup", `Mode: ${IS_DRY_RUN ? "DRY RUN" : "LIVE"}`);
 log("info", "startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
+
+// ─── Health endpoint (process liveness probe) ───
+const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || "3030", 10);
+import http from "http";
+const healthServer = http.createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ok");
+  } else {
+    res.writeHead(404);
+    res.end("not found");
+  }
+});
+healthServer.listen(HEALTH_PORT, () => {
+  log("info", "startup", `Health endpoint listening on port ${HEALTH_PORT}`);
+});
 
 const TP_PCT = config.management.takeProfitFeePct;
 const DEPLOY = config.management.deployAmountSol;
 
-// ═══════════════════════════════════════════
-//  CYCLE TIMERS
-// ═══════════════════════════════════════════
-const timers = {
-  managementLastRun: null,
-  screeningLastRun: null,
-};
-
-function nextRunIn(lastRun, intervalMin) {
-  if (!lastRun) return intervalMin * 60;
-  const elapsed = (Date.now() - lastRun) / 1000;
-  return Math.max(0, intervalMin * 60 - elapsed);
-}
-
-function formatCountdown(seconds) {
-  if (seconds <= 0) return "now";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
+// ─── Magic numbers as named constants ─────────────────────────────────────────
+// (SCREENING_COOLDOWN_MS, PNL_SUSPECT_*, MIN_POSITION_AGE_FOR_YIELD_CHECK_MS, PNL_POLL_INTERVAL_MS moved to scheduler.js)
+// ─── Other constants that index.js still needs ───────────────────────────────
+const PNL_SUSPECT_PCT                = 100;            // flag PnL > 100% as suspect (API bad data)
+const PNL_SUSPECT_USD                = 1;             // minimum USD value for inner suspect check
+const MIN_POSITION_AGE_FOR_YIELD_CHECK_MS = 86_400_000; // 24 h in ms → yields rule applies after 24 min
+const SCREENING_COOLDOWN_MS          = 300_000;       // 5-minute cooldown between screenings
+const TOKEN_SWAP_MIN_BALANCE   = 0.01;             // skip tokens with <$0.01 in wallet
+const MIN_LLM_OUTPUT_LEN       = 5;                // discard LLM output shorter than this
+const MAX_LLM_OUTPUT_DISPLAY   = 2000;             // truncate LLM output in reports beyond this
+const MAX_HTML_MSG_LEN         = 4096;             // Telegram message length cap
+const MAX_TELEGRAM_QUEUE       = 5;                // max queued Telegram messages while busy
+const MIN_DEPLOY_AMOUNT_SOL   = config.management.deployAmountSol;
+const GAS_RESERVE_SOL         = config.management.gasReserve;
+const MIN_SOL_TO_OPEN         = config.management.minSolToOpen;
 
 function buildPrompt() {
   const mgmt = formatCountdown(nextRunIn(timers.managementLastRun, config.schedule.managementIntervalMin));
@@ -59,19 +92,11 @@ function buildPrompt() {
 }
 
 // ═══════════════════════════════════════════
-//  CRON DEFINITIONS
+//  PROMPT BUILDING (used by REPL)
 // ═══════════════════════════════════════════
-let _cronTasks = [];
-let _managementBusy = false; // prevents overlapping management cycles
-let _screeningBusy = false;  // prevents overlapping screening cycles
-let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
-let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
 
 /** Strip <think>...</think> reasoning blocks that some models leak into output */
-function stripThink(text) {
-  if (!text) return text;
-  return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-}
+// stripThink is now imported from ./tools/caveman.js (robust version)
 
 function escapeHTML(text) {
   if (!text) return text;
@@ -83,42 +108,149 @@ function escapeHTML(text) {
     .replace(/'/g, "&#039;");
 }
 
-async function runBriefing() {
-  log("info", "cron", "Starting morning briefing");
-  try {
-    const briefing = await generateBriefing();
-    if (telegramEnabled()) {
-      await sendHTML(briefing);
+// ─── Deterministic rule engine ─────────────────────────────────────────────
+
+/**
+ * Compute management actions for all positions using deterministic rules.
+ * Returns a Map of position_address → { action, rule?, reason? }
+ * action: "CLOSE" | "CLAIM" | "STAY" | "INSTRUCTION"
+ */
+function computeManagementActions(positionData, exitMap, config, getTrackedPosition) {
+  const actionMap = new Map();
+  for (const p of positionData) {
+    // Hard exit — highest priority
+    if (exitMap.has(p.position)) {
+      actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
+      continue;
     }
-    setLastBriefingDate();
-  } catch (error) {
-    log("error", "cron", `Morning briefing failed: ${error.message}`);
+    // Instruction-set — pass to LLM, can't parse in JS
+    if (p.instruction) {
+      actionMap.set(p.position, { action: "INSTRUCTION" });
+      continue;
+    }
+
+    // Sanity-check PnL against tracked history — API sometimes returns bad data
+    const tracked = getTrackedPosition(p.position);
+    const pnlSuspect = (() => {
+      if (p.pnl_pct == null) return false;
+      if (p.pnl_pct > PNL_SUSPECT_PCT) return false;
+      if (tracked?.amount_sol && (p.total_value_usd ?? 0) > PNL_SUSPECT_USD) {
+        const prev = tracked.prev_pnl_pct;
+        if (prev == null || prev > PNL_SUSPECT_PCT) {
+          log("warn", "cron", `Suspect PnL for ${p.pair}: was ${prev ?? "?"}% → now ${p.pnl_pct}% (pos still has value) — skipping PnL rules`);
+          return true;
+        }
+      }
+      return false;
+    })();
+
+    // Rule 1: stop loss
+    if (!pnlSuspect && p.pnl_pct != null && p.pnl_pct <= config.management.stopLossPct) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 1, reason: "stop loss" });
+      continue;
+    }
+    // Rule 2: take profit
+    if (!pnlSuspect && p.pnl_pct != null && p.pnl_pct >= config.management.takeProfitFeePct) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 2, reason: "take profit" });
+      continue;
+    }
+    // Rule 3: pumped far above range
+    if (p.active_bin != null && p.upper_bin != null &&
+        p.active_bin > p.upper_bin + config.management.outOfRangeBinsToClose) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 3, reason: "pumped far above range" });
+      continue;
+    }
+    // Rule 4: stale above range
+    if (p.active_bin != null && p.upper_bin != null &&
+        p.active_bin > p.upper_bin &&
+        (p.minutes_out_of_range ?? 0) >= config.management.outOfRangeWaitMinutes) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 4, reason: "OOR" });
+      continue;
+    }
+    // Rule 5: fee yield too low
+    if (p.fee_per_tvl_24h != null &&
+        p.fee_per_tvl_24h < config.management.minFeePerTvl24h &&
+        (p.age_minutes ?? 0) >= MIN_POSITION_AGE_FOR_YIELD_CHECK_MS / 60_000) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 5, reason: "low yield" });
+      continue;
+    }
+    // Claim rule
+    if ((p.unclaimed_fees_usd ?? 0) >= config.management.minClaimAmount) {
+      actionMap.set(p.position, { action: "CLAIM" });
+      continue;
+    }
+    actionMap.set(p.position, { action: "STAY" });
   }
+  return actionMap;
 }
 
 /**
- * If the agent restarted after the 1:00 AM UTC cron window,
- * fire the briefing immediately on startup so it's never skipped.
+ * Build the markdown management report string.
  */
-async function maybeRunMissedBriefing() {
-  const todayUtc = new Date().toISOString().slice(0, 10);
-  const lastSent = getLastBriefingDate();
+function buildManagementReport(positionData, actionMap, positions, config) {
+  const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
+  const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
+  const cur = config.management.solMode ? "◎" : "$";
 
-  if (lastSent === todayUtc) return; // already sent today
+  let table = "ID  Pair        PnL     Yield   Status\n";
+  table += "──  ──────────  ──────  ──────  ──────\n";
 
-  // Only fire if it's past the scheduled time (1:00 AM UTC)
-  const nowUtc = new Date();
-  const briefingHourUtc = 1;
-  if (nowUtc.getUTCHours() < briefingHourUtc) return; // too early, cron will handle it
+  const reportLines = positionData.map((p, i) => {
+    const act = actionMap.get(p.position);
+    const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.slice(0, 6).padEnd(6);
+    const yield_pct = `${p.fee_per_tvl_24h ?? "?"}%`.slice(0, 6).padEnd(6);
+    const statusIcon = p.in_range ? "🟢" : "🔴";
+    const statusLabel = act.action === "INSTRUCTION" ? "HOLD" : act.action;
 
-  log("info", "cron", `Missed briefing detected (last sent: ${lastSent || "never"}) — sending now`);
-  await runBriefing();
+    table += `${String(i + 1).padEnd(2)}  ${p.pair.slice(0, 10).padEnd(10)}  ${pnl}  ${yield_pct}  ${statusIcon}${statusLabel}\n`;
+
+    let detail = "";
+    if (p.instruction) detail += `\nNote: "${p.instruction}"`;
+    if (act.action === "CLOSE" && act.rule === "exit") detail += `\n⚡ Trailing TP: ${act.reason}`;
+    if (act.action === "CLOSE" && act.rule && act.rule !== "exit") detail += `\nRule ${act.rule}: ${act.reason}`;
+    if (act.action === "CLAIM") detail += `\n→ Claiming fees`;
+    return detail ? `*${p.pair}*:${detail}` : null;
+  }).filter(Boolean);
+
+  const needsAction = [...actionMap.values()].filter(a => a.action !== "STAY");
+  const actionSummary = needsAction.length > 0
+    ? needsAction.map(a => a.action === "INSTRUCTION" ? "EVAL instruction" : `${a.action}${a.reason ? ` (${a.reason})` : ""}`).join(", ")
+    : "no action";
+
+  return `\`\`\`\n${table}\`\`\`\n` +
+    (reportLines.length > 0 ? reportLines.join("\n\n") + "\n\n" : "") +
+    `Summary: 💼 ${positions.length} pos | ${cur}${totalValue.toFixed(2)} | fees: ${cur}${totalUnclaimed.toFixed(2)} | ${actionSummary}`;
 }
 
-function stopCronJobs() {
-  for (const task of _cronTasks) task.stop();
-  if (_cronTasks._pnlPollInterval) clearInterval(_cronTasks._pnlPollInterval);
-  _cronTasks = [];
+/**
+ * Post-trade: auto-swap reward tokens to SOL and push notifications.
+ */
+async function autoSwapAndNotify(executedActions) {
+  if (executedActions.length === 0) return;
+  log("info", "post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
+  const swapResult = await autoSwapRewardFees();
+  if (swapResult.swapped && swapResult.swapped.length > 0) {
+    log("info", "post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
+    for (const swap of swapResult.swapped) {
+      if (swap.success) {
+        pushNotification({
+          type: "swap",
+          from: addrShort(swap.input_mint) || "FEE",
+          to: "SOL",
+          amountIn: swap.amount_in,
+          amountOut: swap.amount_out,
+          tx: swap.tx,
+        });
+      } else {
+        log("warn", "post_trade", `Swap failed: ${swap.error}`);
+        pushNotification({
+          type: "swap_failed",
+          from: addrShort(swap.input_mint) || "FEE",
+          error: swap.error || "unknown",
+        });
+      }
+    }
+  }
 }
 
 export async function runManagementCycle({ silent = false } = {}) {
@@ -128,7 +260,6 @@ export async function runManagementCycle({ silent = false } = {}) {
   log("info", "cron", "Starting management cycle");
   let mgmtReport = null;
   let positions = [];
-  const screeningCooldownMs = 5 * 60 * 1000;
 
   try {
     // Daily PnL circuit breaker
@@ -140,7 +271,7 @@ export async function runManagementCycle({ silent = false } = {}) {
     }
 
     const [livePositions, currentBalance] = await Promise.all([
-      getMyPositions({ force: true }).catch(() => null),
+      getMyPositions({ force: true }).catch(e => { log("warn", "cron", `getMyPositions failed: ${e?.message ?? e}`); return null; }),
       getWalletBalances(),
     ]);
     positions = livePositions?.positions || [];
@@ -167,106 +298,12 @@ export async function runManagementCycle({ silent = false } = {}) {
       }
     }
 
-    // ── Deterministic rule checks (no LLM) ──────────────────────────
-    // action: CLOSE | CLAIM | STAY | INSTRUCTION (needs LLM)
-    const actionMap = new Map();
-    for (const p of positionData) {
-      // Hard exit — highest priority
-      if (exitMap.has(p.position)) {
-        actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
-        continue;
-      }
-      // Instruction-set — pass to LLM, can't parse in JS
-      if (p.instruction) {
-        actionMap.set(p.position, { action: "INSTRUCTION" });
-        continue;
-      }
-
-      // Sanity-check PnL against tracked initial deposit — API sometimes returns bad data
-      // giving -99% PnL which would incorrectly trigger stop loss
-      const tracked = getTrackedPosition(p.position);
-      const pnlSuspect = (() => {
-        if (p.pnl_pct == null) return false;
-        if (p.pnl_pct > -90) return false; // only flag extreme negatives
-        // Cross-check: if we have a tracked deposit and current value isn't near zero, it's bad data
-        if (tracked?.amount_sol && (p.total_value_usd ?? 0) > 0.01) {
-          log("warn", "cron", `Suspect PnL for ${p.pair}: ${p.pnl_pct}% but position still has value — skipping PnL rules`);
-          return true;
-        }
-        return false;
-      })();
-
-      // Rule 1: stop loss
-      if (!pnlSuspect && p.pnl_pct != null && p.pnl_pct <= config.management.stopLossPct) {
-        actionMap.set(p.position, { action: "CLOSE", rule: 1, reason: "stop loss" });
-        continue;
-      }
-      // Rule 2: take profit
-      if (!pnlSuspect && p.pnl_pct != null && p.pnl_pct >= config.management.takeProfitFeePct) {
-        actionMap.set(p.position, { action: "CLOSE", rule: 2, reason: "take profit" });
-        continue;
-      }
-      // Rule 3: pumped far above range
-      if (p.active_bin != null && p.upper_bin != null &&
-          p.active_bin > p.upper_bin + config.management.outOfRangeBinsToClose) {
-        actionMap.set(p.position, { action: "CLOSE", rule: 3, reason: "pumped far above range" });
-        continue;
-      }
-      // Rule 4: stale above range
-      if (p.active_bin != null && p.upper_bin != null &&
-          p.active_bin > p.upper_bin &&
-          (p.minutes_out_of_range ?? 0) >= config.management.outOfRangeWaitMinutes) {
-        actionMap.set(p.position, { action: "CLOSE", rule: 4, reason: "OOR" });
-        continue;
-      }
-      // Rule 5: fee yield too low
-      if (p.fee_per_tvl_24h != null &&
-          p.fee_per_tvl_24h < config.management.minFeePerTvl24h &&
-          (p.age_minutes ?? 0) >= 60) {
-        actionMap.set(p.position, { action: "CLOSE", rule: 5, reason: "low yield" });
-        continue;
-      }
-      // Claim rule
-      if ((p.unclaimed_fees_usd ?? 0) >= config.management.minClaimAmount) {
-        actionMap.set(p.position, { action: "CLAIM" });
-        continue;
-      }
-      actionMap.set(p.position, { action: "STAY" });
-    }
+    // ── Deterministic rule engine ─────────────────────────────────────
+    const actionMap = computeManagementActions(positionData, exitMap, config, getTrackedPosition);
 
     // ── Build JS report ──────────────────────────────────────────────
-    const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
-    const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
-    const cur = config.management.solMode ? "◎" : "$";
-
-    let table = "ID  Pair        PnL     Yield   Status\n";
-    table += "──  ──────────  ──────  ──────  ──────\n";
-
-    const reportLines = positionData.map((p, i) => {
-      const act = actionMap.get(p.position);
-      const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.slice(0, 6).padEnd(6);
-      const yield_pct = `${p.fee_per_tvl_24h ?? "?"}%`.slice(0, 6).padEnd(6);
-      const statusIcon = p.in_range ? "🟢" : "🔴";
-      const statusLabel = act.action === "INSTRUCTION" ? "HOLD" : act.action;
-      
-      table += `${String(i + 1).padEnd(2)}  ${p.pair.slice(0, 10).padEnd(10)}  ${pnl}  ${yield_pct}  ${statusIcon}${statusLabel}\n`;
-      
-      let detail = "";
-      if (p.instruction) detail += `\nNote: "${p.instruction}"`;
-      if (act.action === "CLOSE" && act.rule === "exit") detail += `\n⚡ Trailing TP: ${act.reason}`;
-      if (act.action === "CLOSE" && act.rule && act.rule !== "exit") detail += `\nRule ${act.rule}: ${act.reason}`;
-      if (act.action === "CLAIM") detail += `\n→ Claiming fees`;
-      return detail ? `*${p.pair}*:${detail}` : null;
-    }).filter(Boolean);
-
     const needsAction = [...actionMap.values()].filter(a => a.action !== "STAY");
-    const actionSummary = needsAction.length > 0
-      ? needsAction.map(a => a.action === "INSTRUCTION" ? "EVAL instruction" : `${a.action}${a.reason ? ` (${a.reason})` : ""}`).join(", ")
-      : "no action";
-
-    mgmtReport = `\`\`\`\n${table}\`\`\`\n` +
-      (reportLines.length > 0 ? reportLines.join("\n\n") + "\n\n" : "") +
-      `Summary: 💼 ${positions.length} pos | ${cur}${totalValue.toFixed(2)} | fees: ${cur}${totalUnclaimed.toFixed(2)} | ${actionSummary}`;
+    mgmtReport = buildManagementReport(positionData, actionMap, positions, config);
 
     // ── Call LLM only if action needed ──────────────────────────────
     const actionPositions = positionData.filter(p => {
@@ -277,6 +314,7 @@ export async function runManagementCycle({ silent = false } = {}) {
     if (actionPositions.length > 0) {
       log("info", "cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
 
+      const cur = config.management.solMode ? "◎" : "$";
       const actionBlocks = actionPositions.map((p) => {
         const act = actionMap.get(p.position);
         return [
@@ -313,33 +351,7 @@ After executing, write a brief one-line result per position.
         const a = actionMap.get(p.position);
         return a?.action === "CLAIM" || a?.action === "CLOSE";
       });
-
-      if (executedActions.length > 0) {
-        log("info", "post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
-        const swapResult = await autoSwapRewardFees();
-        if (swapResult.swapped && swapResult.swapped.length > 0) {
-          log("info", "post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
-          for (const swap of swapResult.swapped) {
-            if (swap.success) {
-              pushNotification({
-                type: "swap",
-                from: swap.input_mint?.slice(0, 8) || "FEE",
-                to: "SOL",
-                amountIn: swap.amount_in,
-                amountOut: swap.amount_out,
-                tx: swap.tx,
-              });
-            } else {
-              log("warn", "post_trade", `Swap failed: ${swap.error}`);
-              pushNotification({
-                type: "swap_failed",
-                from: swap.input_mint?.slice(0, 8) || "FEE",
-                error: swap.error || "unknown",
-              });
-            }
-          }
-        }
-      }
+      await autoSwapAndNotify(executedActions);
     } else {
       log("info", "cron", "Management: all positions STAY — skipping LLM");
     }
@@ -348,7 +360,7 @@ After executing, write a brief one-line result per position.
     // Skip if circuit breaker is in halt mode
     const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
     const afterCount = Math.max(0, positions.length - closesAttempted);
-    if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > screeningCooldownMs && circuit.action !== "halt") {
+    if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > SCREENING_COOLDOWN_MS && circuit.action !== "halt") {
       log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
       runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
     }
@@ -381,6 +393,7 @@ After executing, write a brief one-line result per position.
         buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions }).catch(() => {});
       }
     }
+    drainTelegramQueue().catch(() => {});
   }
   return mgmtReport;
 }
@@ -456,8 +469,8 @@ function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions })
   // LLM report snippet (management cycle output, truncated)
   if (mgmtReport) {
     const cleaned = stripThink(mgmtReport);
-    if (cleaned && cleaned.length > 5) {
-      const maxLen = 2000;
+    if (cleaned && cleaned.length > MIN_LLM_OUTPUT_LEN) {
+      const maxLen = MAX_LLM_OUTPUT_DISPLAY;
       const text = cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
       parts.push(`\n\n<pre>${escapeHTML(text)}</pre>`);
     }
@@ -470,9 +483,121 @@ function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions })
   }
 
   const html = parts.join("\n");
-  if (html && html.length < 4096) {
+  if (html && html.length < MAX_HTML_MSG_LEN) {
     sendHTML(html).catch(() => {});
   }
+}
+
+// ─── Screening helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Reconstitute candidates with smart-wallet data, narrative, token info,
+ * pool memory, market phase, and token score.
+ */
+async function fetchAndReconCandidates(candidates) {
+  return Promise.all(candidates.map(async (pool, idx) => {
+    await new Promise(r => setTimeout(r, idx * 100)); // stagger to avoid 429s
+    const mint = pool.base?.mint;
+    const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
+      checkSmartWalletsOnPool({ pool_address: pool.pool }),
+      mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
+      mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
+    ]);
+    return {
+      pool,
+      sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
+      n: narrative.status === "fulfilled" ? narrative.value : null,
+      ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
+      mem: recallForPool(pool.pool),
+      phase: detectMarketPhase(pool),
+      score: computeTokenScore(pool, tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null),
+    };
+  }));
+}
+
+/**
+ * Apply hard filters: launchpad blocklist, bot-holder %, toxic tokens,
+ * and cross-portfolio token correlation.
+ */
+function applyHardFilters(allCandidates, config, prePositions) {
+  return allCandidates.filter(({ pool, ti }) => {
+    const launchpad = ti?.launchpad ?? null;
+    if (launchpad && config.screening.blockedLaunchpads.includes(launchpad)) {
+      log("info", "screening", `Skipping ${pool.name} — blocked launchpad (${launchpad})`);
+      return false;
+    }
+    const botPct = ti?.audit?.bot_holders_pct;
+    const maxBotHoldersPct = config.screening.maxBotHoldersPct;
+    if (botPct != null && maxBotHoldersPct != null && botPct > maxBotHoldersPct) {
+      log("info", "screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
+      return false;
+    }
+    const baseMint = pool.base?.mint;
+    if (baseMint && isTokenToxic(baseMint)) {
+      log("info", "screening", `Toxic token filter: dropped ${pool.name} — base token has >66% loss rate across 3+ deploys`);
+      return false;
+    }
+    if (baseMint) {
+      const corr = checkTokenCorrelation(prePositions.positions || [], baseMint);
+      if (corr.exceeds) {
+        log("info", "screening", `Correlation filter: dropped ${pool.name} — already ${corr.count} position(s) on token`);
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+/**
+ * Build compact text blocks for each candidate, for injection into the LLM prompt.
+ */
+function buildCandidateBlocks(passing, activeBinResults, simulations) {
+  return passing.map(({ pool, sw, n, ti, mem, phase, score }, i) => {
+    const botPct = ti?.audit?.bot_holders_pct ?? "?";
+    const top10Pct = ti?.audit?.top_holders_pct ?? "?";
+    const feesSol = ti?.global_fees_sol ?? "?";
+    const launchpad = ti?.launchpad ?? null;
+    const priceChange = ti?.stats_1h?.price_change;
+    const netBuyers = ti?.stats_1h?.net_buyers;
+    const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
+    const sim = simulations[i];
+
+    const okxParts = [
+      pool.risk_level     != null ? `risk=${pool.risk_level}`               : null,
+      pool.bundle_pct     != null ? `bundle=${pool.bundle_pct}%`            : null,
+      pool.sniper_pct     != null ? `sniper=${pool.sniper_pct}%`            : null,
+      pool.suspicious_pct != null ? `suspicious=${pool.suspicious_pct}%`    : null,
+      pool.new_wallet_pct != null ? `new_wallets=${pool.new_wallet_pct}%`   : null,
+      pool.is_rugpull != null ? `rugpull=${pool.is_rugpull ? "YES" : "NO"}` : null,
+      pool.is_wash != null ? `wash=${pool.is_wash ? "YES" : "NO"}` : null,
+    ].filter(Boolean).join(", ");
+
+    const okxTags = [
+      pool.smart_money_buy    ? "smart_money_buy"    : null,
+      pool.kol_in_clusters    ? "kol_in_clusters"    : null,
+      pool.dex_boost          ? "dex_boost"          : null,
+      pool.dex_screener_paid  ? "dex_screener_paid"  : null,
+      pool.dev_sold_all       ? "dev_sold_all(bullish)" : null,
+    ].filter(Boolean).join(", ");
+
+    const block = [
+      `POOL: ${pool.name} (${pool.pool})`,
+      `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, volatility=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
+      `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
+      okxParts ? `  okx: ${okxParts}` : null,
+      okxTags  ? `  tags: ${okxTags}` : null,
+      pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
+      `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
+      `  market_phase: ${phase} | token_score: ${score.score}/${score.max} (${score.label})`,
+      activeBin != null ? `  active_bin: ${activeBin}` : null,
+      `  sim: daily_fees=$${sim.daily_fees_usd} | est_IL=$${sim.expected_il_usd} | net_daily=$${sim.net_daily_usd} | risk=${sim.risk_score}/100 | confidence=${sim.confidence}/100 | passes=${sim.passes ? "YES" : "NO"}`,
+      priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
+      n?.narrative ? `  narrative: ${n.narrative.slice(0, 500)}` : `  narrative: none`,
+      mem ? `  memory: ${mem}` : null,
+    ].filter(Boolean).join("\n");
+
+    return block;
+  });
 }
 
 export async function runScreeningCycle({ silent = false } = {}) {
@@ -493,12 +618,12 @@ export async function runScreeningCycle({ silent = false } = {}) {
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
-    if (preBalance.sol < minRequired && process.env.DRY_RUN !== "true") {
+    if (preBalance.sol < minRequired && !IS_DRY_RUN) {
       log("info", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
       _screeningBusy = false;
       return null;
     }
-    if (preBalance.sol < minRequired && process.env.DRY_RUN === "true") {
+    if (preBalance.sol < minRequired && IS_DRY_RUN) {
       log("info", "cron", `DRY RUN — bypassing SOL check (${preBalance.sol.toFixed(3)} SOL, would need ${minRequired})`);
     }
   } catch (e) {
@@ -537,57 +662,13 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const activeStrategy = getActiveStrategy();
 
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
-    const topCandidates = await getTopCandidates({ limit: 10 }).catch(() => null);
+    const topCandidates = await getTopCandidates({ limit: 10 }).catch(e => { log("warn", "screening", `getTopCandidates failed: ${e?.message ?? e}`); return null; });
     const candidates = (topCandidates?.candidates || topCandidates?.pools || []).slice(0, 10);
 
-    const allCandidates = await Promise.all(candidates.map(async (pool, idx) => {
-      await new Promise(r => setTimeout(r, idx * 100)); // staggered parallel execution
-      const mint = pool.base?.mint;
-      const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
-        checkSmartWalletsOnPool({ pool_address: pool.pool }),
-        mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
-        mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
-      ]);
-      return {
-        pool,
-        sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
-        n: narrative.status === "fulfilled" ? narrative.value : null,
-        ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
-        mem: recallForPool(pool.pool),
-        phase: detectMarketPhase(pool),
-        score: computeTokenScore(pool, tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null),
-      };
-    }));
+    const allCandidates = await fetchAndReconCandidates(candidates);
 
     // Hard filters after token recon — block launchpads, excessive bots, and toxic tokens
-    const passing = allCandidates.filter(({ pool, ti }) => {
-      const launchpad = ti?.launchpad ?? null;
-      if (launchpad && config.screening.blockedLaunchpads.includes(launchpad)) {
-        log("info", "screening", `Skipping ${pool.name} — blocked launchpad (${launchpad})`);
-        return false;
-      }
-      const botPct = ti?.audit?.bot_holders_pct;
-      const maxBotHoldersPct = config.screening.maxBotHoldersPct;
-      if (botPct != null && maxBotHoldersPct != null && botPct > maxBotHoldersPct) {
-        log("info", "screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
-        return false;
-      }
-      // Token toxicity check — skip tokens that consistently lose across pools
-      const baseMint = pool.base?.mint;
-      if (baseMint && isTokenToxic(baseMint)) {
-        log("info", "screening", `Toxic token filter: dropped ${pool.name} — base token has >66% loss rate across 3+ deploys`);
-        return false;
-      }
-      // Cross-portfolio correlation: skip tokens with existing exposure
-      if (baseMint) {
-        const corr = checkTokenCorrelation(prePositions.positions || [], baseMint);
-        if (corr.exceeds) {
-          log("info", "screening", `Correlation filter: dropped ${pool.name} — already ${corr.count} position(s) on token`);
-          return false;
-        }
-      }
-      return true;
-    });
+    const passing = applyHardFilters(allCandidates, config, prePositions);
 
     if (passing.length === 0) {
       screenReport = `No candidates available (all blocked by launchpad filter).`;
@@ -617,53 +698,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const simulations = passing.map(({ pool }) => simulatePoolDeploy(pool, deployAmount, preBalance.usd ?? 0));
 
     // Build compact candidate blocks
-    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem, phase, score }, i) => {
-      const botPct = ti?.audit?.bot_holders_pct ?? "?";
-      const top10Pct = ti?.audit?.top_holders_pct ?? "?";
-      const feesSol = ti?.global_fees_sol ?? "?";
-      const launchpad = ti?.launchpad ?? null;
-      const priceChange = ti?.stats_1h?.price_change;
-      const netBuyers = ti?.stats_1h?.net_buyers;
-      const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
-      const sim = simulations[i];
-
-      // OKX signals
-      const okxParts = [
-        pool.risk_level     != null ? `risk=${pool.risk_level}`               : null,
-        pool.bundle_pct     != null ? `bundle=${pool.bundle_pct}%`            : null,
-        pool.sniper_pct     != null ? `sniper=${pool.sniper_pct}%`            : null,
-        pool.suspicious_pct != null ? `suspicious=${pool.suspicious_pct}%`    : null,
-        pool.new_wallet_pct != null ? `new_wallets=${pool.new_wallet_pct}%`   : null,
-        pool.is_rugpull != null ? `rugpull=${pool.is_rugpull ? "YES" : "NO"}` : null,
-        pool.is_wash != null ? `wash=${pool.is_wash ? "YES" : "NO"}` : null,
-      ].filter(Boolean).join(", ");
-
-      const okxTags = [
-        pool.smart_money_buy    ? "smart_money_buy"    : null,
-        pool.kol_in_clusters    ? "kol_in_clusters"    : null,
-        pool.dex_boost          ? "dex_boost"          : null,
-        pool.dex_screener_paid  ? "dex_screener_paid"  : null,
-        pool.dev_sold_all       ? "dev_sold_all(bullish)" : null,
-      ].filter(Boolean).join(", ");
-
-      const block = [
-        `POOL: ${pool.name} (${pool.pool})`,
-        `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, volatility=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
-        `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
-        okxParts ? `  okx: ${okxParts}` : null,
-        okxTags  ? `  tags: ${okxTags}` : null,
-        pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
-        `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
-        `  market_phase: ${phase} | token_score: ${score.score}/${score.max} (${score.label})`,
-        activeBin != null ? `  active_bin: ${activeBin}` : null,
-        `  sim: daily_fees=$${sim.daily_fees_usd} | est_IL=$${sim.expected_il_usd} | net_daily=$${sim.net_daily_usd} | risk=${sim.risk_score}/100 | confidence=${sim.confidence}/100 | passes=${sim.passes ? "YES" : "NO"}`,
-        priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
-        n?.narrative ? `  narrative: ${n.narrative.slice(0, 500)}` : `  narrative: none`,
-        mem ? `  memory: ${mem}` : null,
-      ].filter(Boolean).join("\n");
-
-      return block;
-    });
+    const candidateBlocks = buildCandidateBlocks(passing, activeBinResults, simulations);
 
     // Build mode flag for prompt
     const modeNote = !canDeploy
@@ -690,7 +725,7 @@ STEPS:
 1. Review each candidate's simulation results (sim: line). Prefer pools with passes=YES, low risk_score, and high confidence.
 2. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and simulation output.
 3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
-   bins_below = round(35 + (volatility/5)*55) clamped to [35,90].
+   bins_below = round(35 + (volatility/5)*34) clamped to [35,69].
 4. Report in this exact format (no tables, no extra sections):
     *Decision:* DEPLOYED PAIR
     *pool:* <name> | <pool address>
@@ -722,65 +757,9 @@ STEPS:
         sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${escapeHTML(stripThink(screenReport))}</pre>`).catch(() => { });
       }
     }
+    drainTelegramQueue().catch(() => {});
   }
   return screenReport;
-}
-
-export function startCronJobs() {
-  stopCronJobs(); // stop any running tasks before (re)starting
-
-  const mgmtTask = cron.schedule(`*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`, async () => {
-    if (_managementBusy) return;
-    timers.managementLastRun = Date.now();
-    await runManagementCycle();
-  });
-
-  const screenTask = cron.schedule(`*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`, runScreeningCycle);
-
-
-
-  // Morning Briefing at 8:00 AM UTC+7 (1:00 AM UTC)
-  const briefingTask = cron.schedule(`0 1 * * *`, async () => {
-    await runBriefing();
-  }, { timezone: 'UTC' });
-
-  // Every 6h — catch up if briefing was missed (agent restart, crash, etc.)
-  const briefingWatchdog = cron.schedule(`0 */6 * * *`, async () => {
-    await maybeRunMissedBriefing();
-  }, { timezone: 'UTC' });
-
-  // Lightweight 30s PnL poller — updates trailing TP state between management cycles, no LLM
-  let _pnlPollBusy = false;
-  const pnlPollInterval = setInterval(async () => {
-    if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
-    _pnlPollBusy = true;
-    try {
-      const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
-      if (!result?.positions?.length) return;
-      for (const p of result.positions) {
-        const exit = updatePnlAndCheckExits(p.position, p, config.management);
-        if (exit) {
-          const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
-          const sinceLastTrigger = Date.now() - _pollTriggeredAt;
-          if (sinceLastTrigger >= cooldownMs) {
-            _pollTriggeredAt = Date.now();
-            log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
-            runManagementCycle({ silent: true }).catch((e) => log("error", "cron", `Poll-triggered management failed: ${e.message}`));
-          } else {
-            log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
-          }
-          break;
-        }
-      }
-    } finally {
-      _pnlPollBusy = false;
-    }
-  }, 30_000);
-
-  _cronTasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
-  // Store interval ref so stopCronJobs can clear it
-  _cronTasks._pnlPollInterval = pnlPollInterval;
-  log("info", "cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
 }
 
 // ═══════════════════════════════════════════
@@ -788,7 +767,10 @@ export function startCronJobs() {
 // ═══════════════════════════════════════════
 async function shutdown(signal) {
   log("info", "shutdown", `Received ${signal}. Shutting down...`);
+  clearInterval(_promptRefreshInterval);
+  stopCronJobs();
   stopPolling();
+  healthServer.close();
   const positions = await getMyPositions();
   log("info", "shutdown", `Open positions at shutdown: ${positions.total_positions}`);
   process.exit(0);
@@ -849,7 +831,7 @@ if (isTTY) {
   });
 
   // Update prompt countdown every 10 seconds
-  setInterval(() => {
+  _promptRefreshInterval = setInterval(() => {
     if (!busy) {
       rl.setPrompt(buildPrompt());
       rl.prompt(true); // true = preserve current line
@@ -863,6 +845,7 @@ if (isTTY) {
       timers.managementLastRun = Date.now();
       timers.screeningLastRun = Date.now();
       startCronJobs();
+      startWatchdog(config).catch(e => log("error", "startup", `Watchdog failed to start: ${e.message}`));
       console.log("Autonomous cycles are now running.\n");
       rl.setPrompt(buildPrompt());
       rl.prompt(true);
@@ -914,6 +897,7 @@ if (isTTY) {
     console.log(formatCandidates(candidates));
 
   } catch (e) {
+    captureError(e, { phase: "startup" });
     console.error(`Startup fetch failed: ${e.message}`);
   } finally {
     busy = false;
@@ -931,13 +915,93 @@ if (isTTY) {
     }
   }
 
+  // ─── /teach subcommand handler (extracted for readability) ───────────────────
+  async function handleTeachCommand(sub, { sendHTML, escapeHTML }) {
+    const { pinLesson, unpinLesson, rateLesson, getLearningStats, listLessons } = await import("./core/lessons.js");
+
+    const pinMatch = sub.match(/^pin\s+(.+)$/i);
+    if (pinMatch) {
+      const result = pinLesson(pinMatch[1].trim());
+      if (result.found) {
+        await sendHTML(`📌 Lesson pinned:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
+      } else {
+        await sendHTML(`Lesson <code>${escapeHTML(pinMatch[1])}</code> not found.`);
+      }
+      return;
+    }
+
+    const unpinMatch = sub.match(/^unpin\s+(.+)$/i);
+    if (unpinMatch) {
+      const result = unpinLesson(unpinMatch[1].trim());
+      if (result.found) {
+        await sendHTML(`Lesson unpinned:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
+      } else {
+        await sendHTML(`Lesson <code>${escapeHTML(unpinMatch[1])}</code> not found.`);
+      }
+      return;
+    }
+
+    const rateMatch = sub.match(/^rate\s+(\S+)\s+(useful|useless)$/i);
+    if (rateMatch) {
+      const result = rateLesson(rateMatch[1], rateMatch[2].toLowerCase());
+      if (result.error) {
+        await sendHTML(`<code>${escapeHTML(result.error)}</code>`);
+      } else if (result.found) {
+        const icon = result.rating === "useful" ? "👍" : "👎";
+        await sendHTML(`${icon} Lesson rated as <b>${result.rating}</b>:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
+      } else {
+        await sendHTML(`Lesson <code>${escapeHTML(rateMatch[1])}</code> not found.`);
+      }
+      return;
+    }
+
+    if (/^stats$/i.test(sub)) {
+      const stats = getLearningStats();
+      let msg = `<b>Learning System Status</b>\n\n`;
+      msg += `Closed positions: <b>${stats.performance_records}</b>\n`;
+      msg += `Near-miss records: <b>${stats.near_misses}</b>\n`;
+      msg += `Total lessons: <b>${stats.total_lessons}</b>\n`;
+      msg += `Archived records: <b>${stats.archived_records}</b>\n`;
+      if (stats.overall_win_rate != null) msg += `\nWin rate: <b>${stats.overall_win_rate}%</b>\n`;
+      if (stats.total_pnl_usd != null) msg += `Total PnL: <b>$${stats.total_pnl_usd}</b>\n`;
+      if (stats.avg_pnl_pct != null) msg += `Avg PnL: <b>${stats.avg_pnl_pct}%</b>\n`;
+      if (stats.near_miss_avg_pnl_pct != null) msg += `Near-miss avg PnL: <b>${stats.near_miss_avg_pnl_pct}%</b>\n`;
+      msg += `\nPinned: ${stats.pinned_lessons} | Useful: ${stats.rated_useful} | Useless: ${stats.rated_useless}\n`;
+      msg += `Evolution cycles: ${stats.evolution_cycles}\n`;
+      if (stats.current_thresholds && Object.keys(stats.current_thresholds).length > 0) {
+        msg += `\n<b>Current thresholds:</b>\n`;
+        msg += `maxBinStep: ${stats.current_thresholds.maxBinStep}\n`;
+        msg += `minFeeActiveTvlRatio: ${stats.current_thresholds.minFeeActiveTvlRatio}\n`;
+        msg += `minOrganic: ${stats.current_thresholds.minOrganic}`;
+      }
+      await sendHTML(msg);
+      return;
+    }
+
+    if (/^list/i.test(sub)) {
+      const roleArg = sub.split(/\s+/)[1]?.toUpperCase() || null;
+      const result = listLessons({ role: roleArg, limit: 15 });
+      if (result.total === 0) { await sendHTML("No lessons found."); return; }
+      let msg = `<b>Lessons</b> (${result.total} total, showing ${result.lessons.length})\n\n`;
+      for (const l of result.lessons) {
+        const pinIcon = l.pinned ? "📌" : "";
+        msg += `<code>${escapeHTML(l.id.slice(0, 8))}</code> ${pinIcon}[${l.outcome}] ${escapeHTML(l.rule.slice(0, 60))}\n`;
+      }
+      msg += `\n<i>Use /teach pin|rate|stats to manage</i>`;
+      await sendHTML(msg);
+      return;
+    }
+
+    await sendHTML(`<b>/teach</b> subcommands:\n<pre>  pin &lt;id&gt;       — pin a lesson\n  unpin &lt;id&gt;     — unpin a lesson\n  rate &lt;id&gt; useful|useless  — rate a lesson\n  stats          — learning system status\n  list [role]    — list lessons (optionally by role)</pre>`);
+  }
+
   async function telegramHandler(text) {
     if (_managementBusy || _screeningBusy || busy) {
-      if (_telegramQueue.length < 5) {
+      if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
         _telegramQueue.push(text);
         sendHTML(`⏳ <b>Queued</b> (${_telegramQueue.length} in queue): "<i>${escapeHTML(text.slice(0, 60))}</i>"`).catch(() => {});
       } else {
-        sendHTML("Queue is full (5 messages). Wait for the agent to finish.").catch(() => {});
+        sendHTML(`Queue is full (${MAX_TELEGRAM_QUEUE} messages). Wait for the agent to finish.`).catch(() => {});
       }
       return;
     }
@@ -964,7 +1028,7 @@ if (isTTY) {
         table += `SOL       ${wallet.sol.toFixed(4).padEnd(11)}  $${wallet.sol_usd.toFixed(2)}\n`;
         
         // Add other non-zero tokens
-        wallet.tokens.filter(t => t.symbol !== "SOL" && t.usd > 0.01).forEach(t => {
+        wallet.tokens.filter(t => t.symbol !== "SOL" && t.usd > TOKEN_SWAP_MIN_BALANCE).forEach(t => {
           const sym = t.symbol.slice(0, 8).padEnd(8);
           const bal = t.balance.toString().slice(0, 11).padEnd(11);
           const val = `$${t.usd.toFixed(2)}`;
@@ -1058,7 +1122,6 @@ if (isTTY) {
       try {
         const s = config.screening;
         const m = config.management;
-        const r = config.risk || config.management; // handles legacy/merged config
         const perf = getPerformanceSummary();
         
         let msg = "⚙️ *BOT CONFIGURATION*\n\n";
@@ -1171,88 +1234,7 @@ if (isTTY) {
     const teachMatch = text.match(/^\/teach\s+(.+)$/i);
     if (teachMatch) {
       try {
-        const sub = teachMatch[1].trim();
-        const { pinLesson, unpinLesson, rateLesson, getLearningStats, listLessons } = await import("./core/lessons.js");
-
-        // /teach pin <id>
-        const pinMatch = sub.match(/^pin\s+(.+)$/i);
-        if (pinMatch) {
-          const result = pinLesson(pinMatch[1].trim());
-          if (result.found) {
-            await sendHTML(`📌 Lesson pinned:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
-          } else {
-            await sendHTML(`Lesson <code>${escapeHTML(pinMatch[1])}</code> not found.`);
-          }
-          return;
-        }
-
-        // /teach unpin <id>
-        const unpinMatch = sub.match(/^unpin\s+(.+)$/i);
-        if (unpinMatch) {
-          const result = unpinLesson(unpinMatch[1].trim());
-          if (result.found) {
-            await sendHTML(` Lesson unpinned:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
-          } else {
-            await sendHTML(`Lesson <code>${escapeHTML(unpinMatch[1])}</code> not found.`);
-          }
-          return;
-        }
-
-        // /teach rate <id> useful|useless
-        const rateMatch = sub.match(/^rate\s+(\S+)\s+(useful|useless)$/i);
-        if (rateMatch) {
-          const result = rateLesson(rateMatch[1], rateMatch[2].toLowerCase());
-          if (result.error) {
-            await sendHTML(`<code>${escapeHTML(result.error)}</code>`);
-          } else if (result.found) {
-            const icon = result.rating === "useful" ? "👍" : "👎";
-            await sendHTML(`${icon} Lesson rated as <b>${result.rating}</b>:\n<code>${escapeHTML(result.rule.slice(0, 120))}</code>`);
-          } else {
-            await sendHTML(`Lesson <code>${escapeHTML(rateMatch[1])}</code> not found.`);
-          }
-          return;
-        }
-
-        // /teach stats
-        if (/^stats$/i.test(sub)) {
-          const stats = getLearningStats();
-          let msg = `<b>Learning System Status</b>\n\n`;
-          msg += `Closed positions: <b>${stats.performance_records}</b>\n`;
-          msg += `Near-miss records: <b>${stats.near_misses}</b>\n`;
-          msg += `Total lessons: <b>${stats.total_lessons}</b>\n`;
-          msg += `Archived records: <b>${stats.archived_records}</b>\n`;
-          if (stats.overall_win_rate != null) msg += `\nWin rate: <b>${stats.overall_win_rate}%</b>\n`;
-          if (stats.total_pnl_usd != null) msg += `Total PnL: <b>$${stats.total_pnl_usd}</b>\n`;
-          if (stats.avg_pnl_pct != null) msg += `Avg PnL: <b>${stats.avg_pnl_pct}%</b>\n`;
-          if (stats.near_miss_avg_pnl_pct != null) msg += `Near-miss avg PnL: <b>${stats.near_miss_avg_pnl_pct}%</b>\n`;
-          msg += `\nPinned: ${stats.pinned_lessons} | Useful: ${stats.rated_useful} | Useless: ${stats.rated_useless}\n`;
-          msg += `Evolution cycles: ${stats.evolution_cycles}\n`;
-          if (stats.current_thresholds && Object.keys(stats.current_thresholds).length > 0) {
-            msg += `\n<b>Current thresholds:</b>\n`;
-            msg += `maxBinStep: ${stats.current_thresholds.maxBinStep}\n`;
-            msg += `minFeeActiveTvlRatio: ${stats.current_thresholds.minFeeActiveTvlRatio}\n`;
-            msg += `minOrganic: ${stats.current_thresholds.minOrganic}`;
-          }
-          await sendHTML(msg);
-          return;
-        }
-
-        // /teach list [role]
-        if (/^list/i.test(sub)) {
-          const roleArg = sub.split(/\s+/)[1]?.toUpperCase() || null;
-          const result = listLessons({ role: roleArg, limit: 15 });
-          if (result.total === 0) { await sendHTML("No lessons found."); return; }
-          let msg = `<b>Lessons</b> (${result.total} total, showing ${result.lessons.length})\n\n`;
-          for (const l of result.lessons) {
-            const pinIcon = l.pinned ? "📌" : "";
-            msg += `<code>${escapeHTML(l.id.slice(0, 8))}</code> ${pinIcon}[${l.outcome}] ${escapeHTML(l.rule.slice(0, 60))}\n`;
-          }
-          msg += `\n<i>Use /teach pin|rate|stats to manage</i>`;
-          await sendHTML(msg);
-          return;
-        }
-
-        await sendHTML(`<b>/teach</b> subcommands:\n<pre>  pin &lt;id&gt;       — pin a lesson\n  unpin &lt;id&gt;     — unpin a lesson\n  rate &lt;id&gt; useful|useless  — rate a lesson\n  stats          — learning system status\n  list [role]    — list lessons (optionally by role)</pre>`);
+        await handleTeachCommand(teachMatch[1].trim(), { sendHTML, escapeHTML });
       } catch (e) { await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(() => { }); }
       return;
     }
@@ -1421,6 +1403,7 @@ Commands:
       });
       return;
     }
+
 
     if (input === "/thresholds") {
       const s = config.screening;

@@ -2,10 +2,11 @@ import { config } from "../config.js";
 import { isBlacklisted } from "../features/token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../core/logger.js";
+import { addrShort } from "../tools/addrShort.js";
 
-const DATAPI_JUP = "https://datapi.jup.ag/v1";
+const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 
-const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
+const POOL_DISCOVERY_BASE = process.env.POOL_DISCOVERY_API_BASE || "https://pool-discovery-api.datapi.meteora.ag";
 
 
 
@@ -56,11 +57,11 @@ export async function discoverPools({
   // Hard-filter blacklisted tokens and blocked deployers (what pool discovery already gave us)
   let pools = condensed.filter((p) => {
     if (isBlacklisted(p.base?.mint)) {
-      log("info", "blacklist", `Filtered blacklisted token ${p.base?.symbol} (${p.base?.mint?.slice(0, 8)}) in pool ${p.name}`);
+      log("info", "blacklist", `Filtered blacklisted token ${p.base?.symbol} (${addrShort(p.base?.mint)}) in pool ${p.name}`);
       return false;
     }
     if (p.dev && isDevBlocked(p.dev)) {
-      log("info", "dev_blocklist", `Filtered blocked deployer ${p.dev?.slice(0, 8)} token ${p.base?.symbol} in pool ${p.name}`);
+      log("info", "dev_blocklist", `Filtered blocked deployer ${addrShort(p.dev)} token ${p.base?.symbol} in pool ${p.name}`);
       return false;
     }
     return true;
@@ -94,7 +95,7 @@ export async function discoverPools({
         const dev = devMap[p.pool];
         if (dev) p.dev = dev; // enrich in-place
         if (dev && isDevBlocked(dev)) {
-          log("info", "dev_blocklist", `Filtered blocked deployer (jup) ${dev.slice(0, 8)} token ${p.base?.symbol}`);
+          log("info", "dev_blocklist", `Filtered blocked deployer (jup) ${addrShort(dev)} token ${p.base?.symbol}`);
           return false;
         }
         return true;
@@ -129,12 +130,17 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   // Enrich with OKX data — advanced info (risk/bundle/sniper) + ATH price (no API key required)
   if (eligible.length > 0) {
     const { getAdvancedInfo, getPriceInfo, getClusterList, getRiskFlags } = await import("../integrations/okx.js");
-    const okxResults = await Promise.allSettled(
+    // 60-second timeout for the entire enrichment batch — a slow OKX endpoint shouldn't hang screening
+    const enrichmentPromise = Promise.allSettled(
       eligible.map((p) => p.base?.mint
         ? Promise.all([getAdvancedInfo(p.base.mint), getPriceInfo(p.base.mint), getClusterList(p.base.mint), getRiskFlags(p.base.mint)])
         : Promise.resolve([null, null, [], null])
       )
     );
+    const okxResults = await Promise.race([
+      enrichmentPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("OKX enrichment timeout (60s)")), 60_000)),
+    ]);
     for (let i = 0; i < eligible.length; i++) {
       const r = okxResults[i];
       if (r.status !== "fulfilled") continue;
@@ -191,7 +197,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     const before = eligible.length;
     eligible = eligible.filter((p) => {
       if (p.dev && isDevBlocked(p.dev)) {
-        log("info", "dev_blocklist", `Filtered blocked deployer (okx) ${p.dev.slice(0, 8)} token ${p.base?.symbol}`);
+        log("info", "dev_blocklist", `Filtered blocked deployer (okx) ${addrShort(p.dev)} token ${p.base?.symbol}`);
         return false;
       }
       return true;

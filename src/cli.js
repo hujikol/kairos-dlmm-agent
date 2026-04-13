@@ -197,12 +197,6 @@ Shows all closed position performance history with summary stats.
 Output: { summary: { total_positions_closed, total_pnl_usd, avg_pnl_pct, win_rate_pct, total_lessons }, count, positions: [...] }
 \`\`\`
 
-### meridian discord-signals [clear]
-Shows pending Discord signal queue from the discord-listener process.
-\`\`\`
-Output: { count, pending, processed, signals: [{id, symbol, pool, author, channel, queued_at, rug_score, status}] }
-\`\`\`
-
 ### meridian start [--dry-run]
 Starts the autonomous agent with cron jobs (management + screening).
 
@@ -599,56 +593,13 @@ switch (subcommand) {
     break;
   }
 
-  // ── discord-signals ──────────────────────────────────────────────
-  case "discord-signals": {
-    const sigFile = path.join(process.cwd(), "discord-signals.json");
-    if (!fs.existsSync(sigFile)) {
-      out({ count: 0, pending: 0, signals: [], message: "No discord-signals.json found. Is the listener running?" });
-      break;
-    }
-    let signals = [];
-    try { signals = JSON.parse(fs.readFileSync(sigFile, "utf8")); } catch { die("Failed to parse discord-signals.json"); }
-
-    if (sub2 === "clear") {
-      // Remove processed/old signals (keep pending ones)
-      const pending = signals.filter(s => s.status === "pending");
-      fs.writeFileSync(sigFile, JSON.stringify(pending, null, 2));
-      out({ cleared: signals.length - pending.length, remaining: pending.length });
-      break;
-    }
-
-    const pending = signals.filter(s => s.status === "pending");
-    const processed = signals.filter(s => s.status !== "pending");
-    out({
-      count: signals.length,
-      pending: pending.length,
-      processed: processed.length,
-      signals: signals.map(s => ({
-        id: s.id,
-        symbol: s.base_symbol,
-        pool: s.pool_address,
-        author: s.discord_author,
-        channel: s.discord_channel,
-        queued_at: s.queued_at,
-        rug_score: s.rug_score,
-        status: s.status,
-        snippet: s.discord_message_snippet?.slice(0, 60),
-      })),
-    });
-    break;
-  }
-
   // ── withdraw-liquidity ─────────────────────────────────────────
   case "withdraw-liquidity": {
     if (!flags.position) die("Usage: meridian withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]");
     if (!flags.pool) die("--pool is required");
-    const { withdrawLiquidity } = await import("./integrations/meteora.js");
-    out(await withdrawLiquidity({
-      position_address: flags.position,
-      pool_address: flags.pool,
-      bps: flags.bps ? parseInt(flags.bps) : 10000,
-      claim_fees: !argv.includes("--no-claim"),
-    }));
+    // Not implemented — withdraw is handled automatically by the management cycle.
+    // Use `close-position` to fully close a position.
+    die("withdraw-liquidity is not yet implemented. Use 'close-position' to close a position.", { hint: "Partial withdrawals are handled by the management cycle." });
     break;
   }
 
@@ -656,15 +607,8 @@ switch (subcommand) {
   case "add-liquidity": {
     if (!flags.position) die("Usage: meridian add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>]");
     if (!flags.pool) die("--pool is required");
-    const { addLiquidity } = await import("./integrations/meteora.js");
-    out(await addLiquidity({
-      position_address: flags.position,
-      pool_address: flags.pool,
-      amount_x: flags["amount-x"] ? parseFloat(flags["amount-x"]) : 0,
-      amount_y: flags["amount-y"] ? parseFloat(flags["amount-y"]) : 0,
-      strategy: flags.strategy || "spot",
-      single_sided_x: argv.includes("--single-sided-x"),
-    }));
+    // Not implemented — use deploy-position to open a new position.
+    die("add-liquidity is not yet implemented. Use 'deploy-position' to open a new position.", { hint: "Adding to an existing position is handled by the management cycle." });
     break;
   }
 

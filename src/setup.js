@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, "user-config.json");
 const ENV_PATH    = path.join(__dirname, ".env");
 
-const DEFAULT_MODEL = "openai/gpt-oss-20b:free";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "minimax/minimax-01";
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -295,35 +295,35 @@ const LLM_PROVIDERS = [
   {
     label:   "OpenRouter   (openrouter.ai — many models)",
     key:     "openrouter",
-    baseUrl: "https://openrouter.ai/api/v1",
+    baseUrl: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
     keyHint: "sk-or-...",
     modelDefault: "nousresearch/hermes-3-llama-3.1-405b",
   },
   {
     label:   "MiniMax      (api.minimax.io)",
     key:     "minimax",
-    baseUrl: "https://api.minimax.io/v1",
+    baseUrl: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
     keyHint: "your MiniMax API key",
     modelDefault: "MiniMax-Text-01",
   },
   {
     label:   "OpenAI       (api.openai.com)",
     key:     "openai",
-    baseUrl: "https://api.openai.com/v1",
+    baseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
     keyHint: "sk-...",
     modelDefault: "gpt-4o",
   },
   {
     label:   "Local / LM Studio / Ollama (OpenAI-compatible)",
     key:     "local",
-    baseUrl: "http://localhost:1234/v1",
+    baseUrl: process.env.LOCAL_LLM_BASE_URL || "http://localhost:1234/v1",
     keyHint: "(leave blank or type any value)",
     modelDefault: "local-model",
   },
   {
     label:   "Custom       (any OpenAI-compatible endpoint)",
     key:     "custom",
-    baseUrl: "",
+    baseUrl: process.env.CUSTOM_BASE_URL || "",
     keyHint: "your API key",
     modelDefault: "",
   },

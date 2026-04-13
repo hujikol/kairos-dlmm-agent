@@ -1,4 +1,24 @@
 /**
+ * Compressed position context format — ~70% token reduction.
+ * Input: positions object, Output: compact POSITIONS:[] format.
+ */
+export function compressPositions(positions) {
+  if (!positions?.positions?.length && !positions?.length) return "POSITIONS:[]";
+  const posArray = positions.positions || positions;
+  const rows = posArray.map(p => ({
+    a: addrShort(p.position) || "?",
+    p: p.pair?.replace(/[-\s]/g, "") || "?",
+    s: p.amount_sol || 0,
+    v: p.total_value_usd || 0,
+    pp: p.pnl_pct || 0,
+    f: p.unclaimed_fees_usd || 0,
+    o: p.in_range ? false : true,
+    m: p.minutes_out_of_range || 0,
+  }));
+  return `POSITIONS:${JSON.stringify(rows)}`;
+}
+
+/**
  * Build a specialized system prompt based on the agent's current role.
  *
  * @param {string} agentType - "SCREENER" | "MANAGER" | "GENERAL"
@@ -12,6 +32,7 @@
 import { config } from "./config.js";
 import { getStrategyStats } from "./core/lessons.js";
 import { getRulesForPrompt } from "./core/postmortem.js";
+import { addrShort } from "./tools/addrShort.js";
 
 export function buildSystemPrompt(agentType, portfolio, positions, stateSummary = null, lessons = null, perfSummary = null) {
   const s = config.screening;
@@ -44,7 +65,7 @@ Role: ${agentType || "GENERAL"}
 ═══════════════════════════════════════════
 
 Portfolio: ${JSON.stringify(portfolio)}
-Positions: ${JSON.stringify(positions)}
+Positions: ${compressPositions(positions)}
 Memory: ${JSON.stringify(stateSummary)}
 Performance: ${perfSummary ? JSON.stringify(perfSummary) : "none"}
 Config: ${JSON.stringify({ screening: config.screening, management: config.management })}
