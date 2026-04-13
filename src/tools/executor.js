@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { log, logAction } from "../core/logger.js";
+import { cachedTool } from "./cache.js";
 import { registerCronRestarter as _registerCron } from "./admin.js";
 export const registerCronRestarter = _registerCron;
 
@@ -27,10 +28,27 @@ registerAdmin(registerTool);
 // All write tools that need safety checks
 const WRITE_TOOLS = new Set([...positionWriteTools, ...walletWriteTools]);
 
+// Read-only tools that can use the TTL cache.
+// Map of tool name → cache key extractor function (receives args, returns string key)
+const READ_ONLY_CACHE = {
+  discover_pools:      () => "default",
+  get_top_candidates:  () => "default",
+  get_pool_detail:     (a) => a.pool_address || "default",
+  get_active_bin:      (a) => a.pool_address || "default",
+  get_position_pnl:   (a) => a.position_address || "default",
+  get_my_positions:   () => "default",
+  get_balances:        () => "default",
+  get_wallet_balance: () => "default",
+  token_info:         (a) => a.mint || "default",
+  token_holders:      (a) => a.mint || "default",
+  search_pools:        (a) => a.query || "default",
+};
+
 export { toolMap };
 
 /**
  * Execute a tool call with safety checks and logging.
+ * Read-only tools use the TTL cache to avoid redundant API calls.
  */
 export async function executeTool(name, args) {
   const startTime = Date.now();
@@ -55,9 +73,13 @@ export async function executeTool(name, args) {
     }
   }
 
-  // ─── Execute ──────────────────────────────
+  // ─── Execute (cached for read-only tools) ─────────────────────
   try {
-    const result = await fn(args);
+    const doExec = () => fn(args);
+    const cached = READ_ONLY_CACHE[name];
+    const result = cached
+      ? await cachedTool(name, cached(args), doExec)
+      : await doExec();
     const duration = Date.now() - startTime;
     const success = result?.success !== false && !result?.error;
 

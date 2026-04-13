@@ -55,13 +55,13 @@ const CONFIG_MAP = {
   gasReserve: ["management", "gasReserve"],
   maxDeployAmount: ["management", "maxDeployAmount"],
   maxPositions: ["risk", "maxPositions"],
-  maxDeployAmount: ["risk", "maxDeployAmount"],
   managementIntervalMin: ["schedule", "managementIntervalMin"],
   screeningIntervalMin: ["schedule", "screeningIntervalMin"],
   managementModel: ["llm", "managementModel"],
   screeningModel: ["llm", "screeningModel"],
   generalModel: ["llm", "generalModel"],
   binsBelow: ["strategy", "binsBelow"],
+  cavemanEnabled: ["cavemanEnabled", null], // root-level key — special-cased below
 };
 
 export function registerAdmin(registerTool) {
@@ -151,6 +151,13 @@ export function registerAdmin(registerTool) {
 
     for (const [key, val] of Object.entries(applied)) {
       const [section, field] = CONFIG_MAP[key];
+      if (section === "cavemanEnabled") {
+        // Root-level key — no section prefix
+        const before = config[section];
+        config[section] = val;
+        log("info", "config", `update_config: config.${section} ${before} → ${val}`);
+        continue;
+      }
       const before = config[section][field];
       config[section][field] = val;
       log("info", "config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);

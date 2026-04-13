@@ -1,10 +1,12 @@
 import { getWalletBalances, swapToken, swapAllTokensToSol } from "../integrations/helius.js";
 import { log, logAction } from "../core/logger.js";
 import { pushNotification } from "../notifications/queue.js";
+import { SOL_MINT } from "../constants.js";
+import { addrShort } from "./addrShort.js";
 
 export const walletWriteTools = new Set(["swap_token"]);
 
-const SWAP_SOL_ADDRESS = "So11111111111111111111111111111111111111112";
+const SWAP_SOL_ADDRESS = SOL_MINT;
 
 export function registerWallet(registerTool) {
   registerTool("get_wallet_balance", getWalletBalances);
@@ -15,8 +17,8 @@ export function registerWallet(registerTool) {
     if (success && result.tx) {
       pushNotification({
         type: "swap",
-        from: args.input_mint?.slice(0, 8),
-        to: args.output_mint === SWAP_SOL_ADDRESS || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8),
+        from: addrShort(args.input_mint),
+        to: args.output_mint === SWAP_SOL_ADDRESS || args.output_mint === "SOL" ? "SOL" : addrShort(args.output_mint),
         amountIn: result.amount_in,
         amountOut: result.amount_out,
         tx: result.tx,

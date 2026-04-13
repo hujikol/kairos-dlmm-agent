@@ -17,6 +17,8 @@ if (u.llmBaseUrl) process.env.LLM_BASE_URL      ||= u.llmBaseUrl;
 if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 
+import { SOL_MINT, USDC_MINT, USDT_MINT } from "./constants.js";
+
 export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
@@ -26,28 +28,31 @@ export const config = {
     maxPositionsPerToken: u.maxPositionsPerToken ?? 1,     // max open positions per token
   },
 
-  // ─── Pool Screening Thresholds ───────────
+  // ─── Pool Screening Thresholds ─ v2 nested thresholds support ───────────
+  // Supports both flat keys (v1) and nested thresholds object (v2):
+  //   flat:    { "minFeeActiveTvlRatio": 0.05, "minTvl": 10000 }
+  //   nested:  { "thresholds": { "minFeeActiveTvlRatio": 0.05, "minTvl": 10000 } }
   screening: {
-    minFeeActiveTvlRatio: u.minFeeActiveTvlRatio ?? 0.05,
-    minTvl:            u.minTvl            ?? 10_000,
-    maxTvl:            u.maxTvl            ?? 150_000,
-    minVolume:         u.minVolume         ?? 500,
-    minOrganic:        u.minOrganic        ?? 60,
-    minHolders:        u.minHolders        ?? 500,
-    minMcap:           u.minMcap           ?? 150_000,
-    maxMcap:           u.maxMcap           ?? 10_000_000,
-    minBinStep:        u.minBinStep        ?? 80,
-    maxBinStep:        u.maxBinStep        ?? 125,
-    timeframe:         u.timeframe         ?? "5m",
-    category:          u.category          ?? "trending",
-    minTokenFeesSol:   u.minTokenFeesSol   ?? 30,  // global fees paid (priority+jito tips). below = bundled/scam
-    maxBundlePct:      u.maxBundlePct      ?? 30,  // max bundle holding % (OKX advanced-info)
-    maxBotHoldersPct:  u.maxBotHoldersPct  ?? 30,  // max bot holder addresses % (Jupiter audit)
-    maxTop10Pct:       u.maxTop10Pct       ?? 60,  // max top 10 holders concentration
-    blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
-    minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
-    maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
-    athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
+    minFeeActiveTvlRatio: u.thresholds?.minFeeActiveTvlRatio ?? u.minFeeActiveTvlRatio ?? 0.05,
+    minTvl:            u.thresholds?.minTvl            ?? u.minTvl            ?? 10_000,
+    maxTvl:            u.thresholds?.maxTvl            ?? u.maxTvl            ?? 150_000,
+    minVolume:         u.thresholds?.minVolume         ?? u.minVolume         ?? 500,
+    minOrganic:        u.thresholds?.minOrganic        ?? u.minOrganic        ?? 60,
+    minHolders:        u.thresholds?.minHolders        ?? u.minHolders        ?? 500,
+    minMcap:           u.thresholds?.minMcap           ?? u.minMcap           ?? 150_000,
+    maxMcap:           u.thresholds?.maxMcap           ?? u.maxMcap           ?? 10_000_000,
+    minBinStep:        u.thresholds?.minBinStep        ?? u.minBinStep        ?? 80,
+    maxBinStep:        u.thresholds?.maxBinStep        ?? u.maxBinStep        ?? 125,
+    timeframe:         u.thresholds?.timeframe         ?? u.timeframe         ?? "5m",
+    category:          u.thresholds?.category          ?? u.category          ?? "trending",
+    minTokenFeesSol:   u.thresholds?.minTokenFeesSol   ?? u.minTokenFeesSol   ?? 30,  // global fees paid (priority+jito tips). below = bundled/scam
+    maxBundlePct:      u.thresholds?.maxBundlePct      ?? u.maxBundlePct      ?? 30,  // max bundle holding % (OKX advanced-info)
+    maxBotHoldersPct:  u.thresholds?.maxBotHoldersPct  ?? u.maxBotHoldersPct  ?? 30,  // max bot holder addresses % (Jupiter audit)
+    maxTop10Pct:       u.thresholds?.maxTop10Pct       ?? u.maxTop10Pct       ?? 60,  // max top 10 holders concentration
+    blockedLaunchpads:  u.thresholds?.blockedLaunchpads  ?? u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
+    minTokenAgeHours:   u.thresholds?.minTokenAgeHours   ?? u.minTokenAgeHours   ?? null, // null = no minimum
+    maxTokenAgeHours:   u.thresholds?.maxTokenAgeHours   ?? u.maxTokenAgeHours   ?? null, // null = no maximum
+    athFilterPct:       u.thresholds?.athFilterPct       ?? u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
   },
 
   // ─── Position Management ────────────────
@@ -83,8 +88,8 @@ export const config = {
 
   // ─── Scheduling ─────────────────────────
   schedule: {
-    managementIntervalMin:  u.managementIntervalMin  ?? 10,
-    screeningIntervalMin:   u.screeningIntervalMin   ?? 30,
+    managementIntervalMin:  u.managementIntervalMin  ?? (process.env.DRY_RUN === "true" ? 1 : 10),
+    screeningIntervalMin:   u.screeningIntervalMin   ?? (process.env.DRY_RUN === "true" ? 1 : 30),
   },
 
   // ─── LLM Settings ──────────────────────
@@ -94,18 +99,22 @@ export const config = {
     maxSteps:    u.maxSteps    ?? 10,
     screenerMaxSteps: u.screenerMaxSteps ?? 5,
     managerMaxSteps:  u.managerMaxSteps  ?? 4,
-    managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
-    screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "openrouter/hunter-alpha",
-    generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
+    managementModel: u.models?.manager  ?? u.managementModel ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
+    screeningModel:  u.models?.screener ?? u.screeningModel  ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
+    generalModel:    u.models?.general ?? u.generalModel    ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
+    evolveModel:     u.models?.evolve  ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
   },
+
 
   // ─── Common Token Mints ────────────────
   tokens: {
-    SOL:  "So11111111111111111111111111111111111111112",
-    USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    USDT: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    SOL:  SOL_MINT,
+    USDC: USDC_MINT,
+    USDT: USDT_MINT,
   },
 };
+
+export const DEFAULT_LLM_MODEL = "hermes-3-405b";
 
 /**
  * Conviction Sizing Matrix — fixed position sizing based on conviction level

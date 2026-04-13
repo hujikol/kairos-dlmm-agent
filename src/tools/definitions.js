@@ -330,20 +330,6 @@ WARNING: This executes a real on-chain transaction.`,
     }
   },
 
-  {
-    type: "function",
-    function: {
-      name: "swap_all_to_sol",
-      description: `Sweep all non-SOL tokens in the wallet back to SOL.
-Use when the user says "swap all to sol", "sweep wallet", "convert everything to sol", etc.
-Only swaps tokens worth >= $0.10.`,
-      parameters: {
-        type: "object",
-        properties: {}
-      }
-    }
-  },
-
   // ═══════════════════════════════════════════
   //  LEARNING TOOLS
   // ═══════════════════════════════════════════

@@ -7,6 +7,7 @@ import { config } from "../config.js";
 import { log, logAction } from "../core/logger.js";
 import { pushNotification } from "../notifications/queue.js";
 import { setPositionInstruction } from "../core/state.js";
+import { addrShort } from "./addrShort.js";
 
 export const positionWriteTools = new Set([
   "deploy_position",
@@ -43,7 +44,7 @@ export function registerPositions(registerTool) {
     if (success) {
       pushNotification({
         type: "close",
-        pair: result.pool_name || args.position_address?.slice(0, 8),
+        pair: result.pool_name || addrShort(args.position_address),
         pnlUsd: result.pnl_usd ?? 0,
         pnlPct: result.pnl_pct ?? 0,
         reason: args.reason,
@@ -78,7 +79,7 @@ export function registerPositions(registerTool) {
     if (success) {
       pushNotification({
         type: "deploy",
-        pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8),
+        pair: result.pool_name || args.pool_name || addrShort(args.pool_address),
         amountSol: args.amount_y ?? args.amount_sol ?? 0,
         position: result.position,
         tx: result.txs?.[0] ?? result.tx,
