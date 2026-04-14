@@ -99,43 +99,103 @@ RPC (Solana) ←→ meteora.js (DLMM deploy/close/claim)
 ## Database Schema (SQLite — `meridian.db`)
 
 ```sql
+-- Key-Value store (lastBriefingDate, lastUpdated, etc.)
+CREATE TABLE kv_store (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+
 CREATE TABLE positions (
   position TEXT PRIMARY KEY,   -- Meteora position address
   pool TEXT,                   -- Pool address
-  status TEXT,                 -- 'pending' | 'active' | 'closed'
+  pool_name TEXT,
+  strategy TEXT,
+  bin_range TEXT,
+  amount_sol REAL,
+  amount_x REAL,
+  active_bin_at_deploy INTEGER,
+  bin_step INTEGER,
+  volatility REAL,
+  fee_tvl_ratio REAL,
+  organic_score REAL,
+  initial_value_usd REAL,
+  signal_snapshot TEXT,        -- JSON
+  base_mint TEXT,
   deployed_at TEXT,
-  oor_since TEXT,              -- first out-of-range timestamp
-  notes TEXT
+  out_of_range_since TEXT,
+  last_claim_at TEXT,
+  total_fees_claimed_usd REAL,
+  rebalance_count INTEGER,
+  closed INTEGER,              -- 0 or 1
+  closed_at TEXT,
+  notes TEXT,                  -- JSON array
+  peak_pnl_pct REAL,
+  prev_pnl_pct REAL,
+  trailing_active INTEGER,
+  instruction TEXT,
+  status TEXT DEFAULT 'active', -- 'pending' | 'active' | 'closed'
+  market_phase TEXT,
+  strategy_id TEXT
+);
+
+CREATE TABLE recent_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT, action TEXT, position TEXT,
+  pool_name TEXT, reason TEXT
 );
 
 CREATE TABLE performance (
-  position TEXT PRIMARY KEY,
-  pool TEXT, pool_name TEXT,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  position TEXT, pool TEXT, pool_name TEXT,
   strategy TEXT, bin_range TEXT,
-  bin_step REAL, volatility REAL,
+  bin_step INTEGER, volatility REAL,
   fee_tvl_ratio REAL, organic_score REAL,
   amount_sol REAL, fees_earned_usd REAL,
   final_value_usd REAL, initial_value_usd REAL,
-  minutes_in_range INTEGER, minutes_held INTEGER,
+  minutes_in_range REAL, minutes_held REAL,
   pnl_usd REAL, pnl_pct REAL, range_efficiency REAL,
-  close_reason TEXT, deployed_at TEXT, closed_at TEXT, recorded_at TEXT
+  close_reason TEXT, deployed_at TEXT, closed_at TEXT,
+  recorded_at TEXT, base_mint TEXT
 );
 
 CREATE TABLE lessons (
-  id TEXT PRIMARY KEY,
-  rule TEXT, tags TEXT, outcome TEXT,
-  pinned INTEGER, role TEXT,
-  rating TEXT, rating_at TEXT,
+  id TEXT PRIMARY KEY,          -- UUID
+  rule TEXT, tags TEXT,         -- JSON
+  outcome TEXT, context TEXT,   -- JSON
+  pnl_pct REAL, range_efficiency REAL,
+  pool TEXT,
   created_at TEXT,
-  weight REAL DEFAULT 1.0,
-  used_count INTEGER DEFAULT 0
+  pinned INTEGER DEFAULT 0,
+  role TEXT,
+  rating TEXT,                  -- 'useful' | 'useless'
+  rating_at TEXT
 );
 
 CREATE TABLE near_misses (
   id TEXT PRIMARY KEY,
   position TEXT, pool TEXT, strategy TEXT,
-  pnl_pct REAL, range_efficiency REAL,
-  ...
+  bin_step INTEGER, volatility REAL,
+  fee_tvl_ratio REAL, organic_score REAL,
+  pnl_usd REAL, pnl_pct REAL,
+  minutes_in_range REAL, minutes_held REAL,
+  range_efficiency REAL, close_reason TEXT,
+  created_at TEXT, reviewed INTEGER DEFAULT 0
+);
+
+CREATE TABLE performance_archive (
+  -- Same schema as performance, plus archived_at
+  id INTEGER PRIMARY KEY,
+  position TEXT, pool TEXT, pool_name TEXT,
+  strategy TEXT, bin_range TEXT,
+  bin_step INTEGER, volatility REAL,
+  fee_tvl_ratio REAL, organic_score REAL,
+  amount_sol REAL, fees_earned_usd REAL,
+  final_value_usd REAL, initial_value_usd REAL,
+  minutes_in_range REAL, minutes_held REAL,
+  pnl_usd REAL, pnl_pct REAL, range_efficiency REAL,
+  close_reason TEXT, deployed_at TEXT, closed_at TEXT,
+  recorded_at TEXT, base_mint TEXT,
+  archived_at TEXT
 );
 
 CREATE TABLE pool_memory (
@@ -143,8 +203,92 @@ CREATE TABLE pool_memory (
   name TEXT, base_mint TEXT,
   total_deploys INTEGER, avg_pnl_pct REAL,
   win_rate REAL, last_deployed_at TEXT,
-  last_outcome TEXT, notes TEXT,
+  last_outcome TEXT, notes TEXT,        -- JSON array
   cooldown_until TEXT
+);
+
+CREATE TABLE pool_deploys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pool_address TEXT,
+  deployed_at TEXT, closed_at TEXT,
+  pnl_pct REAL, pnl_usd REAL,
+  range_efficiency REAL, minutes_held REAL,
+  close_reason TEXT, strategy TEXT,
+  volatility_at_deploy REAL,
+  FOREIGN KEY (pool_address) REFERENCES pool_memory(pool_address) ON DELETE CASCADE
+);
+
+CREATE TABLE pool_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pool_address TEXT, ts TEXT,
+  position TEXT,
+  pnl_pct REAL, pnl_usd REAL,
+  in_range INTEGER,              -- BOOLEAN
+  unclaimed_fees_usd REAL,
+  minutes_out_of_range INTEGER,
+  age_minutes REAL,
+  FOREIGN KEY (pool_address) REFERENCES pool_memory(pool_address) ON DELETE CASCADE
+);
+
+CREATE TABLE strategies (
+  id TEXT PRIMARY KEY,
+  name TEXT, author TEXT, lp_strategy TEXT,
+  token_criteria TEXT,           -- JSON
+  entry TEXT, range TEXT, exit TEXT, -- JSON
+  best_for TEXT, raw TEXT,
+  added_at TEXT, updated_at TEXT,
+  -- Phase 13 nullable columns (ALTER'd for existing tables):
+  phase TEXT,                   -- 'any'|'pump'|'pullback'|'runner'|'bear'|'bull'|'consolidation'
+  bin_count INTEGER,
+  fee_tier_target REAL,
+  max_hold_hours INTEGER,
+  confidence INTEGER DEFAULT 0
+);
+
+CREATE TABLE signal_weights (
+  id INTEGER PRIMARY KEY DEFAULT 1,   -- singleton
+  weights TEXT,               -- JSON
+  last_recalc TEXT,
+  recalc_count INTEGER
+);
+
+CREATE TABLE signal_weights_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT, changes TEXT, -- JSON
+  window_size INTEGER,
+  win_count INTEGER, loss_count INTEGER
+);
+
+CREATE TABLE token_blacklist (
+  mint TEXT PRIMARY KEY,
+  symbol TEXT, reason TEXT,
+  added_at TEXT, added_by TEXT
+);
+
+CREATE TABLE dev_blocklist (
+  wallet TEXT PRIMARY KEY,
+  label TEXT, reason TEXT,
+  added_at TEXT
+);
+
+CREATE TABLE smart_wallets (
+  address TEXT PRIMARY KEY,
+  name TEXT, added_at TEXT
+);
+
+CREATE TABLE postmortem_rules (
+  key TEXT PRIMARY KEY,
+  type TEXT, strategy TEXT,
+  bin_step_range TEXT,          -- JSON
+  volatility_range TEXT,         -- JSON
+  reason TEXT, frequency INTEGER,
+  count INTEGER, hours_utc TEXT, -- JSON
+  win_rate INTEGER, sample_size INTEGER,
+  evidence TEXT,                 -- JSON
+  severity TEXT,
+  description TEXT,
+  suggestion TEXT,
+  created_at TEXT, updated_at TEXT
 );
 ```
 
