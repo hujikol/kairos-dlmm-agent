@@ -13,6 +13,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import sqlite3 from "better-sqlite3";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH   = path.join(__dirname, "../src/core/meridian.db");
@@ -20,6 +21,28 @@ const BACKUP_DIR = path.join(__dirname, "../backups");
 const MAX_BACKUPS = 7;
 
 const DRY_RUN = process.argv.includes("--dry-run");
+
+/**
+ * Verify that a backup file is a valid SQLite database.
+ * @param {string} backupPath
+ * @returns {boolean} true if verification succeeded
+ */
+function verify(backupPath) {
+  try {
+    const db = sqlite3(backupPath);
+    const result = db.prepare("SELECT count(*) as count FROM sqlite_master").get();
+    db.close();
+    if (result && typeof result.count === "number") {
+      console.log(`Verification OK: ${backupPath} (${result.count} tables)`);
+      return true;
+    }
+    console.error(`Verification FAILED: ${backupPath} — unexpected result`);
+    return false;
+  } catch (err) {
+    console.error(`Verification FAILED: ${backupPath} — ${err.message}`);
+    return false;
+  }
+}
 
 /**
  * Run the backup.
@@ -47,6 +70,11 @@ export async function runBackup() {
     // Copy current DB snapshot
     fs.copyFileSync(DB_PATH, snapshotFile);
     console.log(`Backed up: ${snapshotFile}`);
+
+    // Verify backup is a valid SQLite database
+    if (!verify(snapshotFile)) {
+      throw new Error(`Backup verification failed for ${snapshotFile}`);
+    }
   }
 
   // Prune backups older than MAX_BACKUPS
