@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: meridian/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: meridian
+
+      - name: Lint (if exists)
+        run: npm run lint 2>/dev/null || true
+        working-directory: meridian
+
+      - name: Run automated tests
+        run: node --test test/test-config.js test/test-evolve.js test/test-lesson-repo.js test/test-addrShort.js test/helius-cache.test.js
+        working-directory: meridian
+        env:
+          WALLET_PRIVATE_KEY: "[]"
+          RPC_URL: "https://api.mainnet-beta.solana.com"
+          OPENROUTER_API_KEY: "test-key"
+
+  build:
+    name: Syntax Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check core files parse
+        run: |
+          node --check meridian/src/index.js
+          node --check meridian/src/agent.js
+          node --check meridian/src/core/db.js
+          node --check meridian/src/core/logger.js
+          node --check meridian/src/core/scheduler.js
+          node --check meridian/src/integrations/meteora.js
+          node --check meridian/src/integrations/helius.js
+          node --check meridian/src/core/postmortem.js
+          node --check meridian/src/core/simulator.js
