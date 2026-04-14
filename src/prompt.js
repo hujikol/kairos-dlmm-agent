@@ -1,6 +1,13 @@
 /**
  * Compressed position context format — ~70% token reduction.
  * Input: positions object, Output: compact POSITIONS:[] format.
+ *
+ * NOTE: This is intentionally separate from rowToPos() in state.js.
+ * compressPositions() transforms position data for LLM prompt context
+ * (abbreviated keys, human-readable strings, minimal fields).
+ * rowToPos() deserializes raw SQLite rows into full position objects
+ * with parsed JSON fields (bin_range, signal_snapshot, notes).
+ * They serve fundamentally different purposes and should NOT be consolidated.
  */
 export function compressPositions(positions) {
   if (!positions?.positions?.length && !positions?.length) return "POSITIONS:[]";
