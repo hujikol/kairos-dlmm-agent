@@ -6,7 +6,8 @@
 import { getDB } from './core/db.js';
 import { getPositionPnl, closePosition, getMyPositions } from './integrations/meteora.js';
 import { pushNotification } from './notifications/queue.js';
-import { markOutOfRange, syncOpenPositions } from './core/state.js';
+import { markOutOfRange } from "./core/state/oor.js";
+import { syncOpenPositions } from "./core/state/sync.js";
 import { log } from './core/logger.js';
 import { runManagementCycle } from './index.js';
 

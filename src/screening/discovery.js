@@ -8,6 +8,13 @@ const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag
 
 const POOL_DISCOVERY_BASE = process.env.POOL_DISCOVERY_API_BASE || "https://pool-discovery-api.datapi.meteora.ag";
 
+// ─── Test injection ────────────────────────────────────────────────
+let _testDiscoveryResult = null;
+
+export function _injectDiscovery(result) {
+  _testDiscoveryResult = result;
+}
+
 
 
 /**
@@ -115,7 +122,13 @@ export async function discoverPools({
  */
 export async function getTopCandidates({ limit = 10 } = {}) {
   const { config } = await import("../config.js");
-  const { pools } = await discoverPools({ page_size: 50 });
+  let pools = [];
+  if (_testDiscoveryResult !== null) {
+    pools = _testDiscoveryResult.pools || _testDiscoveryResult;
+  } else {
+    const { pools: apiPools } = await discoverPools({ page_size: 50 });
+    pools = apiPools;
+  }
 
   // Exclude pools where the wallet already has an open position
   const { getMyPositions } = await import("../integrations/meteora.js");
@@ -123,8 +136,24 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   const occupiedPools = new Set(positions.map((p) => p.pool));
   const occupiedMints = new Set(positions.map((p) => p.base_mint).filter(Boolean));
 
+  // Blocked launchpads — applied here for both real API pools (which may have launchpad null)
+  // and for test-injected pools where we explicitly set launchpad
+  const blocked = config.screening.blockedLaunchpads || [];
+  const s = config.screening;
+  const seenPools = new Set();
   let eligible = pools
-    .filter((p) => !occupiedPools.has(p.pool) && !occupiedMints.has(p.base?.mint))
+    .filter((p) => {
+      if (seenPools.has(p.pool)) return false; // dedup by pool_address
+      seenPools.add(p.pool);
+      if (occupiedPools.has(p.pool)) return false;
+      if (occupiedMints.has(p.base?.mint)) return false;
+      if (p.launchpad && blocked.includes(p.launchpad)) return false;
+      // TVL range filter — applied here for injected pools (API-side filtering already
+      // applies these for real discoverPools calls, but not for test injections)
+      const tvl = p.active_tvl;
+      if (tvl != null && (tvl < s.minTvl || tvl > s.maxTvl)) return false;
+      return true;
+    })
     .slice(0, limit);
 
   // Enrich with OKX data — advanced info (risk/bundle/sniper) + ATH price (no API key required)
@@ -258,6 +287,7 @@ function condensePool(p) {
       mint: p.token_y?.address,
     },
     pool_type: p.pool_type,
+    launchpad: p.launchpad || null,
     bin_step: p.dlmm_params?.bin_step || null,
     fee_pct: p.fee_pct,
 

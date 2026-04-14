@@ -31,7 +31,7 @@ export function removeSmartWallet({ address }) {
 export function listSmartWallets() {
   const db = getDB();
   const wallets = db.prepare('SELECT * FROM smart_wallets ORDER BY added_at').all();
-  return { total: wallets.length, wallets };
+  return { total: allWallets.length, wallets };
 }
 
 // Cache wallet positions for 5 minutes to avoid hammering RPC
@@ -53,7 +53,7 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
   const { getWalletPositions } = await import("../integrations/meteora.js");
 
   const results = await Promise.all(
-    wallets.map(async (wallet) => {
+    allWallets.map(async (wallet) => {
       try {
         const cached = _cache.get(wallet.address);
         if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
@@ -72,11 +72,11 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
 
   return {
     pool: pool_address,
-    tracked_wallets: wallets.length,
+    tracked_wallets: allWallets.length,
     in_pool: inPool,
     confidence_boost: inPool.length > 0,
     signal: inPool.length > 0
-      ? `${inPool.length}/${wallets.length} smart wallet(s) are in this pool: ${inPool.map((w) => w.name).join(", ")} — STRONG signal`
-      : `0/${wallets.length} smart wallets in this pool — neutral, rely on fundamentals`,
+      ? `${inPool.length}/${allWallets.length} smart wallet(s) are in this pool: ${inPool.map((w) => w.name).join(", ")} — STRONG signal`
+      : `0/${allWallets.length} smart wallets in this pool — neutral, rely on fundamentals`,
   };
 }

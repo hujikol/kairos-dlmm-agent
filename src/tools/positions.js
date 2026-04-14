@@ -6,7 +6,7 @@ import { addPoolNote, getPoolMemory } from "../features/pool-memory.js";
 import { config } from "../config.js";
 import { log, logAction } from "../core/logger.js";
 import { pushNotification } from "../notifications/queue.js";
-import { setPositionInstruction } from "../core/state.js";
+import { setPositionInstruction } from "../core/state/registry.js";
 import { addrShort } from "./addrShort.js";
 
 export const positionWriteTools = new Set([
