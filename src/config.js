@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { log } from "./core/logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -200,5 +201,9 @@ export function reloadScreeningThresholds() {
         }
       }
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    // Thresholds are reloaded every management cycle — failure here just means
+    // the next cycle will retry. Log at warn level so it's observable but not noisy.
+    log("warn", "config", `reloadScreeningThresholds: ignoring error (will retry next cycle): ${err?.message}`);
+  }
 }
