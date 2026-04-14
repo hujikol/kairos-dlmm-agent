@@ -1,6 +1,6 @@
-// meteora.js — backward-compatibility re-export wrapper
-// All functionality has been moved to src/integrations/meteora/
+// Re-export all public APIs from sub-modules
 
+// pool.js
 export {
   DLMM_PROGRAM,
   getConnection,
@@ -13,8 +13,9 @@ export {
   getActiveBin,
   searchPools,
   lookupPoolForPosition,
-} from "./meteora/index.js";
+} from "./pool.js";
 
+// positions.js
 export {
   POSITIONS_CACHE_TTL,
   _positionsCache,
@@ -23,14 +24,16 @@ export {
   deployPosition,
   getMyPositions,
   getWalletPositions,
-} from "./meteora/index.js";
+} from "./positions.js";
 
+// pnl.js
 export {
   fetchDlmmPnlForPool,
   getPositionPnl,
-} from "./meteora/index.js";
+} from "./pnl.js";
 
+// close.js
 export {
   claimFees,
   closePosition,
-} from "./meteora/index.js";
+} from "./close.js";

@@ -32,6 +32,13 @@ async function okxGet(path) {
   return json.data;
 }
 
+// ─── Test injection ────────────────────────────────────────────────
+let _testOkxOverride = null; // function(mint) → result or null
+
+export function _injectOkx(fn) {
+  _testOkxOverride = fn;
+}
+
 async function okxPost(path, body) {
   const res = await withTimeout(
     fetch(`${BASE}${path}`, {
@@ -68,6 +75,7 @@ function collectRiskEntries(section) {
  * Rugpull is informational only; wash trading is used as a hard filter upstream.
  */
 export async function getRiskFlags(tokenAddress, chainId = CHAIN_SOLANA) {
+  if (_testOkxOverride !== null) return _testOkxOverride(tokenAddress);
   const ts = Date.now();
   const path = `/priapi/v1/dx/market/v2/risk/new/check?chainId=${chainId}&tokenContractAddress=${tokenAddress}&t=${ts}`;
   const data = await okxGet(path);
@@ -94,6 +102,9 @@ export async function getRiskFlags(tokenAddress, chainId = CHAIN_SOLANA) {
  * Advanced token info — risk level, bundle/sniper/suspicious %, dev rug history, token tags.
  */
 export async function getAdvancedInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
+  if (_testOkxOverride !== null) {
+    return _testOkxOverride(tokenAddress);
+  }
   const path = `/api/v6/dex/market/token/advanced-info?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
   const data = await okxGet(path);
   const d = Array.isArray(data) ? data[0] : data;
@@ -128,6 +139,7 @@ export async function getAdvancedInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
  * Condenses to top N clusters for LLM consumption.
  */
 export async function getClusterList(tokenAddress, chainIndex = CHAIN_SOLANA, limit = 5) {
+  if (_testOkxOverride !== null) return _testOkxOverride(tokenAddress);
   const path = `/api/v6/dex/market/token/cluster/list?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
   const data = await okxGet(path);
   // Public endpoint returns data.clusterList (not data[0].clustList)
@@ -155,6 +167,7 @@ export async function getClusterList(tokenAddress, chainIndex = CHAIN_SOLANA, li
  * Also returns holders, marketCap, liquidity from this endpoint.
  */
 export async function getPriceInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
+  if (_testOkxOverride !== null) return _testOkxOverride(tokenAddress);
   const data = await okxPost("/api/v6/dex/market/price-info", [
     { chainIndex, tokenContractAddress: tokenAddress },
   ]);
