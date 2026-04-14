@@ -1,10 +1,14 @@
 import fs from "fs";
 import path from "path";
+import { addrShort } from "../tools/addrShort.js";
 
 const LOG_DIR = "./logs";
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
-const LOG_FORMAT = process.env.LOG_FORMAT || "text"; // "text" or "json"
-const LOG_MAX_SIZE_BYTES = parseInt(process.env.LOG_MAX_SIZE || "10000000", 10); // 10MB default
+const JSON_FORMAT = process.env.JSON_FORMAT === "true"; // when true, output structured JSON
+// ─── Log rotation ───────────────────────────────────────────────────────
+// LOG_MAX_SIZE_BYTES: rotate when log exceeds this size (10 MB default).
+// LOG_MAX_FILES: number of rotated .1/.2/… files to preserve before pruning.
+const LOG_MAX_SIZE_BYTES = parseInt(process.env.LOG_MAX_SIZE || "10000000", 10); // 10 MB
 const LOG_MAX_FILES = parseInt(process.env.LOG_MAX_FILES || "7", 10);
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -42,7 +46,7 @@ function rotateLog(logFile) {
     // Truncate current file
     fs.writeFileSync(logFile, "");
   } catch (err) {
-    console.error("Log rotation failed:", err.message);
+    log("error", "logger", `Log rotation failed: ${err.message}`);
   }
 }
 
@@ -59,8 +63,13 @@ export function log(level, category, message, meta = {}) {
   const corrId = meta.correlationId ? ` [${addrShort(meta.correlationId)}]` : "";
 
   // Structured JSON output
-  if (LOG_FORMAT === "json") {
-    const entry = { timestamp, level, category: category.toUpperCase(), message, ...meta };
+  if (JSON_FORMAT) {
+    const entry = {
+      ts: timestamp,
+      level,
+      msg: message,
+      meta: { category: category.toUpperCase(), ...meta },
+    };
     const json = JSON.stringify(entry);
     console.log(json);
     const dateStr = timestamp.split("T")[0];

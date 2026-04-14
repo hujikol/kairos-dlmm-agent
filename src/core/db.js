@@ -22,7 +22,17 @@ export function getDB() {
   return _db;
 }
 
-function initSchema(db) {
+// ─── Test injection ───────────────────────────────────────────────────────────
+let _schemaInit = false;
+
+/** Inject a test database instance (for unit tests only). */
+export function _injectDB(db) {
+  if (_db && _db !== db) _db.close();
+  _db = db;
+  _schemaInit = true; // skip re-init since test DB already has schema
+}
+
+export function initSchema(db) {
   // ─── Key-Value Store (for _lastBriefingDate, lastUpdated, etc) ───
   db.exec(`
     CREATE TABLE IF NOT EXISTS kv_store (
@@ -261,14 +271,35 @@ function initSchema(db) {
     )
   `);
 
-  // ─── Strategies: Phase 13 columns (nullable — ALTER for existing tables) ───
-  const phaseCols = db.prepare("PRAGMA table_info(strategies)").all();
-  const hasCol = (name) => phaseCols.some(c => c.name === name);
-  if (!hasCol('phase')) db.exec(`ALTER TABLE strategies ADD COLUMN phase TEXT CHECK (phase IN ('any','pump','pullback','runner','bear','bull','consolidation'))`);
-  if (!hasCol('bin_count')) db.exec(`ALTER TABLE strategies ADD COLUMN bin_count INTEGER`);
-  if (!hasCol('fee_tier_target')) db.exec(`ALTER TABLE strategies ADD COLUMN fee_tier_target REAL`);
-  if (!hasCol('max_hold_hours')) db.exec(`ALTER TABLE strategies ADD COLUMN max_hold_hours INTEGER`);
-  if (!hasCol('confidence')) db.exec(`ALTER TABLE strategies ADD COLUMN confidence INTEGER DEFAULT 0`);
+  // ─── Schema Migrations ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _schema_versions (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT
+    )
+  `);
+
+  const MIGRATIONS = [
+    {
+      version: 1,
+      name: "strategies_phase13",
+      sql: `
+        ALTER TABLE strategies ADD COLUMN phase TEXT CHECK (phase IN ('any','pump','pullback','runner','bear','bull','consolidation'));
+        ALTER TABLE strategies ADD COLUMN bin_count INTEGER;
+        ALTER TABLE strategies ADD COLUMN fee_tier_target REAL;
+        ALTER TABLE strategies ADD COLUMN max_hold_hours INTEGER;
+        ALTER TABLE strategies ADD COLUMN confidence INTEGER DEFAULT 0;
+      `,
+    },
+  ];
+
+  const applied = new Set(db.prepare("SELECT version FROM _schema_versions").all().map((r) => r.version));
+  for (const { version, name, sql } of MIGRATIONS) {
+    if (applied.has(version)) continue;
+    db.exec(sql);
+    db.prepare("INSERT INTO _schema_versions (version, applied_at) VALUES (?, ?)").run(version, new Date().toISOString());
+    log("info", "db", `Applied schema migration #${version} (${name})`);
+  }
 
   // ─── Signal Weights ───
   db.exec(`

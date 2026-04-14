@@ -2,9 +2,11 @@ import cron from "node-cron";
 import { config } from "../config.js";
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
-import { updatePnlAndCheckExits, setLastBriefingDate, getLastBriefingDate } from "./state.js";
+import { setLastBriefingDate, getLastBriefingDate } from "./state/registry.js";
+import { updatePnlAndCheckExits } from "./state/pnl.js";
 import { sendHTML, isEnabled as telegramEnabled } from "../notifications/telegram.js";
 import { generateBriefing } from "../notifications/briefing.js";
+import { captureError } from "../instrument.js";
 
 // ─── Cron-only constants ─────────────────────────────────────────────────────
 const PNL_POLL_INTERVAL_MS = 30_000; // 30s PnL polling interval
@@ -84,39 +86,65 @@ export function stopCronJobs() {
 }
 
 // Imported lazily to avoid circular dependency
-let _runManagementCycle = null;
-let _runScreeningCycle = null;
+let _cyclesPromise = null;
 
-export function startCronJobs() {
+async function getCycles() {
+  if (!_cyclesPromise) {
+    _cyclesPromise = import("../index.js");
+  }
+  const mod = await _cyclesPromise;
+  return { runManagementCycle: mod.runManagementCycle, runScreeningCycle: mod.runScreeningCycle };
+}
+
+export async function startCronJobs() {
   stopCronJobs();
 
-  // Lazily resolve to avoid circular import
-  if (!_runManagementCycle) {
-    ({ runManagementCycle: _runManagementCycle, runScreeningCycle: _runScreeningCycle } = require("../index.js"));
-  }
+  const { runManagementCycle, runScreeningCycle } = await getCycles();
 
   const mgmtTask = cron.schedule(
     `*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`,
     async () => {
       if (_managementBusy) return;
       timers.managementLastRun = Date.now();
-      await _runManagementCycle();
+      try {
+        await runManagementCycle();
+      } catch (e) {
+        captureError(e, { phase: "management_cycle" });
+        log("error", "scheduler", `Management cycle error: ${e.message}`);
+      }
     }
   );
 
   const screenTask = cron.schedule(
     `*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`,
-    () => _runScreeningCycle()
+    async () => {
+      try {
+        await runScreeningCycle();
+      } catch (e) {
+        captureError(e, { phase: "screening_cycle" });
+        log("error", "scheduler", `Screening cycle error: ${e.message}`);
+      }
+    }
   );
 
   // Morning Briefing at 8:00 AM UTC+7 (1:00 AM UTC)
   const briefingTask = cron.schedule("0 1 * * *", async () => {
-    await runBriefing();
+    try {
+      await runBriefing();
+    } catch (e) {
+      captureError(e, { phase: "briefing" });
+      log("error", "scheduler", `Briefing error: ${e.message}`);
+    }
   }, { timezone: "UTC" });
 
   // Every 6h — catch up if briefing was missed
   const briefingWatchdog = cron.schedule("0 */6 * * *", async () => {
-    await maybeRunMissedBriefing();
+    try {
+      await maybeRunMissedBriefing();
+    } catch (e) {
+      captureError(e, { phase: "briefing_watchdog" });
+      log("error", "scheduler", `Briefing watchdog error: ${e.message}`);
+    }
   }, { timezone: "UTC" });
 
   // Lightweight 30s PnL poller — updates trailing TP state between management cycles

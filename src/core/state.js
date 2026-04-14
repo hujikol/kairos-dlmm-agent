@@ -12,6 +12,16 @@ import { getDB } from "./db.js";
 import { log } from "./logger.js";
 import { addrShort } from "../tools/addrShort.js";
 
+// ─── OOR wait multipliers — applied to outOfRangeWaitMinutes based on pool volatility ───
+// vol >= 7  → multiply by 0.5 (high volatility = faster OOR timeout, don't wait as long)
+// vol >= 4  → multiply by 0.75 (moderate volatility)
+const OOR_WAIT_MULT_HIGH   = 0.5;
+const OOR_WAIT_MULT_MODERATE = 0.75;
+
+// ─── Trailing drop multiplier for high-volatility pools ───
+// vol >= 7 → trailingDropPct * 1.5 (wider trail to avoid premature stop-out)
+const TRAILING_DROP_MULT = 1.5;
+
 const MAX_RECENT_EVENTS = 20;
 
 // ─── KV Store Helpers ──────────────────────────────────────────
@@ -257,12 +267,22 @@ export function setPositionInstruction(position_address, instruction) {
   return true;
 }
 
+// rowToPos: deserializes a raw SQLite position row into a full position object.
+// Intentionally separate from compressPositions() in prompt.js — see that function's
+// docstring for explanation of why position serialization is split across two places.
 function rowToPos(row) {
+  let bin_range, signal_snapshot, notes;
+  try { bin_range = JSON.parse(row.bin_range || '{}'); }
+  catch (e) { log("warn", "state", `rowToPos: bin_range JSON parse failed (repairing): ${e?.message}`); bin_range = {}; }
+  try { signal_snapshot = JSON.parse(row.signal_snapshot || 'null'); }
+  catch (e) { log("warn", "state", `rowToPos: signal_snapshot JSON parse failed (repairing): ${e?.message}`); signal_snapshot = null; }
+  try { notes = JSON.parse(row.notes || '[]'); }
+  catch (e) { log("warn", "state", `rowToPos: notes JSON parse failed (repairing): ${e?.message}`); notes = []; }
   return {
     ...row,
-    bin_range: JSON.parse(row.bin_range || '{}'),
-    signal_snapshot: JSON.parse(row.signal_snapshot || 'null'),
-    notes: JSON.parse(row.notes || '[]'),
+    bin_range,
+    signal_snapshot,
+    notes,
     closed: row.closed === 1,
     trailing_active: row.trailing_active === 1
   };
@@ -284,7 +304,16 @@ export function getTrackedPositions(openOnly = false) {
 /**
  * Get a single tracked position.
  */
+let _trackedPositionOverride = null;
+
+export function _injectTrackedPosition(pos) {
+  _trackedPositionOverride = pos;
+}
+
 export function getTrackedPosition(position_address) {
+  if (_trackedPositionOverride && _trackedPositionOverride.position === position_address) {
+    return _trackedPositionOverride;
+  }
   const db = getDB();
   const row = db.prepare('SELECT * FROM positions WHERE position = ?').get(position_address);
   return row ? rowToPos(row) : null;
@@ -390,13 +419,13 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   // ── Volatility-adaptive adjustments ────────────────────────────
   const vol = pos.volatility ?? 3;
   const oorWait = vol >= 7
-    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * 0.5)
+    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * OOR_WAIT_MULT_HIGH)
     : vol >= 4
-    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * 0.75)
+    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * OOR_WAIT_MULT_MODERATE)
     : mgmtConfig.outOfRangeWaitMinutes;
 
   const adaptiveTrailingDrop = vol >= 7
-    ? mgmtConfig.trailingDropPct * 1.5 
+    ? mgmtConfig.trailingDropPct * TRAILING_DROP_MULT
     : mgmtConfig.trailingDropPct;
 
   // ── Stop loss ──────────────────────────────────────────────────
@@ -436,7 +465,7 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     fee_per_tvl_24h != null &&
     mgmtConfig.minFeePerTvl24h != null &&
     fee_per_tvl_24h < mgmtConfig.minFeePerTvl24h &&
-    (age_minutes == null || age_minutes >= minAgeForYieldCheck)
+    (age_minutes != null && age_minutes >= minAgeForYieldCheck)
   ) {
     return {
       action: "LOW_YIELD",
