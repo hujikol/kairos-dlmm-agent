@@ -1,5 +1,5 @@
 {
-  "name": "dlmm-agent",
+  "name": "meridian",
   "version": "1.0.0",
   "type": "module",
   "description": "Autonomous DLMM LP agent for Meteora pools on Solana",
@@ -18,9 +18,9 @@
     "postinstall": "node scripts/patch-anchor.js"
   },
   "dependencies": {
-    "@sentry/node": "^8.0.0",
-    "@sentry/profiling-node": "^8.0.0",
     "@meteora-ag/dlmm": "1.9.4",
+    "@sentry/node": "^10.48.0",
+    "@sentry/profiling-node": "^10.48.0",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
     "better-sqlite3": "12.8.0",
@@ -29,7 +29,7 @@
     "dotenv": "17.3.1",
     "jsonrepair": "3.13.3",
     "node-cron": "3.0.3",
-    "openai": "4.104.0",
+    "openai": "^6.34.0",
     "write-file-atomic": "7.0.1"
   },
   "engines": {
