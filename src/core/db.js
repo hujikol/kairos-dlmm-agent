@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
+import { MIGRATIONS } from "../../migrations/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, "meridian.db");
@@ -16,24 +17,61 @@ export function getDB() {
   _db.pragma("synchronous = NORMAL"); // Better performance with WAL
   _db.pragma("foreign_keys = ON"); // Enforce FK constraints
 
-  // Initialize schema
+  // Run migrations first (handles both fresh and existing DBs)
+  migrate(_db);
+
+  // Initialize additional schema (backward compat — all tables created via migrations now)
   initSchema(_db);
 
   return _db;
 }
 
 // ─── Test injection ───────────────────────────────────────────────────────────
-let _schemaInit = false;
 
 /** Inject a test database instance (for unit tests only). */
 export function _injectDB(db) {
   if (_db && _db !== db) _db.close();
   _db = db;
-  _schemaInit = true; // skip re-init since test DB already has schema
 }
 
+// ─── Schema Migration Runner ──────────────────────────────────────────────────
+
+export function migrate(db) {
+  // Ensure _schema_versions table exists first
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _schema_versions (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT
+    )
+  `);
+
+  const applied = new Set(
+    db.prepare("SELECT version FROM _schema_versions").all().map(r => r.version)
+  );
+
+  for (const migration of MIGRATIONS) {
+    if (applied.has(migration.id)) continue;
+    db.transaction(() => {
+      migration.fn(db);
+      db.prepare(
+        "INSERT INTO _schema_versions (version, applied_at) VALUES (?, ?)"
+      ).run(migration.id, new Date().toISOString());
+      log("info", "db", `Applied migration #${migration.id} (${migration.name})`);
+    })();
+  }
+}
+
+// ─── Utility: Check if a column exists in a table ─────────────────────────────
+
+export function tableHasColumn(db, table, column) {
+  const info = db.prepare(`PRAGMA table_info(${table})`).all();
+  return info.some(col => col.name === column);
+}
+
+// ─── initSchema: backward-compatible table creation ──────────────────────────
+
 export function initSchema(db) {
-  // ─── Key-Value Store (for _lastBriefingDate, lastUpdated, etc) ───
+  // Key-Value Store
   db.exec(`
     CREATE TABLE IF NOT EXISTS kv_store (
       key TEXT PRIMARY KEY,
@@ -41,7 +79,7 @@ export function initSchema(db) {
     )
   `);
 
-  // ─── State: Positions ───
+  // Positions
   db.exec(`
     CREATE TABLE IF NOT EXISTS positions (
       position TEXT PRIMARY KEY,
@@ -57,27 +95,27 @@ export function initSchema(db) {
       fee_tvl_ratio REAL,
       organic_score REAL,
       initial_value_usd REAL,
-      signal_snapshot TEXT, -- JSON
+      signal_snapshot TEXT,
       base_mint TEXT,
       deployed_at TEXT,
       out_of_range_since TEXT,
       last_claim_at TEXT,
       total_fees_claimed_usd REAL,
       rebalance_count INTEGER,
-      closed INTEGER, -- BOOLEAN (0 or 1)
+      closed INTEGER DEFAULT 0,
       closed_at TEXT,
-      notes TEXT, -- JSON array of strings
+      notes TEXT,
       peak_pnl_pct REAL,
-      prev_pnl_pct REAL,  -- tracks previous PnL reading for bad-data detection
-      trailing_active INTEGER, -- BOOLEAN
+      prev_pnl_pct REAL,
+      trailing_active INTEGER DEFAULT 0,
       instruction TEXT,
-      status TEXT DEFAULT 'active', -- 'pending' -> 'active' -> 'closed'
+      status TEXT DEFAULT 'active',
       market_phase TEXT,
       strategy_id TEXT
     )
   `);
 
-  // ─── State: Recent Events ───
+  // Recent Events
   db.exec(`
     CREATE TABLE IF NOT EXISTS recent_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,7 +127,7 @@ export function initSchema(db) {
     )
   `);
 
-  // ─── Lessons: Performance ───
+  // Performance
   db.exec(`
     CREATE TABLE IF NOT EXISTS performance (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,27 +157,26 @@ export function initSchema(db) {
     )
   `);
 
-  // ─── Lessons: Lessons ───
-  // id is TEXT (UUID) — lessons.js generates IDs with crypto.randomUUID()
+  // Lessons
   db.exec(`
     CREATE TABLE IF NOT EXISTS lessons (
       id TEXT PRIMARY KEY,
       rule TEXT,
-      tags TEXT, -- JSON
+      tags TEXT,
       outcome TEXT,
       context TEXT,
       pnl_pct REAL,
       range_efficiency REAL,
       pool TEXT,
       created_at TEXT,
-      pinned INTEGER DEFAULT 0, -- BOOLEAN
+      pinned INTEGER DEFAULT 0,
       role TEXT,
-      rating TEXT, -- 'useful' | 'useless'
+      rating TEXT,
       rating_at TEXT
     )
   `);
 
-  // ─── Near Misses (neutral outcomes: -5% < pnl < 5%) ───
+  // Near Misses
   db.exec(`
     CREATE TABLE IF NOT EXISTS near_misses (
       id TEXT PRIMARY KEY,
@@ -161,7 +198,7 @@ export function initSchema(db) {
     )
   `);
 
-  // ─── Performance Archive (pruned from performance table) ───
+  // Performance Archive
   db.exec(`
     CREATE TABLE IF NOT EXISTS performance_archive (
       id INTEGER PRIMARY KEY,
@@ -192,7 +229,7 @@ export function initSchema(db) {
     )
   `);
 
-  // ─── Pool Memory: Summaries ───
+  // Pool Memory: Summaries
   db.exec(`
     CREATE TABLE IF NOT EXISTS pool_memory (
       pool_address TEXT PRIMARY KEY,
@@ -203,12 +240,12 @@ export function initSchema(db) {
       win_rate REAL,
       last_deployed_at TEXT,
       last_outcome TEXT,
-      notes TEXT, -- JSON array of objects { note, added_at }
+      notes TEXT,
       cooldown_until TEXT
     )
   `);
 
-  // ─── Pool Memory: Deploys ───
+  // Pool Memory: Deploys
   db.exec(`
     CREATE TABLE IF NOT EXISTS pool_deploys (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,7 +264,7 @@ export function initSchema(db) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_pool_deploys_pool ON pool_deploys(pool_address)`);
 
-  // ─── Pool Memory: Snapshots ───
+  // Pool Memory: Snapshots
   db.exec(`
     CREATE TABLE IF NOT EXISTS pool_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,7 +273,7 @@ export function initSchema(db) {
       position TEXT,
       pnl_pct REAL,
       pnl_usd REAL,
-      in_range INTEGER, -- BOOLEAN
+      in_range INTEGER,
       unclaimed_fees_usd REAL,
       minutes_out_of_range INTEGER,
       age_minutes REAL,
@@ -245,25 +282,17 @@ export function initSchema(db) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_pool_snapshots_pool ON pool_snapshots(pool_address)`);
 
-  // ─── Performance indexes ───
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_closed ON positions(closed)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_deployed_at ON positions(deployed_at)`);
-
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_performance_recorded_at ON performance(recorded_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_role ON lessons(role)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_outcome ON lessons(outcome)`);
-
-  // ─── Strategies ───
+  // Strategies
   db.exec(`
     CREATE TABLE IF NOT EXISTS strategies (
       id TEXT PRIMARY KEY,
       name TEXT,
       author TEXT,
       lp_strategy TEXT,
-      token_criteria TEXT, -- JSON
-      entry TEXT, -- JSON
-      range TEXT, -- JSON
-      exit TEXT, -- JSON
+      token_criteria TEXT,
+      entry TEXT,
+      range TEXT,
+      exit TEXT,
       best_for TEXT,
       raw TEXT,
       added_at TEXT,
@@ -271,41 +300,11 @@ export function initSchema(db) {
     )
   `);
 
-  // ─── Schema Migrations ───
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS _schema_versions (
-      version INTEGER PRIMARY KEY,
-      applied_at TEXT
-    )
-  `);
-
-  const MIGRATIONS = [
-    {
-      version: 1,
-      name: "strategies_phase13",
-      sql: `
-        ALTER TABLE strategies ADD COLUMN phase TEXT CHECK (phase IN ('any','pump','pullback','runner','bear','bull','consolidation'));
-        ALTER TABLE strategies ADD COLUMN bin_count INTEGER;
-        ALTER TABLE strategies ADD COLUMN fee_tier_target REAL;
-        ALTER TABLE strategies ADD COLUMN max_hold_hours INTEGER;
-        ALTER TABLE strategies ADD COLUMN confidence INTEGER DEFAULT 0;
-      `,
-    },
-  ];
-
-  const applied = new Set(db.prepare("SELECT version FROM _schema_versions").all().map((r) => r.version));
-  for (const { version, name, sql } of MIGRATIONS) {
-    if (applied.has(version)) continue;
-    db.exec(sql);
-    db.prepare("INSERT INTO _schema_versions (version, applied_at) VALUES (?, ?)").run(version, new Date().toISOString());
-    log("info", "db", `Applied schema migration #${version} (${name})`);
-  }
-
-  // ─── Signal Weights ───
+  // Signal Weights
   db.exec(`
     CREATE TABLE IF NOT EXISTS signal_weights (
-      id INTEGER PRIMARY KEY DEFAULT 1, -- Only one record for current weights
-      weights TEXT, -- JSON
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      weights TEXT,
       last_recalc TEXT,
       recalc_count INTEGER
     )
@@ -314,14 +313,14 @@ export function initSchema(db) {
     CREATE TABLE IF NOT EXISTS signal_weights_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp TEXT,
-      changes TEXT, -- JSON
+      changes TEXT,
       window_size INTEGER,
       win_count INTEGER,
       loss_count INTEGER
     )
   `);
 
-  // ─── Blacklists ───
+  // Blacklists
   db.exec(`
     CREATE TABLE IF NOT EXISTS token_blacklist (
       mint TEXT PRIMARY KEY,
@@ -331,7 +330,6 @@ export function initSchema(db) {
       added_by TEXT
     )
   `);
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS dev_blocklist (
       wallet TEXT PRIMARY KEY,
@@ -341,7 +339,7 @@ export function initSchema(db) {
     )
   `);
 
-  // ─── Smart Wallets ───
+  // Smart Wallets
   db.exec(`
     CREATE TABLE IF NOT EXISTS smart_wallets (
       address TEXT PRIMARY KEY,
@@ -349,6 +347,13 @@ export function initSchema(db) {
       added_at TEXT
     )
   `);
+
+  // Indexes
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_closed ON positions(closed)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_positions_deployed_at ON positions(deployed_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_performance_recorded_at ON performance(recorded_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_role ON lessons(role)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_outcome ON lessons(outcome)`);
 }
 
 /**
@@ -360,8 +365,6 @@ export function closeDB() {
     _db = null;
   }
 }
-
-
 
 /**
  * Validate an ISO 8601 timestamp string.
