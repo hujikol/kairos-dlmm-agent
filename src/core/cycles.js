@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { agentLoop } from "../agent.js";
-import { log } from "./core/logger.js";
+import { log } from "./logger.js";
 import { getMyPositions, getActiveBin } from "./integrations/meteora.js";
 import { getWalletBalances, autoSwapRewardFees } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
@@ -11,7 +11,7 @@ import {
   _managementBusy,
   _screeningBusy,
   _screeningLastTriggered,
-} from "./core/scheduler.js";
+} from "./scheduler.js";
 import { flushNotifications, hasPendingNotifications, pushNotification } from "./notifications/queue.js";
 import { sendHTML, isEnabled as telegramEnabled } from "./notifications/telegram.js";
 import { getTrackedPosition } from "./core/state/registry.js";
@@ -37,7 +37,7 @@ import {
   MAX_LLM_OUTPUT_DISPLAY,
   MAX_HTML_MSG_LEN,
   PRICE_FORMAT_THRESHOLD,
-} from "./core/constants.js";
+} from "./constants.js";
 
 // ─── HTML escaper ─────────────────────────────────────────────────────────────
 
