@@ -28,11 +28,22 @@ export const RISK_LOW_ORGANIC  = 25;   // organic_score < 60
 // ─── Meteora / Positions ─────────────────────────────────────────
 export const CLAIM_DEDUP_MS    = 60_000; // 60-second window to skip re-claiming fees
 
-// ─── Conviction Sizing (index.js screening prompt) ────────────────
-export const CONVICTION_VERY_HIGH_SOL = 0.70;   // base size for very_high conviction
-export const CONVICTION_HIGH_SOL      = 0.53;   // size for high conviction
-export const CONVICTION_NORMAL_SOL    = 0.35;   // size for normal conviction
-export const CONVICTION_ZERO_POS_MULT = 1.5;    // multiplier when 0 open positions → 0.70 × 1.5 = 1.05 SOL
+// ─── Timeouts (ms) ─────────────────────────────────────────
+export const WATCHDOG_POLL_INTERVAL_MS     = 60_000;
+export const LLM_TIMEOUT_MS               = 300_000;
+export const RETRY_DELAY_MS                = 5_000;
+export const SOLANA_BACKOFF_BASE_DELAY_MS  = 1_000;
+export const SOLANA_BACKOFF_MAX_DELAY_MS   = 30_000;
+export const TELEGRAM_POLL_TIMEOUT_MS      = 35_000;
+export const TELEGRAM_MSG_DELAY_MS         = 1_500;
+export const HIVE_MIND_SYNC_DEBOUNCE_MS    = 300_000;
+export const HIVE_MIND_GET_TIMEOUT_MS      = 5_000;
+export const HIVE_MIND_POST_TIMEOUT_MS     = 10_000;
+export const PNL_TIMEOUT_MS               = 8_000;
+export const METEORA_CLOSE_SYNC_WAIT_MS    = 5_000;
+export const METEORA_CLOSE_RETRY_DELAY_MS  = 3_000;
+export const METEORA_POSITIONS_CACHE_TTL_MS = 300_000;
+export const LPAGENT_RATE_LIMIT_BUFFER_MS = 1_000;
 
 // ─── PnL Sanity Check ────────────────────────────────────────────
 export const PNL_SUSPECT_PCT  = 100;   // flag PnL > 100% as suspect (API bad data)

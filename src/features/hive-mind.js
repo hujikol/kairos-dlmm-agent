@@ -26,10 +26,12 @@ import { fileURLToPath } from "url";
 import { getDB } from "../core/db.js";
 import { USER_CONFIG_PATH } from "../config.js";
 import { addrShort } from "../tools/addrShort.js";
+import {
+  HIVE_MIND_SYNC_DEBOUNCE_MS,
+  HIVE_MIND_GET_TIMEOUT_MS,
+  HIVE_MIND_POST_TIMEOUT_MS,
+} from "../core/constants.js";
 
-const SYNC_DEBOUNCE_MS = parseInt(process.env.HIVE_MIND_SYNC_DEBOUNCE_MS || "300000"); // 5 minutes
-const GET_TIMEOUT_MS = parseInt(process.env.HIVE_MIND_GET_TIMEOUT_MS || "5000");
-const POST_TIMEOUT_MS = parseInt(process.env.HIVE_MIND_POST_TIMEOUT_MS || "10000");
 const MIN_AGENTS_FOR_CONSENSUS = 3;
 const MAX_CONSENSUS_CHARS = 500;
 
@@ -55,7 +57,7 @@ function readJsonFile(filePath) {
   } catch (e) { log("warn", "hive-mind", `Failed to read state file: ${e?.message}`); return null; }
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = GET_TIMEOUT_MS) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = HIVE_MIND_GET_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -108,7 +110,7 @@ export async function register(url, registrationToken) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ display_name: displayName, registration_token: registrationToken }),
     },
-    POST_TIMEOUT_MS,
+    HIVE_MIND_POST_TIMEOUT_MS,
   );
 
   if (!res.ok) {
@@ -139,7 +141,7 @@ export async function syncToHive() {
 
     // Debounce
     const now = Date.now();
-    if (now - _lastSyncTime < SYNC_DEBOUNCE_MS) return;
+    if (now - _lastSyncTime < HIVE_MIND_SYNC_DEBOUNCE_MS) return;
     _lastSyncTime = now;
 
     // ── Collect local data from SQLite ──────────────────────────
@@ -196,7 +198,7 @@ export async function syncToHive() {
         },
         body: JSON.stringify(payload),
       },
-      POST_TIMEOUT_MS,
+      HIVE_MIND_POST_TIMEOUT_MS,
     );
 
     if (!res.ok) {

@@ -1,9 +1,9 @@
 import { PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
-import { CLAIM_DEDUP_MS } from "../../core/constants.js";
+import { CLAIM_DEDUP_MS, METEORA_CLOSE_SYNC_WAIT_MS, METEORA_CLOSE_RETRY_DELAY_MS } from "../../core/constants.js";
 import { recordClaim, recordClose, getTrackedPosition } from "../../core/state/registry.js";
 import { recordPerformance } from "../../core/lessons.js";
-import { config } from "../../config.js";
+import { config, isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
@@ -21,7 +21,7 @@ import { getMyPositions, _positionsCache, invalidatePositionsCache } from "./pos
  */
 export async function claimFees({ position_address }) {
   position_address = normalizeMint(position_address);
-  if (process.env.DRY_RUN === "true") {
+  if (isDryRun()) {
     recordClaim(position_address, 0);
     return { dry_run: true, would_claim: position_address, message: "DRY RUN — no transaction sent" };
   }
@@ -134,8 +134,12 @@ async function closeRemoveLiquidity(ctx) {
   const { pool, positionPubKey, wallet } = ctx;
   const closeTxHashes = [];
   let hasLiquidity = false;
-  let closeFromBinId = -887272;
-  let closeToBinId = 887272;
+  // The minimum/maximum bin ID for Meteora DLMM pools.
+  // 887272 ≈ log_base(1.0001)(MAX_TICK), the theoretical max bin for tick spacing 0.0001.
+  const MIN_BIN_ID = -887272;
+  const MAX_BIN_ID =  887272;
+  let closeFromBinId = MIN_BIN_ID;
+  let closeToBinId = MAX_BIN_ID;
 
   try {
     const positionDataForClose = await pool.getPosition(positionPubKey);
@@ -188,11 +192,11 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   log("info", "close", `Step 2 OK (close only): ${closeTxHashes.join(", ") || "none"}`);
   log("info", "close", `SUCCESS txs: ${txHashes.join(", ")}`);
 
-  await new Promise(r => setTimeout(r, parseInt(process.env.METEORA_CLOSE_SYNC_WAIT_MS || "5000")));
+  await new Promise(r => setTimeout(r, METEORA_CLOSE_SYNC_WAIT_MS));
   invalidatePositionsCache();
 
   let closedConfirmed = false;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const refreshed = await getMyPositions({ force: true, silent: true });
       const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
@@ -201,7 +205,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
     } catch (e) {
       log("warn", "close", `Close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
     }
-    if (attempt < 3) await new Promise((r) => setTimeout(r, parseInt(process.env.METEORA_CLOSE_RETRY_DELAY_MS || "3000")));
+    if (attempt < 3) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
   }
 
   if (!closedConfirmed) {
@@ -322,7 +326,7 @@ export async function closePosition({ position_address, reason }) {
   position_address = normalizeMint(position_address);
   const tracked = getTrackedPosition(position_address);
 
-  if (process.env.DRY_RUN === "true") {
+  if (isDryRun()) {
     return { dry_run: true, would_close: position_address, message: "DRY RUN — no transaction sent" };
   }
 

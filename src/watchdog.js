@@ -10,6 +10,7 @@ import { markOutOfRange } from "./core/state/oor.js";
 import { syncOpenPositions } from "./core/state/sync.js";
 import { log } from './core/logger.js';
 import { runManagementCycle } from './index.js';
+import { WATCHDOG_POLL_INTERVAL_MS } from './core/constants.js';
 
 // Track healer cycle state to prevent overlapping unscheduled runs
 let _healerRunning = false;
@@ -79,5 +80,5 @@ export async function startWatchdog(config) {
         log("error", "watchdog", `Watchdog error on ${pos.position}: ${e.message}`);
       }
     }
-  }, parseInt(process.env.WATCHDOG_POLL_INTERVAL_MS || "60000"));
+  }, WATCHDOG_POLL_INTERVAL_MS);
 }

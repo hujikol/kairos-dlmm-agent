@@ -6,11 +6,12 @@
 import OpenAI from "openai";
 import { log } from "../core/logger.js";
 import { DEFAULT_MODEL, FALLBACK_MODEL } from "./intent.js";
+import { LLM_TIMEOUT_MS, RETRY_DELAY_MS } from "../core/constants.js";
 
 export const client = new OpenAI({
   baseURL: process.env.LLM_BASE_URL || "https://openrouter.ai/api/v1",
   apiKey: process.env.LLM_API_KEY || process.env.OPENROUTER_API_KEY,
-  timeout: parseInt(process.env.LLM_TIMEOUT_MS || "300000"),
+  timeout: LLM_TIMEOUT_MS,
 });
 
 /**
@@ -31,7 +32,7 @@ export async function callWithRetry(client, model, messages, tools, options = {}
     if (response.choices?.length) return { response, usedModel };
     const errCode = response.error?.code;
     if (errCode === 502 || errCode === 503 || errCode === 529) {
-      const wait = (attempt + 1) * 5000;
+      const wait = (attempt + 1) * RETRY_DELAY_MS;
       if (attempt === 1 && usedModel !== FALLBACK_MODEL) {
         usedModel = FALLBACK_MODEL;
         log("info", "agent", `Switching to fallback model ${FALLBACK_MODEL}`);

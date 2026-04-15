@@ -4,8 +4,9 @@ import { fileURLToPath } from "url";
 import { log } from "../core/logger.js";
 import { USER_CONFIG_PATH } from "../config.js";
 import { caveman } from "../tools/caveman.js";
-import { config } from "../config.js";
+import { config, isDryRun } from "../config.js";
 import { addrShort } from "../tools/addrShort.js";
+import { TELEGRAM_MSG_DELAY_MS, TELEGRAM_POLL_TIMEOUT_MS } from "../core/constants.js";
 import writeFileAtomic from "write-file-atomic";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
@@ -54,7 +55,7 @@ async function processQueue() {
     } catch (e) {
       log("error", "telegram", `Queue task failed: ${e.message}`);
     }
-    await sleep(parseInt(process.env.TELEGRAM_MSG_DELAY_MS || "1500")); // 1.5s delay between messages to respect Telegram limits
+    await sleep(TELEGRAM_MSG_DELAY_MS); // 1.5s delay between messages to respect Telegram limits
   }
 
   _isSending = false;
@@ -79,6 +80,10 @@ export function isEnabled() {
  */
 export async function sendMessage(text, parseMode = "Markdown") {
   if (!TOKEN || !chatId) return;
+  if (isDryRun()) {
+    log("debug", "telegram", "DRY_RUN: skipping send", { text: String(text).slice(0, 80) });
+    return;
+  }
   const finalText = config.cavemanEnabled ? caveman(String(text)) : String(text);
   return new Promise((resolve) => {
     enqueueMessage(async () => {
@@ -119,6 +124,10 @@ export async function sendMessage(text, parseMode = "Markdown") {
  */
 export async function sendHTML(html) {
   if (!TOKEN || !chatId) return;
+  if (isDryRun()) {
+    log("debug", "telegram", "DRY_RUN: skipping send", { html: String(html).slice(0, 80) });
+    return;
+  }
   const finalText = config.cavemanEnabled ? caveman(html) : html;
   return new Promise((resolve) => {
     enqueueMessage(async () => {
@@ -156,7 +165,7 @@ async function poll(onMessage) {
     try {
       const res = await fetch(
         `${BASE}/getUpdates?offset=${_offset}&timeout=30`,
-        { signal: AbortSignal.timeout(parseInt(process.env.TELEGRAM_POLL_TIMEOUT_MS || "35000")) }
+        { signal: AbortSignal.timeout(TELEGRAM_POLL_TIMEOUT_MS) }
       );
       if (!res.ok) { await sleep(5000); continue; }
       const data = await res.json();
