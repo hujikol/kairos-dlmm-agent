@@ -48,3 +48,23 @@ export const LPAGENT_RATE_LIMIT_BUFFER_MS = 1_000;
 // ─── PnL Sanity Check ────────────────────────────────────────────
 export const PNL_SUSPECT_PCT  = 100;   // flag PnL > 100% as suspect (API bad data)
 export const PNL_SUSPECT_USD  = 1;     // minimum USD value for inner suspect check
+
+// ─── Position Age & Yield ─────────────────────────────────────────
+export const MIN_POSITION_AGE_FOR_YIELD_CHECK_MS = 86_400_000; // 24 hours in ms
+
+// ─── Screener ─────────────────────────────────────────────────────
+export const SCREENING_COOLDOWN_MS = 300_000; // 5-minute cooldown between scans
+
+// ─── LLM Output ───────────────────────────────────────────────────
+export const MIN_LLM_OUTPUT_LEN     = 5;
+export const MAX_LLM_OUTPUT_DISPLAY = 2000;
+export const MAX_HTML_MSG_LEN       = 4096;
+
+// ─── Agent Loop ───────────────────────────────────────────────────
+export const LOOP_TIMEOUT_MS = 120_000; // 2 minutes wall-clock per step
+
+// ─── Gas ──────────────────────────────────────────────────────────
+export const GAS_COST_PER_TX_SOL = 0.01; // 0.005 * 2 for deploy + close
+
+// ─── Price Formatting ──────────────────────────────────────────────
+export const PRICE_FORMAT_THRESHOLD = 0.0001; // below this, use toExponential(3); else toFixed(6)

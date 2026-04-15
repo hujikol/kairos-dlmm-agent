@@ -18,11 +18,11 @@ import { executeTool } from "../tools/executor.js";
 import { caveman } from "../tools/caveman.js";
 import { getStateSummary } from "../core/state/index.js";
 import { getLessonsForPrompt, getPerformanceSummary } from "../core/lessons.js";
+import { LOOP_TIMEOUT_MS } from "../core/constants.js";
 
 // ReAct safety guards
 const MAX_REACT_DEPTH = 6;
 const MAX_TOOL_CALLS_PER_STEP = 10;
-const LOOP_TIMEOUT_MS = 120_000; // 2 minutes wall-clock
 
 // Tools that should only fire once per session
 const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_position"]);

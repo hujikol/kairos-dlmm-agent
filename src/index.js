@@ -1,7 +1,7 @@
 import "dotenv/config";
 import readline from "readline";
 
-import { agentLoop } from "./agent.js";
+import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
 import { config } from "./config.js";
 import {
@@ -13,7 +13,7 @@ import {
   maybeRunMissedBriefing,
 } from "./core/scheduler.js";
 import { stopPolling } from "./notifications/telegram.js";
-import { runScreeningCycle } from "./core/orchestration.js";
+import { runScreeningCycle } from "./core/cycles.js";
 import { getMyPositions } from "./integrations/meteora.js";
 import { initSentry } from "./instrument.js";
 import { registerCronRestarter } from "./tools/executor.js";

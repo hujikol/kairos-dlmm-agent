@@ -18,7 +18,6 @@ export {
 // positions.js
 export {
   POSITIONS_CACHE_TTL,
-  _positionsCache,
   _positionsCacheAt,
   invalidatePositionsCache,
   deployPosition,

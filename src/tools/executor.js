@@ -16,6 +16,7 @@ import { registerTokens } from "./tokens.js";
 import { registerPositions, positionWriteTools } from "./positions.js";
 import { registerWallet, walletWriteTools } from "./wallet.js";
 import { registerAdmin } from "./admin.js";
+import { TOOL_DEFINITIONS } from "./definitions.js";
 
 const toolMap = {};
 function registerTool(name, fn) { toolMap[name] = fn; }
@@ -47,6 +48,30 @@ const READ_ONLY_CACHE = {
 export { toolMap };
 
 /**
+ * Validate tool arguments against the tool's parameter schema.
+ * Throws a descriptive error if required params are missing or extra params are present.
+ */
+function validateToolArgs(toolName, args, schema) {
+  if (!schema || typeof args !== "object" || args === null) return;
+
+  const required = schema.required || [];
+  for (const param of required) {
+    if (!(param in args) || args[param] === undefined) {
+      throw new Error(`Missing required param '${param}' for '${toolName}' tool`);
+    }
+  }
+
+  if (schema.additionalProperties === false && args) {
+    const allowed = new Set(Object.keys(schema.properties || {}));
+    for (const key of Object.keys(args)) {
+      if (!allowed.has(key)) {
+        throw new Error(`Unknown param '${key}' for '${toolName}' tool — additionalProperties: false`);
+      }
+    }
+  }
+}
+
+/**
  * Execute a tool call with safety checks and logging.
  * Read-only tools use the TTL cache to avoid redundant API calls.
  */
@@ -75,6 +100,10 @@ export async function executeTool(name, args) {
 
   // ─── Execute (cached for read-only tools) ─────────────────────
   try {
+    // ─── Runtime argument validation ─────────────────────────────
+    const schema = TOOL_DEFINITIONS[name];
+    if (schema) validateToolArgs(name, args, schema);
+
     const doExec = () => fn(args);
     const cached = READ_ONLY_CACHE[name];
     const result = cached

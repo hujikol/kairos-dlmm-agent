@@ -6,7 +6,7 @@ import { USER_CONFIG_PATH } from "../config.js";
 import { caveman } from "../tools/caveman.js";
 import { config, isDryRun } from "../config.js";
 import { addrShort } from "../tools/addrShort.js";
-import { TELEGRAM_MSG_DELAY_MS, TELEGRAM_POLL_TIMEOUT_MS } from "../core/constants.js";
+import { PRICE_FORMAT_THRESHOLD, TELEGRAM_MSG_DELAY_MS, TELEGRAM_POLL_TIMEOUT_MS } from "../core/constants.js";
 import writeFileAtomic from "write-file-atomic";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
@@ -230,7 +230,7 @@ export function stopPolling() {
  */
 export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, binStep, baseFee }) {
   const priceStr = priceRange
-    ? `Price range: ${priceRange.min < 0.0001 ? priceRange.min.toExponential(3) : priceRange.min.toFixed(6)} – ${priceRange.max < 0.0001 ? priceRange.max.toExponential(3) : priceRange.max.toFixed(6)}\n`
+    ? `Price range: ${priceRange.min < PRICE_FORMAT_THRESHOLD ? priceRange.min.toExponential(3) : priceRange.min.toFixed(6)} – ${priceRange.max < PRICE_FORMAT_THRESHOLD ? priceRange.max.toExponential(3) : priceRange.max.toFixed(6)}\n`
     : "";
   const poolStr = (binStep || baseFee)
     ? `Bin step: ${binStep ?? "?"}  •  Base fee: ${baseFee != null ? baseFee + "%" : "?"}\n`

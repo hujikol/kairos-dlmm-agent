@@ -9,7 +9,8 @@ import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { getPool, getWallet, sendTx, poolCache, lookupPoolForPosition } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
-import { getMyPositions, _positionsCache, invalidatePositionsCache } from "./positions.js";
+import { getMyPositions, invalidatePositionsCache } from "./positions.js";
+import { positionsCache } from "../../core/cache-manager.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ export async function claimFees({ position_address }) {
       if (entry) {
         claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
       }
-    } catch (_) { /* non-critical */ }
+    } catch (_) { log("warn", "claim", `Non-critical error fetching claimed fees: ${_?.message || _}`); }
     if (claimedFeesUsd !== null) {
       recordClaim(position_address, claimedFeesUsd);
     }
@@ -110,7 +111,7 @@ async function closeClaimFees(ctx) {
             const claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
             if (claimedFeesUsd > 0) recordClaim(position_address, claimedFeesUsd);
           }
-        } catch (_) { /* best-effort */ }
+        } catch (_) { log("warn", "close", `Non-critical error fetching claimed fees in close flow: ${_?.message || _}`); }
       }
     }
   } catch (e) {
@@ -266,7 +267,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   }
 
   if (finalValueUsd === 0) {
-    const cachedPos = _positionsCache?.positions?.find(p => p.position === position_address);
+    const cachedPos = positionsCache.get("positions")?.positions?.find(p => p.position === position_address);
     if (cachedPos) {
       pnlUsd     = cachedPos.pnl_true_usd ?? cachedPos.pnl_usd ?? 0;
       pnlPct     = cachedPos.pnl_pct   ?? 0;
@@ -333,13 +334,12 @@ export async function closePosition({ position_address, reason }) {
   try {
     log("info", "close", `Closing position: ${position_address}`);
     const wallet = getWallet();
-    const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString(), _positionsCache);
+    const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
     const positionPubKey = new PublicKey(position_address);
 
-    // Attach positions cache to ctx so closeVerifyAndRecord can use _positionsCache via the ref
-    const ctx = { position_address, poolAddress, tracked, wallet, pool, positionPubKey, positionsCache: _positionsCache };
+    const ctx = { position_address, poolAddress, tracked, wallet, pool, positionPubKey };
 
     // Phase 1: Claim fees
     const { claimTxHashes } = await closeClaimFees(ctx);

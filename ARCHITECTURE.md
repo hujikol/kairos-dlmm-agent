@@ -17,11 +17,11 @@
 ## Core Data Flow
 
 ```
-RPC (Solana) ←→ meteora.js (DLMM deploy/close/claim)
+RPC (Solana) ←→ meteora/ (DLMM deploy/close/claim)
                     ↓
-              state.js (SQLite position registry)
+              state/index.js (SQLite position registry)
                     ↓
-              lessons.js + threshold-evolver.js (learning)
+              lesson-service.js + lesson-repo.js + threshold-evolver.js (learning)
                     ↓
               Telegram + REPL (human feedback)
 ```
@@ -33,6 +33,7 @@ RPC (Solana) ←→ meteora.js (DLMM deploy/close/claim)
 |------|---------------|
 | `src/index.js` | REPL, cron scheduling, Telegram polling, startup/shutdown |
 | `src/core/scheduler.js` | Cron job registry and launch |
+| `src/core/cycles.js` | `runManagementCycle` and `runScreeningCycle` — canonical home for cycle runners |
 
 ### Agent
 | File | Responsibility |
@@ -46,10 +47,14 @@ RPC (Solana) ←→ meteora.js (DLMM deploy/close/claim)
 ### Integrations
 | File | Responsibility |
 |------|---------------|
-| `src/integrations/meteora.js` | DLMM pool: deploy, close, claim, positions, PnL |
-| `src/integrations/helius.js` | Wallet balances, Jupiter swaps, TTL cache |
+| `src/integrations/meteora/` | DLMM pool: deploy, close, claim, positions, PnL (split across pool/positions/pnl/close sub-modules) |
+| `src/integrations/meteora.js` | Re-export wrapper for backward compatibility |
+| `src/integrations/helius/` | Wallet balances, Jupiter swaps, TTL cache (split across balances/swaps/auto sub-modules) |
+| `src/integrations/helius.js` | Re-export wrapper for backward compatibility |
 | `src/integrations/solana.js` | Shared RPC connection |
 | `src/integrations/lpagent.js` | LPAgent API for studying top LPers |
+| `src/integrations/jupiter.js` | Jupiter swap API |
+| `src/integrations/okx.js` | OKX exchange integration |
 
 ### Screening
 | File | Responsibility |
@@ -59,16 +64,18 @@ RPC (Solana) ←→ meteora.js (DLMM deploy/close/claim)
 ### Learning
 | File | Responsibility |
 |------|---------------|
-| `src/core/lessons.js` | Learning facade + lesson CRUD |
-| `src/core/lesson-repo.js` | Lesson table CRUD + retrieval |
+| `src/core/lesson-service.js` | recordPerformance orchestration + learning stats |
+| `src/core/lesson-repo.js` | Lesson CRUD: add, pin/unpin, rate, retrieve, getRelevantLessons |
+| `src/core/lessons.js` | Learning facade — re-exports lesson-repo and lesson-service |
 | `src/core/threshold-evolver.js` | Threshold evolution algorithm |
 | `src/core/patterns.js` | Pattern recognition engine |
+| `src/core/darwin-weights.js` | Darwinian signal weight recalculation |
 | `src/core/postmortem.js` | Post-close analysis |
 
 ### State
 | File | Responsibility |
 |------|---------------|
-| `src/core/state.js` | SQLite position registry |
+| `src/core/state/index.js` | SQLite position registry — re-exports registry, oor, events, pnl, sync sub-modules |
 | `src/core/db.js` | Database connection |
 
 ### Notifications
@@ -292,38 +299,40 @@ CREATE TABLE postmortem_rules (
 );
 ```
 
-## Circular Lazy Imports
+## Cycle Functions — `cycles.js`
 
-The module graph contains two intentional circular dependencies that are resolved
-with dynamic (`import()`) lazy loading.  Static analysis tools cannot see these
-cycles — the graph is only valid at runtime.
+The cycle runner functions (`runManagementCycle` and `runScreeningCycle`) have
+been extracted from `orchestration.js` into a new dedicated module:
 
-### Pattern 1: `scheduler.js ↔ index.js`
+| File | Responsibility |
+|------|---------------|
+| `src/core/cycles.js` | `runManagementCycle` and `runScreeningCycle` — extracted here as the canonical home |
+| `src/core/orchestration.js` | Helper functions (`escapeHTML`, `computeManagementActions`, etc.) |
+| `src/core/scheduler.js` | Cron scheduling; imports cycle functions from `cycles.js` via dynamic import inside `startCronJobs()` |
+| `src/index.js` | Imports `runScreeningCycle` from `cycles.js` |
 
+This breaks the historical `scheduler.js ↔ index.js` circular dependency that was
+previously resolved with a lazy `getCycles()` workaround.
+
+**Import flow after refactor:**
 ```
-index.js (top-level)  ─── imports ──→  scheduler.js
-      ↑                                      │
-      └── lazy import (getCycles) ── runManagementCycle / runScreeningCycle
+scheduler.js  ──dynamic import in startCronJobs()──→  cycles.js
+                                                        │
+index.js  ──import──→  cycles.js  ←──import──  orchestration.js
+                                                         │
+                                               (imports state from)
+                                                         │
+                                               scheduler.js
 ```
 
-`scheduler.js` needs `runManagementCycle` and `runScreeningCycle` from `index.js`,
-but `index.js` imports `scheduler.js` at top level (for `timers`, `_managementBusy`,
-`_screeningBusy`, etc.).  The cycle is broken by importing the two cycle
-functions lazily inside `startCronJobs()` via `getCycles()` (scheduler.js line 91).
-
-**Rule:** Never add a top-level `import ... from "../index.js"` or
-`import ... from "./orchestration.js"` in `scheduler.js`.  If you need a function
-from `index.js` in a new code path, call it lazily via `getCycles()` or extract
-the needed function into a third file with no index.js dependency.
-
-### Pattern 2: `pool.js → state/index.js` (lazy)
+## Lazy Imports (Pattern 2 — one-way, not a cycle)
 
 `src/integrations/meteora/pool.js` uses a lazy import at line 181 to call
 `getTrackedPosition` from `state/index.js`.  This avoids pulling `state/index.js`
 (and its SQLite dependencies) into memory when the Meteora SDK is loaded statically.
 No reverse path exists — `state/index.js` does not import pool.js — so this is a
 one-way lazy load rather than a true cycle.  It is documented here for
-completeness because the pattern is the same.
+completeness because the pattern is similar.
 
 ### General Rule
 
@@ -331,7 +340,8 @@ When refactoring code in this codebase:
 - **Never** add a top-level import of `scheduler.js` in `index.js` or any module
   that `index.js` transitively imports at top level.
 - If a refactor requires a function from `scheduler.js` in a new context, extract
-  it to a shared utility file with no circular dependencies, or use a lazy import.
+  it to `cycles.js` (if it is a cycle runner) or a shared utility file with no
+  circular dependencies.
 - When using lazy imports (`import(...)`), keep them close to the call site so
   reviewers can spot potential cycles.
 

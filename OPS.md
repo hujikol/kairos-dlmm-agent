@@ -102,15 +102,22 @@ curl http://localhost:3030/health
 
 The health endpoint is at `http://localhost:3030/health` (or `HEALTH_PORT` env var).
 
-**Free external monitoring** — use Better Uptime or UptimeRobot:
-1. Sign up at https://betterstack.co (free tier)
-2. Add a monitor for `https://your-domain.com:3030/health`
-3. Set check interval to 1 minute
-4. Configure alert channels (email, Slack, PagerDuty)
+See `HEALTH_MONITORING.md` for full documentation including Better Uptime setup,
+self-hosted cron monitoring, and security considerations.
 
-**Self-hosted Prometheus** — add to `src/server/health.js`:
-- Expose `/metrics` endpoint using `prom-client`
-- Increment counter on each health check
+**Quick-start: self-hosted cron (every minute):**
+```bash
+# Test manually first
+node scripts/health-check.js
+
+# Add to crontab
+* * * * * cd /path/to/kairos && node scripts/health-check.js >> logs/health.log 2>&1
+```
+
+**Security note:** The `/health` endpoint requires no authentication and exposes
+`positionCount`, `uptime`, and `memory`. Do not expose port 3030 directly to the
+public internet without a reverse proxy that restricts access. See
+`HEALTH_MONITORING.md` for recommended reverse-proxy patterns.
 - Track: `up`, `position_count`, `last_cycle_timestamp`
 
 ## Database Backup
@@ -143,12 +150,36 @@ Logs rotate automatically when file exceeds 10MB. Keeping 7 rotated files per ty
 # Pull latest
 git pull
 
-# Update dependencies
+# Update dependencies (postinstall auto-patches anchor and rebuilds native modules)
 npm install
 
 # Restart
 pm2 restart kairos
 ```
+
+## Node Version Upgrades
+
+`better-sqlite3` is a native addon — it uses Node.js ABI and must be rebuilt when the Node version changes. This happens automatically via the postinstall script, but if you install with `--ignore-scripts` you must run manually:
+
+```bash
+node scripts/rebuild-native.js
+# or directly:
+npm rebuild better-sqlite3
+```
+
+Supported Node versions: `20.x || 22.x || 23.x || 24.x || 25.x`
+
+## Deployment Checklist
+
+- [ ] `.env` file present with all required variables
+- [ ] `pm2 start ecosystem.config.js --name kairos` running without errors
+- [ ] `curl http://localhost:3030/health` returns 200
+- [ ] Health monitoring configured (Better Uptime or self-hosted cron — see `HEALTH_MONITORING.md`)
+- [ ] Alert channel (email/Telegram) confirmed working
+- [ ] `logs/` directory created and writable
+- [ ] `backups/` directory created
+- [ ] `pm2 save` run to persist process list
+- [ ] `pm2 startup` configured for reboot resilience
 
 ## Panic Recovery
 

@@ -11,11 +11,11 @@
     "setup": "node src/setup.js",
     "start": "node src/index.js",
     "dev": "DRY_RUN=true node src/index.js",
-    "test": "node --test test-*.js",
+    "test": "node --test 'test-*.js' '*.test.js'",
     "test:watch": "node --test --watch test-*.js",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
-    "postinstall": "node scripts/patch-anchor.js"
+    "postinstall": "node scripts/patch-anchor.js && node scripts/rebuild-native.js"
   },
   "dependencies": {
     "@meteora-ag/dlmm": "1.9.4",

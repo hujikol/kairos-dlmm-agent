@@ -1015,3 +1015,10 @@ Blacklisted tokens are filtered BEFORE the LLM even sees pool candidates.`,
     }
   },
 ];
+
+// Name → parameter schema lookup
+export const TOOL_DEFINITIONS = {};
+for (const tool of tools) {
+  TOOL_DEFINITIONS[tool.function.name] = tool.function.parameters;
+}
+

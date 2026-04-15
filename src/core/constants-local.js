@@ -29,13 +29,3 @@ export const MAX_TELEGRAM_QUEUE = 5;         // max queued Telegram messages whi
 // ─── Derived from config ──────────────────────────────────────────
 export const DEPLOY = config.management.deployAmountSol;
 
-// ─── HTML escaping ────────────────────────────────────────────────
-export function escapeHTML(text) {
-  if (!text) return text;
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}

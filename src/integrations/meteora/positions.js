@@ -26,20 +26,13 @@ import {
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { METEORA_POSITIONS_CACHE_TTL_MS } from "../../core/constants.js";
 import { positionsCache } from "../../core/cache-manager.js";
+import { roundTo } from "../../utils/round.js";
 
 // ─── Positions cache ──────────────────────────────────────────────
 export const POSITIONS_CACHE_TTL = METEORA_POSITIONS_CACHE_TTL_MS;
 
-// Backward-compatibility mirror: close.js reads _positionsCache?.positions?.find(...)
-// These need to stay in sync with the positionsCache manager
-export let _positionsCache = null;
-
-// _positionsInflight is a promise-in-progress tracker, not a cache entry
-let _positionsInflight = null;
-
 export function invalidatePositionsCache() {
   positionsCache.delete("positions");
-  _positionsCache = null;
 }
 
 // ─── Test injection ────────────────────────────────────────────────
@@ -47,18 +40,14 @@ export function invalidatePositionsCache() {
 export function _injectPositionsCache(result) {
   if (result) {
     positionsCache.setForTesting("positions", result);
-    _positionsCache = result;
   } else {
     positionsCache.delete("positions");
-    _positionsCache = null;
   }
 }
 
 export function _resetPositionsCache() {
   positionsCache.clearForTesting("positions");
   positionsCache.delete("positions");
-  _positionsCache = null;
-  _positionsInflight = null;
 }
 
 // ─── deployPosition ───────────────────────────────────────────────
@@ -320,7 +309,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     }
   }
 
-  if (_positionsInflight) return _positionsInflight;
+  let inflight = null;
 
   let walletAddress;
   try {
@@ -330,7 +319,9 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     return { wallet: null, total_positions: 0, positions: [], error: "Wallet not configured" };
   }
 
-  _positionsInflight = (async () => { try {
+  if (inflight) return inflight;
+
+  inflight = (async () => { try {
     if (!silent) log("info", "positions", "Fetching portfolio via Meteora portfolio API...");
     const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
     const res = await fetch(portfolioUrl);
@@ -371,32 +362,32 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           upper_bin:           upperBin,
           active_bin:          activeBin,
           in_range:            !isOOR,
-          unclaimed_fees_usd: Math.round((binData
+          unclaimed_fees_usd: roundTo(parseFloat(binData
             ? config.management.solMode
               ? parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.amountSol || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.amountSol || 0)
               : parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)
-            : parseFloat(config.management.solMode ? (pool.unclaimedFeesSol || 0) : (pool.unclaimedFees || 0))) * 10000) / 10000,
-          total_value_usd:    Math.round((binData
+            : parseFloat(config.management.solMode ? (pool.unclaimedFeesSol || 0) : (pool.unclaimedFees || 0))), 4),
+          total_value_usd:    roundTo(parseFloat(binData
             ? config.management.solMode
               ? parseFloat(binData.unrealizedPnl?.balancesSol || 0)
               : parseFloat(binData.unrealizedPnl?.balances || 0)
-            : parseFloat(config.management.solMode ? (pool.balancesSol || 0) : (pool.balances || 0))) * 10000) / 10000,
-          total_value_true_usd: Math.round((binData
+            : parseFloat(config.management.solMode ? (pool.balancesSol || 0) : (pool.balances || 0))), 4),
+          total_value_true_usd: roundTo(parseFloat(binData
             ? parseFloat(binData.unrealizedPnl?.balances || 0)
-            : parseFloat(pool.balances || 0)) * 10000) / 10000,
-          collected_fees_usd: Math.round(parseFloat(config.management.solMode ? (binData?.allTimeFees?.total?.sol || 0) : (binData?.allTimeFees?.total?.usd || 0)) * 10000) / 10000,
-          collected_fees_true_usd: Math.round(parseFloat(binData?.allTimeFees?.total?.usd || 0) * 10000) / 10000,
-          pnl_usd:            Math.round(parseFloat(binData
+            : parseFloat(pool.balances || 0)), 4),
+          collected_fees_usd: roundTo(parseFloat(config.management.solMode ? (binData?.allTimeFees?.total?.sol || 0) : (binData?.allTimeFees?.total?.usd || 0)), 4),
+          collected_fees_true_usd: roundTo(parseFloat(binData?.allTimeFees?.total?.usd || 0), 4),
+          pnl_usd:            roundTo(parseFloat(binData
             ? config.management.solMode ? (binData.pnlSol || 0) : (binData.pnlUsd || 0)
-            : config.management.solMode ? (pool.pnlSol || 0) : (pool.pnl || 0)) * 10000) / 10000,
-          pnl_true_usd:       Math.round(parseFloat(binData?.pnlUsd || 0) * 10000) / 10000,
-          pnl_pct:            Math.round(parseFloat(binData
+            : config.management.solMode ? (pool.pnlSol || 0) : (pool.pnl || 0)), 4),
+          pnl_true_usd:       roundTo(parseFloat(binData?.pnlUsd || 0), 4),
+          pnl_pct:            roundTo(parseFloat(binData
             ? config.management.solMode ? (binData.pnlSolPctChange || 0) : (binData.pnlPctChange || 0)
-            : config.management.solMode ? (pool.pnlSolPctChange || 0) : (pool.pnlPctChange || 0)) * 100) / 100,
-          unclaimed_fees_true_usd: Math.round((binData
+            : config.management.solMode ? (pool.pnlSolPctChange || 0) : (pool.pnlPctChange || 0)), 2),
+          unclaimed_fees_true_usd: roundTo(parseFloat(binData
             ? parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)
-            : parseFloat(pool.unclaimedFees || 0)) * 10000) / 10000,
-          fee_per_tvl_24h:    Math.round(parseFloat(binData?.feePerTvl24h || pool.feePerTvl24h || 0) * 100) / 100,
+            : parseFloat(pool.unclaimedFees || 0)), 4),
+          fee_per_tvl_24h:    roundTo(parseFloat(binData?.feePerTvl24h || pool.feePerTvl24h || 0), 2),
           age_minutes:        binData?.createdAt ? Math.floor((Date.now() - binData.createdAt * 1000) / 60000) : ageFromState,
           minutes_out_of_range: minutesOutOfRange(positionAddress),
           instruction:        tracked?.instruction ?? null,
@@ -407,16 +398,15 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     const result = { wallet: walletAddress, total_positions: positions.length, positions };
     syncOpenPositions(positions.map(p => p.position));
     positionsCache.set("positions", result, METEORA_POSITIONS_CACHE_TTL_MS);
-    _positionsCache = result;
     return result;
   } catch (error) {
     log("error", "positions", `Portfolio fetch failed: ${error.stack || error.message}`);
     return { wallet: walletAddress, total_positions: 0, positions: [], error: error.message };
   } finally {
-    _positionsInflight = null;
+    inflight = null;
   }
   })();
-  return _positionsInflight;
+  return inflight;
 }
 
 // ─── getWalletPositions ────────────────────────────────────────────

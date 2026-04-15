@@ -5,6 +5,7 @@ import {
   VOL_BREAK_HIGH, VOL_BREAK_MED,
   CONF_BASELINE, CONF_AGE_48H, CONF_AGE_12H, CONF_LOW_VOL, CONF_FEE_TVL_RATIO,
   RISK_NO_AGE, RISK_HIGH_VOL, RISK_HIGH_RISK, RISK_BUNDLE_30, RISK_LOW_ORGANIC,
+  GAS_COST_PER_TX_SOL,
 } from "./constants.js";
 
 export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
@@ -19,7 +20,7 @@ export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
   const expectedIL = deployAmountSol * solPriceUsd * ilRisk;
 
   // Gas cost estimate
-  const gasCost = 0.005 * solPriceUsd * 2; // deploy + close
+  const gasCost = GAS_COST_PER_TX_SOL * solPriceUsd;
 
   const netDaily = dailyFees - expectedIL / 365 - gasCost;
   const minRequired = deployAmountSol * solPriceUsd * MIN_DAILY_ROI / 365;
