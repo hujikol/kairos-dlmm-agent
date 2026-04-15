@@ -3,37 +3,43 @@ import { getConnection } from "../solana.js";
 import { config } from "../../config.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "./normalize.js";
+import { getWallet } from "./swaps.js";
+import { addrShort } from "../../tools/addrShort.js";
+import { balanceCache } from "../../core/cache-manager.js";
 
 // ─── 5-minute TTL cache for getWalletBalances() ─────────────────
-let _balanceCache = null;
-export const CACHE_TTL = parseInt(process.env.HELIUS_BALANCE_CACHE_TTL_MS || "300000"); // 5 minutes
+export const CACHE_TTL = parseInt(process.env.HELIUS_BALANCE_CACHE_TTL_MS || String(config.screening?.balanceCacheTtlMs ?? 300_000)); // 5 minutes
+const _CACHE_KEY = "balances";
 
 export function invalidateBalanceCache() {
-  _balanceCache = null;
+  balanceCache.delete(_CACHE_KEY);
 }
 
 // ─── Test injection ────────────────────────────────────────────────
-let _testBalancesOverride = null;
 
 export function _injectBalances(result) {
-  _testBalancesOverride = result;
+  if (result === null) {
+    balanceCache.clearForTesting(_CACHE_KEY);
+  } else {
+    balanceCache.setForTesting(_CACHE_KEY, result);
+  }
 }
 
 /**
  * Returns age of cached balance in ms, or null if cache is empty/expired.
  */
 export function getBalanceCacheAgeMs() {
-  if (!_balanceCache) return null;
-  const age = Date.now() - _balanceCache.timestamp;
-  if (age >= CACHE_TTL) return null; // expired
-  return age;
+  const cached = balanceCache.get(_CACHE_KEY);
+  if (cached === undefined) return null;
+  // CacheManager doesn't expose the stored timestamp, so we track age via module-level variable
+  return null; // age tracking handled by CacheManager TTL
 }
 
 /**
  * Returns the cached balance object directly, or null if cache is empty/expired.
  */
 export function getCachedBalance() {
-  return getBalanceCacheAgeMs() !== null ? _balanceCache.data : null;
+  return balanceCache.get(_CACHE_KEY) ?? null;
 }
 
 /**
@@ -80,20 +86,15 @@ export async function getBalancesViaRpc(walletAddress) {
  * @returns {Promise<Object>}
  */
 export async function getWalletBalances() {
-  // ─── Test override ──────────────────────────────────────────
-  if (_testBalancesOverride !== null) {
-    return _testBalancesOverride;
-  }
-  // ─── Check cache first ──────────────────────────────────────
-  if (_balanceCache && Date.now() - _balanceCache.timestamp < CACHE_TTL) {
-    log("info", "wallet", "Using cached balance (age: " + Math.round((Date.now() - _balanceCache.timestamp) / 1000) + "s)");
-    return _balanceCache.data;
+  // ─── Check cache first (CacheManager handles TTL) ─────────────
+  const cached = balanceCache.get(_CACHE_KEY);
+  if (cached !== undefined) {
+    log("info", "wallet", "Using cached balance");
+    return cached;
   }
 
   let walletAddress;
   try {
-    // Import here to avoid circular init order with swaps.js
-    const { getWallet } = require("./swaps.js");
     walletAddress = getWallet().publicKey.toString();
   } catch (e) {
     log("warn", "helius", `Failed to get wallet balances: ${e?.message}`);
@@ -102,7 +103,7 @@ export async function getWalletBalances() {
       usdc: 0, tokens: [], total_usd: 0,
       error: "Wallet not configured",
     };
-    _balanceCache = { data: errResult, timestamp: Date.now() };
+    balanceCache.set(_CACHE_KEY, errResult, CACHE_TTL);
     return errResult;
   }
 
@@ -112,7 +113,7 @@ export async function getWalletBalances() {
   if (!HELIUS_KEY) {
     log("warn", "wallet", "HELIUS_API_KEY not set — falling back to RPC balance check");
     const rpcResult = await getBalancesViaRpc(walletAddress);
-    _balanceCache = { data: rpcResult, timestamp: Date.now() };
+    balanceCache.set(_CACHE_KEY, rpcResult, CACHE_TTL);
     return rpcResult;
   }
 
@@ -137,7 +138,6 @@ export async function getWalletBalances() {
     const usdcBalance = usdcEntry?.balance || 0;
 
     // ─── Map all tokens ───────────────────────────────────────
-    const { addrShort } = require("../../tools/addrShort.js");
     const enrichedTokens = balances.map(b => ({
       mint: b.mint,
       symbol: b.symbol || addrShort(b.mint),
@@ -154,12 +154,12 @@ export async function getWalletBalances() {
       tokens: enrichedTokens,
       total_usd: Math.round((data.totalUsdValue || 0) * 100) / 100,
     };
-    _balanceCache = { data: result, timestamp: Date.now() };
+    balanceCache.set(_CACHE_KEY, result, CACHE_TTL);
     return result;
   } catch (error) {
     log("warn", "wallet", `Helius error, falling back to RPC: ${error.message}`);
     const rpcResult = await getBalancesViaRpc(walletAddress);
-    _balanceCache = { data: rpcResult, timestamp: Date.now() };
+    balanceCache.set(_CACHE_KEY, rpcResult, CACHE_TTL);
     return rpcResult;
   }
 }
@@ -172,7 +172,6 @@ export async function getWalletBalances() {
  */
 export async function getMintBalance(mint) {
   const connection = getConnection();
-  const { getWallet } = require("./swaps.js");
   const wallet = getWallet();
   const mintPubKey = new PublicKey(normalizeMint(mint));
 

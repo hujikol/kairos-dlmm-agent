@@ -9,7 +9,7 @@ import {
   minutesOutOfRange,
   syncOpenPositions,
 } from "../../core/state/index.js";
-import { config } from "../../config.js";
+import { config, isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { isPoolOnCooldown } from "../../features/pool-memory.js";
@@ -24,30 +24,40 @@ import {
   sendTx,
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
+import { METEORA_POSITIONS_CACHE_TTL_MS } from "../../core/constants.js";
+import { positionsCache } from "../../core/cache-manager.js";
 
 // ─── Positions cache ──────────────────────────────────────────────
-export const POSITIONS_CACHE_TTL = parseInt(process.env.METEORA_POSITIONS_CACHE_TTL_MS || "300000");
+export const POSITIONS_CACHE_TTL = METEORA_POSITIONS_CACHE_TTL_MS;
 
+// Backward-compatibility mirror: close.js reads _positionsCache?.positions?.find(...)
+// These need to stay in sync with the positionsCache manager
 export let _positionsCache = null;
-export let _positionsCacheAt = 0;
+
+// _positionsInflight is a promise-in-progress tracker, not a cache entry
 let _positionsInflight = null;
 
 export function invalidatePositionsCache() {
-  _positionsCacheAt = 0;
+  positionsCache.delete("positions");
   _positionsCache = null;
 }
 
 // ─── Test injection ────────────────────────────────────────────────
-let _testPositionsResult = null;
 
 export function _injectPositionsCache(result) {
-  _testPositionsResult = result;
+  if (result) {
+    positionsCache.setForTesting("positions", result);
+    _positionsCache = result;
+  } else {
+    positionsCache.delete("positions");
+    _positionsCache = null;
+  }
 }
 
 export function _resetPositionsCache() {
-  _testPositionsResult = null;
+  positionsCache.clearForTesting("positions");
+  positionsCache.delete("positions");
   _positionsCache = null;
-  _positionsCacheAt = 0;
   _positionsInflight = null;
 }
 
@@ -107,7 +117,7 @@ export async function deployPosition({
     return { success: false, error: "Pool on cooldown — was recently closed for low yield. Try a different pool." };
   }
 
-  if (process.env.DRY_RUN === "true") {
+  if (isDryRun()) {
     const totalBins = activeBinsBelow + activeBinsAbove;
     const finalAmountY = amount_y ?? amount_sol ?? 0;
     const finalAmountX = amount_x ?? 0;
@@ -233,7 +243,7 @@ export async function deployPosition({
 
     log("info", "deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
 
-    _positionsCacheAt = 0;
+    positionsCache.delete("positions");
     const newPositionKey = newPosition.publicKey.toString();
     trackPosition({
       position: newPositionKey,
@@ -296,13 +306,20 @@ export async function deployPosition({
  * @returns {Promise<Object>} { wallet, total_positions, positions: [{ position, pool, pair, base_mint, lower_bin, upper_bin, active_bin, in_range, unclaimed_fees_usd, total_value_usd, pnl_usd, pnl_pct, fee_per_tvl_24h, age_minutes, minutes_out_of_range, instruction }, ...] }
  */
 export async function getMyPositions({ force = false, silent = false } = {}) {
-  // Test override — must check before _positionsInflight (force:true bypasses cache but not test injection)
-  if (_testPositionsResult !== null) {
-    return _testPositionsResult;
+  // Test injection check — setForTesting uses Infinity expiry so always takes precedence
+  const testOverride = positionsCache.get("positions");
+  if (testOverride !== undefined) {
+    return testOverride;
   }
-  if (!force && _positionsCache && Date.now() - _positionsCacheAt < POSITIONS_CACHE_TTL) {
-    return _positionsCache;
+
+  // Cache check (skip if force=true)
+  if (!force) {
+    const cached = positionsCache.get("positions");
+    if (cached !== undefined) {
+      return cached;
+    }
   }
+
   if (_positionsInflight) return _positionsInflight;
 
   let walletAddress;
@@ -389,8 +406,8 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
 
     const result = { wallet: walletAddress, total_positions: positions.length, positions };
     syncOpenPositions(positions.map(p => p.position));
+    positionsCache.set("positions", result, METEORA_POSITIONS_CACHE_TTL_MS);
     _positionsCache = result;
-    _positionsCacheAt = Date.now();
     return result;
   } catch (error) {
     log("error", "positions", `Portfolio fetch failed: ${error.stack || error.message}`);

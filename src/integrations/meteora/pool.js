@@ -12,6 +12,7 @@ import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { isPoolOnCooldown } from "../../features/pool-memory.js";
 import { normalizeMint } from "../helius/normalize.js";
+import { poolCache } from "../../core/cache-manager.js";
 
 // ─── Constants ───────────────────────────────────────────────────
 /** Meteora DLMM program ID (LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo) */
@@ -85,39 +86,41 @@ export async function sendTx(tx, signers) {
 }
 
 // ─── Pool Cache ────────────────────────────────────────────────
-export const poolCache = new Map();
-export const poolCacheTimestamps = new Map();
 const POOL_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 // ─── Test injection hook ────────────────────────────────────────
-let _testPoolOverride = null;
 
 export function _injectPool(pool) {
-  _testPoolOverride = pool;
+  if (pool) {
+    poolCache.setForTesting("testOverride", pool);
+  } else {
+    poolCache.delete("testOverride");
+  }
 }
 
 export async function getPool(poolAddress, { invalidate = false, poolOverride } = {}) {
   const key = poolAddress.toString();
   if (invalidate) {
     poolCache.delete(key);
-    poolCacheTimestamps.delete(key);
     return;
   }
-  if (_testPoolOverride) {
-    return _testPoolOverride;
+
+  // Test override check
+  const testOverride = poolCache.get("testOverride");
+  if (testOverride !== undefined) {
+    return testOverride;
   }
-  const ts = poolCacheTimestamps.get(key);
-  if (ts && Date.now() - ts > POOL_CACHE_TTL_MS) {
-    poolCache.delete(key);
-    poolCacheTimestamps.delete(key);
+
+  // Cache lookup — CacheManager handles TTL expiry internally
+  const cached = poolCache.get(key);
+  if (cached !== undefined) {
+    return cached;
   }
-  if (!poolCache.has(key)) {
-    const { DLMM } = await getDLMM();
-    const pool = await DLMM.create(getConnection(), new PublicKey(poolAddress));
-    poolCache.set(key, pool);
-    poolCacheTimestamps.set(key, Date.now());
-  }
-  return poolCache.get(key);
+
+  const { DLMM } = await getDLMM();
+  const pool = await DLMM.create(getConnection(), new PublicKey(poolAddress));
+  poolCache.set(key, pool, POOL_CACHE_TTL_MS);
+  return pool;
 }
 
 /**
@@ -178,7 +181,7 @@ export async function searchPools({ query, limit = 10 }) {
  * @returns {Promise<string>}
  */
 export async function lookupPoolForPosition(position_address, walletAddress, positionsCache) {
-  const tracked = (await import("../../core/state.js")).getTrackedPosition(position_address);
+  const tracked = (await import("../../core/state/index.js")).getTrackedPosition(position_address);
   if (tracked?.pool) return tracked.pool;
 
   const cached = positionsCache?.positions?.find((p) => p.position === position_address);
