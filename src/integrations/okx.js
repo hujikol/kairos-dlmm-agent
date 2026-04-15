@@ -4,6 +4,8 @@
  * Docs: https://web3.okx.com/build/dev-docs/
  */
 
+import { config } from "./config.js";
+
 const BASE = process.env.OKX_API_BASE || "https://web3.okx.com";
 const CHAIN_SOLANA = "501";
 const PUBLIC_HEADERS = { "Ok-Access-Client-type": "agent-cli" };
@@ -24,7 +26,7 @@ async function withTimeout(fetchPromise, ms) {
 async function okxGet(path) {
   const res = await withTimeout(
     fetch(`${BASE}${path}`, { headers: PUBLIC_HEADERS }),
-    12_000,
+    config.okx?.okxApiTimeoutMs ?? 12_000,
   );
   if (!res.ok) throw new Error(`OKX API ${res.status}: ${path}`);
   const json = await res.json();
@@ -46,7 +48,7 @@ async function okxPost(path, body) {
       headers: { ...PUBLIC_HEADERS, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-    12_000,
+    config.okx?.okxApiTimeoutMs ?? 12_000,
   );
   if (!res.ok) throw new Error(`OKX API ${res.status}: ${path}`);
   const json = await res.json();

@@ -1,10 +1,12 @@
 /**
  * Debug script to test near_misses and lessons inserts in isolation.
  */
-import { getDB, closeDB } from "../src/core/db.js";
+import Database from "better-sqlite3";
+import { initSchema, closeDB } from "../src/core/db.js";
 import crypto from "crypto";
 
-const db = getDB();
+const db = new Database(":memory:");
+initSchema(db);
 
 // Check what the actual schema is
 console.log("=== near_misses columns ===");
@@ -55,4 +57,4 @@ try {
   console.log(e.stack);
 }
 
-closeDB();
+closeDB(db);

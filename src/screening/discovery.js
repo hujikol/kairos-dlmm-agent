@@ -3,6 +3,7 @@ import { isBlacklisted } from "../features/token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
+import { poolCache } from "../core/cache-manager.js";
 
 const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 

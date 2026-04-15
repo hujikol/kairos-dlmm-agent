@@ -50,9 +50,3 @@ export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
   };
 }
 
-function estimateBinRangeWidth(pool) {
-  const binStep = pool.bin_step || 100;
-  const binsBelow = 50; // typical deploy
-  const totalBins = binsBelow;
-  return totalBins * binStep / 100; // approximate percentage
-}

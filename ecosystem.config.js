@@ -38,5 +38,16 @@ module.exports = {
       kill_timeout: 5000,
       shutdown_with_message: true,
     },
+    {
+      name: "kairos-backup",
+      script: "node",
+      args: "scripts/backup-db.js",
+      instances: 1,
+      cron_restart: "0 3 * * *",
+      autorestart: false,
+      out_file: "./logs/backup.log",
+      error_file: "./logs/backup-error.log",
+      max_memory: "50M",
+    },
   ],
 };

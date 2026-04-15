@@ -1,7 +1,7 @@
-import { VersionedTransaction, PublicKey } from "@solana/web3.js";
+import { VersionedTransaction, PublicKey, Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { log } from "../../core/logger.js";
-import { config } from "../../config.js";
+import { config, isDryRun } from "../../config.js";
 import { normalizeMint } from "./normalize.js";
 import { getConnection } from "../solana.js";
 
@@ -11,7 +11,7 @@ export const JUPITER_ULTRA_API        = process.env.JUPITER_ULTRA_API_URL || "ht
 export const JUPITER_QUOTE_API        = process.env.JUPITER_QUOTE_API_URL || "https://api.jup.ag/swap/v1";
 export const JUPITER_API_KEY          = process.env.JUPITER_API_KEY;
 
-const SLIPPAGE_BPS = 300; // 3%
+const SLIPPAGE_BPS = config.screening?.slippageBps ?? 300; // 3%
 
 // ─── Wallet lazy init (shared with balances.js) ────────────────
 let _wallet = null;
@@ -19,7 +19,7 @@ let _wallet = null;
 export function getWallet() {
   if (!_wallet) {
     if (!process.env.WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not set");
-    _wallet = require("@solana/web3.js").Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
+    _wallet = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
   }
   return _wallet;
 }
@@ -43,7 +43,7 @@ export async function swapToken({ input_mint, output_mint, amount }) {
     return { success: true, message: "Input and output mints are the same — skipped." };
   }
 
-  if (process.env.DRY_RUN === "true") {
+  if (isDryRun()) {
     return {
       dry_run: true,
       would_swap: { input_mint, output_mint, amount },

@@ -5,7 +5,7 @@ import { getMyPositions, getActiveBin } from "./integrations/meteora.js";
 import { getWalletBalances, autoSwapRewardFees } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
 import { addrShort } from "./tools/addrShort.js";
-import { config, computeDeployAmount } from "./config.js";
+import { config, computeDeployAmount, isDryRun } from "./config.js";
 import {
   timers,
   _managementBusy,
@@ -202,7 +202,7 @@ async function autoSwapAndNotify(executedActions) {
 
 // ─── Management cycle ────────────────────────────────────────────────────────
 
-const IS_DRY_RUN = process.env.DRY_RUN === "true";
+const IS_DRY_RUN = isDryRun();
 
 export async function runManagementCycle({ silent = false } = {}) {
   if (_managementBusy) return null;

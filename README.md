@@ -159,14 +159,17 @@ Start a chat with your bot and send:
 
 ### REPL commands (when running interactively)
 
-| Command | Description |
-|---------|-------------|
-| `/status` | Wallet balance and open positions |
-| `/candidates` | Re-screen top pool candidates |
-| `/learn` | Study top LPers |
-| `/thresholds` | Current screening thresholds and performance |
-| `/evolve` | Trigger threshold evolution |
-| `/stop` | Graceful shutdown |
+| Command | Description | Notes |
+|---------|-------------|-------|
+| `auto` | Run agent loop to pick best pool and deploy | REPL-only |
+| `screen` | Manually trigger a screening cycle | REPL-only |
+| `go` | Start the cron scheduler (auto-management) | REPL-only |
+| `/status` | Wallet balance and open positions | |
+| `/candidates` | Re-screen top pool candidates | |
+| `/learn` | Study top LPers | |
+| `/thresholds` | Current screening thresholds and performance | |
+| `/evolve` | Trigger threshold evolution | |
+| `/stop` | Graceful shutdown | |
 
 ---
 

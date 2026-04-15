@@ -6,6 +6,81 @@ import { log } from "./core/logger.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 
+// ─── v1 → v2 migration ─────────────────────────────────────────────────────
+const SECTION_KEYS = {
+  screening: [
+    "minFeeActiveTvlRatio", "minOrganic", "minHolders", "minMcap", "maxMcap",
+    "minTvl", "maxTvl", "minVolume", "minBinStep", "maxBinStep", "timeframe",
+    "category", "minTokenFeesSol", "maxBundlePct", "maxBotHoldersPct",
+    "maxTop10Pct", "blockedLaunchpads", "minTokenAgeHours", "maxTokenAgeHours",
+    "athFilterPct", "slippageBps", "screeningCooldownMs", "balanceCacheTtlMs",
+  ],
+  management: [
+    "minClaimAmount", "autoSwapAfterClaim", "autoSwapAfterClose",
+    "outOfRangeBinsToClose", "outOfRangeWaitMinutes", "minVolumeToRebalance",
+    "stopLossPct", "takeProfitFeePct", "minFeePerTvl24h", "minAgeBeforeYieldCheck",
+    "minSolToOpen", "gasReserve", "baseDeployAmount", "maxDeployAmount",
+    "trailingTakeProfit", "trailingTriggerPct", "trailingDropPct", "solMode",
+    "deployAmountSol", "pnlSuspectThresholdPct", "pnlSuspectMinUsd",
+    "yieldCheckMinAgeMs", "minLlmOutputLen", "maxLlmOutputDisplay",
+    "telegramMaxMsgLen",
+  ],
+  risk: [
+    "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
+  ],
+  schedule: [
+    "managementIntervalMin", "screeningIntervalMin",
+  ],
+  llm: [
+    "temperature", "maxTokens", "maxSteps", "screenerMaxSteps", "managerMaxSteps",
+    "managementModel", "screeningModel", "generalModel",
+  ],
+  strategy: [
+    "strategy", "binsBelow",
+  ],
+  okx: [
+    "okxApiTimeoutMs",
+  ],
+};
+
+function migrateConfig() {
+  if (!fs.existsSync(USER_CONFIG_PATH)) return;
+  const raw = fs.readFileSync(USER_CONFIG_PATH, "utf8");
+  const cfg = JSON.parse(raw);
+
+  // Already v2 — all known keys are nested under their section, or file is empty
+  const hasAnySection = Object.keys(SECTION_KEYS).some((s) => cfg[s] !== undefined);
+  if (hasAnySection) return;
+
+  // Detect flat v1 keys present at root level
+  const v1KeysPresent = Object.keys(cfg).filter((k) =>
+    Object.values(SECTION_KEYS).flat().includes(k)
+  );
+  if (v1KeysPresent.length === 0) return;
+
+  // Wrap flat keys under their appropriate section
+  const migrated = { "# v2 format": true };
+  for (const [section, keys] of Object.entries(SECTION_KEYS)) {
+    migrated[section] = {};
+    for (const key of keys) {
+      if (cfg[key] !== undefined) migrated[section][key] = cfg[key];
+    }
+    if (Object.keys(migrated[section]).length === 0) delete migrated[section];
+  }
+
+  // Carry forward top-level keys that are not sectioned (rpcUrl, walletKey, etc.)
+  const SECTIONED_KEYS = new Set(Object.values(SECTION_KEYS).flat());
+  for (const [k, v] of Object.entries(cfg)) {
+    if (!SECTIONED_KEYS.has(k)) migrated[k] = v;
+  }
+
+  fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(migrated, null, 2), "utf8");
+  log("info", "config", `migrated user-config.json from v1 to v2 (${v1KeysPresent.join(", ")})`);
+}
+
+migrateConfig();
+
+// Load migrated (or already-v2) config
 const u = fs.existsSync(USER_CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
   : {};
@@ -20,13 +95,18 @@ if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 
 import { SOL_MINT, USDC_MINT, USDT_MINT } from "./constants.js";
 
+/** Returns true if DRY_RUN is enabled. Use this instead of inline process.env comparisons. */
+export function isDryRun() {
+  return process.env.DRY_RUN === "true";
+}
+
 export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
-    maxPositions:        u.maxPositions        ?? 3,
-    dailyProfitTarget:   u.dailyProfitTarget   ?? 2,      // $2/day minimum
-    dailyLossLimit:      u.dailyLossLimit      ?? -5,     // -$5/day stop trading
-    maxPositionsPerToken: u.maxPositionsPerToken ?? 1,     // max open positions per token
+    maxPositions:        u.risk?.maxPositions        ?? u.maxPositions        ?? 3,
+    dailyProfitTarget:   u.risk?.dailyProfitTarget   ?? u.dailyProfitTarget   ?? 2,
+    dailyLossLimit:      u.risk?.dailyLossLimit      ?? u.dailyLossLimit      ?? -5,
+    maxPositionsPerToken: u.risk?.maxPositionsPerToken ?? u.maxPositionsPerToken ?? 1,
   },
 
   // ─── Pool Screening Thresholds ─ v2 nested thresholds support ───────────
@@ -54,56 +134,69 @@ export const config = {
     minTokenAgeHours:   u.thresholds?.minTokenAgeHours   ?? u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:   u.thresholds?.maxTokenAgeHours   ?? u.maxTokenAgeHours   ?? null, // null = no maximum
     athFilterPct:       u.thresholds?.athFilterPct       ?? u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
+    // ─── Operational tunables ───────────────────────
+    slippageBps:        u.screening?.slippageBps        ?? 300,
+    screeningCooldownMs: u.screening?.screeningCooldownMs ?? 300_000,
+    balanceCacheTtlMs:  u.screening?.balanceCacheTtlMs ?? 300_000,
   },
 
   // ─── Position Management ────────────────
   management: {
-    minClaimAmount:        u.minClaimAmount        ?? 5,
-    autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
-    autoSwapAfterClose:    u.autoSwapAfterClose    ?? true,
-    outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
-    outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
-    minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
-    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
-    takeProfitFeePct:      u.takeProfitFeePct      ?? 5,
-    minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
-    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
-    minSolToOpen:          u.minSolToOpen          ?? 0.55,
-    gasReserve:            u.gasReserve            ?? 0.2,
-    baseDeployAmount:      u.deployAmountSol   ?? u.baseDeployAmount ?? 0.35,
-    deployAmountSol:       u.deployAmountSol   ?? u.baseDeployAmount ?? 0.35,
-    maxDeployAmount:       u.maxDeployAmount       ?? 50,
-    // Trailing take-profit
-    trailingTakeProfit:    u.trailingTakeProfit    ?? true,
-    trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
-    trailingDropPct:       u.trailingDropPct       ?? 1.5,  // close when drops X% from peak
-    // SOL mode — positions, PnL, and balances reported in SOL instead of USD
-    solMode:               u.solMode               ?? false,
+    minClaimAmount:        u.management?.minClaimAmount        ?? u.minClaimAmount        ?? 5,
+    autoSwapAfterClaim:    u.management?.autoSwapAfterClaim    ?? u.autoSwapAfterClaim    ?? false,
+    autoSwapAfterClose:    u.management?.autoSwapAfterClose    ?? u.autoSwapAfterClose    ?? true,
+    outOfRangeBinsToClose: u.management?.outOfRangeBinsToClose ?? u.outOfRangeBinsToClose ?? 10,
+    outOfRangeWaitMinutes: u.management?.outOfRangeWaitMinutes ?? u.outOfRangeWaitMinutes ?? 30,
+    minVolumeToRebalance:  u.management?.minVolumeToRebalance  ?? u.minVolumeToRebalance  ?? 1000,
+    stopLossPct:           u.management?.stopLossPct           ?? u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
+    takeProfitFeePct:      u.management?.takeProfitFeePct      ?? u.takeProfitFeePct      ?? 5,
+    minFeePerTvl24h:       u.management?.minFeePerTvl24h       ?? u.minFeePerTvl24h       ?? 7,
+    minAgeBeforeYieldCheck: u.management?.minAgeBeforeYieldCheck ?? u.minAgeBeforeYieldCheck ?? 60,
+    minSolToOpen:          u.management?.minSolToOpen          ?? u.minSolToOpen          ?? 0.55,
+    gasReserve:            u.management?.gasReserve            ?? u.gasReserve            ?? 0.2,
+    baseDeployAmount:      u.management?.baseDeployAmount      ?? u.deployAmountSol   ?? u.baseDeployAmount ?? 0.35,
+    deployAmountSol:       u.management?.deployAmountSol       ?? u.deployAmountSol   ?? u.baseDeployAmount ?? 0.35,
+    maxDeployAmount:       u.management?.maxDeployAmount       ?? u.maxDeployAmount       ?? 50,
+    trailingTakeProfit:    u.management?.trailingTakeProfit    ?? u.trailingTakeProfit    ?? true,
+    trailingTriggerPct:    u.management?.trailingTriggerPct    ?? u.trailingTriggerPct    ?? 3,
+    trailingDropPct:       u.management?.trailingDropPct       ?? u.trailingDropPct       ?? 1.5,
+    solMode:               u.management?.solMode               ?? u.solMode               ?? false,
+    pnlSuspectThresholdPct: u.management?.pnlSuspectThresholdPct ?? 100,
+    pnlSuspectMinUsd:       u.management?.pnlSuspectMinUsd       ?? 1,
+    yieldCheckMinAgeMs:     u.management?.yieldCheckMinAgeMs     ?? 86_400_000,
+    minLlmOutputLen:        u.management?.minLlmOutputLen        ?? 5,
+    maxLlmOutputDisplay:    u.management?.maxLlmOutputDisplay    ?? 2000,
+    telegramMaxMsgLen:      u.management?.telegramMaxMsgLen      ?? 4096,
+  },
+
+  // ─── OKX ────────────────────────────────
+  okx: {
+    okxApiTimeoutMs: u.okx?.okxApiTimeoutMs ?? 12_000,
   },
 
   // ─── Strategy Mapping ───────────────────
   strategy: {
-    strategy:  u.strategy  ?? "bid_ask",
-    binsBelow: u.binsBelow ?? 69,
+    strategy:  u.strategy?.strategy  ?? u.strategy  ?? "bid_ask",
+    binsBelow: u.strategy?.binsBelow ?? u.binsBelow ?? 69,
   },
 
   // ─── Scheduling ─────────────────────────
   schedule: {
-    managementIntervalMin:  u.managementIntervalMin  ?? (process.env.DRY_RUN === "true" ? 1 : 10),
-    screeningIntervalMin:   u.screeningIntervalMin   ?? (process.env.DRY_RUN === "true" ? 1 : 30),
+    managementIntervalMin:  u.schedule?.managementIntervalMin  ?? (isDryRun() ? 1 : 10),
+    screeningIntervalMin:   u.schedule?.screeningIntervalMin   ?? (isDryRun() ? 1 : 30),
   },
 
   // ─── LLM Settings ──────────────────────
   llm: {
-    temperature: u.temperature ?? 0.373,
-    maxTokens:   u.maxTokens   ?? 4096,
-    maxSteps:    u.maxSteps    ?? 10,
-    screenerMaxSteps: u.screenerMaxSteps ?? 5,
-    managerMaxSteps:  u.managerMaxSteps  ?? 4,
-    managementModel: u.models?.manager  ?? u.managementModel ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
-    screeningModel:  u.models?.screener ?? u.screeningModel  ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
-    generalModel:    u.models?.general ?? u.generalModel    ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
-    evolveModel:     u.models?.evolve  ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
+    temperature: u.llm?.temperature ?? u.temperature ?? 0.373,
+    maxTokens:   u.llm?.maxTokens   ?? u.maxTokens   ?? 4096,
+    maxSteps:    u.llm?.maxSteps    ?? u.maxSteps    ?? 10,
+    screenerMaxSteps: u.llm?.screenerMaxSteps ?? u.screenerMaxSteps ?? 5,
+    managerMaxSteps:  u.llm?.managerMaxSteps  ?? u.managerMaxSteps  ?? 4,
+    managementModel: u.llm?.models?.manager  ?? u.llm?.managementModel ?? u.models?.manager ?? u.managementModel ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
+    screeningModel:  u.llm?.models?.screener ?? u.llm?.screeningModel ?? u.models?.screener ?? u.screeningModel  ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
+    generalModel:    u.llm?.models?.general ?? u.llm?.generalModel ?? u.models?.general ?? u.generalModel    ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
+    evolveModel:     u.llm?.models?.evolve  ?? u.llm?.evolveModel ?? process.env.LLM_MODEL ?? "minimax/minimax-01",
   },
 
 
@@ -169,7 +262,7 @@ export function reloadScreeningThresholds() {
         "minTvl", "maxTvl", "minVolume", "minBinStep", "maxBinStep", "timeframe",
         "category", "minTokenFeesSol", "maxBundlePct", "maxBotHoldersPct",
         "maxTop10Pct", "blockedLaunchpads", "minTokenAgeHours", "maxTokenAgeHours",
-        "athFilterPct",
+        "athFilterPct", "slippageBps", "screeningCooldownMs", "balanceCacheTtlMs",
       ],
       management: [
         "minClaimAmount", "autoSwapAfterClaim", "autoSwapAfterClose",
@@ -177,7 +270,9 @@ export function reloadScreeningThresholds() {
         "stopLossPct", "takeProfitFeePct", "minFeePerTvl24h", "minAgeBeforeYieldCheck",
         "minSolToOpen", "gasReserve", "baseDeployAmount", "maxDeployAmount",
         "trailingTakeProfit", "trailingTriggerPct", "trailingDropPct", "solMode",
-        "deployAmountSol",
+        "deployAmountSol", "pnlSuspectThresholdPct", "pnlSuspectMinUsd",
+        "yieldCheckMinAgeMs", "minLlmOutputLen", "maxLlmOutputDisplay",
+        "telegramMaxMsgLen",
       ],
       risk: [
         "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
@@ -187,16 +282,22 @@ export function reloadScreeningThresholds() {
       ],
       llm: [
         "temperature", "maxTokens", "maxSteps", "screenerMaxSteps", "managerMaxSteps",
-        "managementModel", "screeningModel", "generalModel", "maxWallSeconds",
+        "managementModel", "screeningModel", "generalModel",
       ],
       strategy: [
         "strategy", "binsBelow",
+      ],
+      okx: [
+        "okxApiTimeoutMs",
       ],
     };
 
     for (const [section, keys] of Object.entries(SECTION_MAP)) {
       for (const key of keys) {
-        if (fresh[key] !== undefined) {
+        // Prefer v2 nested path; fall back to flat v1 key for backward compatibility
+        if (fresh[section]?.[key] !== undefined) {
+          config[section][key] = fresh[section][key];
+        } else if (fresh[key] !== undefined) {
           config[section][key] = fresh[key];
         }
       }

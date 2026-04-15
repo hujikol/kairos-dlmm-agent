@@ -3,7 +3,7 @@ import readline from "readline";
 
 import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
-import { config } from "./config.js";
+import { config, isDryRun } from "./config.js";
 import {
   timers,
   startCronJobs,
@@ -30,7 +30,7 @@ import { setRl, buildPrompt } from "./rl-shared.js";
 initSentry();
 
 log("info", "startup", "DLMM LP Agent starting...");
-log("info", "startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
+log("info", "startup", `Mode: ${isDryRun() ? "DRY RUN" : "LIVE"}`);
 log("info", "startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
 
 // ─── Health endpoint (process liveness probe) ───────────────────────────────────

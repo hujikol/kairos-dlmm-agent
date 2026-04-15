@@ -273,7 +273,7 @@ switch (subcommand) {
     const positionAddress = flags.position || posAddr;
     if (!positionAddress) die("Usage: kairos pnl <position_address>");
 
-    const { getTrackedPosition } = await import("./core/state.js");
+    const { getTrackedPosition } = await import("./core/state/index.js");
     const { getPositionPnl, getMyPositions } = await import("./integrations/meteora.js");
 
     let poolAddress;

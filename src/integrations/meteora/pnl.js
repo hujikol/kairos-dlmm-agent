@@ -3,11 +3,7 @@ import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { getWallet } from "./pool.js";
-
-// ─── Fetch DLMM PnL API for all positions in a pool ────────────
-
-// PNL API timeout — configurable via PNL_TIMEOUT_MS env var (default 8000ms)
-const PNL_TIMEOUT_MS = parseInt(process.env.PNL_TIMEOUT_MS || "8000", 10);
+import { PNL_TIMEOUT_MS } from "../../core/constants.js";
 
 /**
  * Fetch raw PnL data from Meteora DLMM API for all positions in a pool for a wallet.

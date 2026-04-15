@@ -1,4 +1,4 @@
-import { agentLoop } from "./agent.js";
+import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
 import { getWalletBalances, getMyPositions } from "./integrations/meteora.js";
 import { getTopCandidates } from "./screening/discovery.js";

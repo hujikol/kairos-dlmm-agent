@@ -85,7 +85,7 @@ Sets defined in `agent.js:7-8`. If you add a tool, add it to the relevant sets.
 | maxDeployAmount | risk | 50 |
 | maxPositions | risk | 3 |
 | gasReserve | management | 0.2 |
-| positionSizePct | management | 0.35 |
+| deployAmountSol | management | 0.5 |
 | minSolToOpen | management | 0.55 |
 | outOfRangeWaitMinutes | management | 30 |
 | managementIntervalMin | schedule | 10 |
@@ -94,7 +94,7 @@ Sets defined in `agent.js:7-8`. If you add a tool, add it to the relevant sets.
 | models.manager / screener / general / evolve | llm | free-tier defaults |
 | cavemanEnabled | behavior | false |
 
-**`computeDeployAmount(walletSol)`** — scales position size: `clamp(deployable × positionSizePct, floor=deployAmountSol, ceil=maxDeployAmount)`.
+**`computeDeployAmount(walletSol)`** — scales position size: `clamp(deployable × deployAmountSol, floor=deployAmountSol, ceil=maxDeployAmount)`.
 
 ---
 
