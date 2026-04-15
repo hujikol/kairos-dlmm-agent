@@ -7,10 +7,10 @@ import { config, isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
-import { getPool, getWallet, sendTx, poolCache, lookupPoolForPosition } from "./pool.js";
+import { getPool, getWallet, sendTx, lookupPoolForPosition } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { getMyPositions, invalidatePositionsCache } from "./positions.js";
-import { positionsCache } from "../../core/cache-manager.js";
+import { positionsCache, poolCache } from "../../core/cache-manager.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
 

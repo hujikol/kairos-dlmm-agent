@@ -9,7 +9,7 @@ import { pushNotification } from './notifications/queue.js';
 import { markOutOfRange } from "./core/state/oor.js";
 import { syncOpenPositions } from "./core/state/sync.js";
 import { log } from './core/logger.js';
-import { runManagementCycle } from './index.js';
+import { runManagementCycle } from './core/cycles.js';
 import { WATCHDOG_POLL_INTERVAL_MS } from './core/constants.js';
 
 // Track healer cycle state to prevent overlapping unscheduled runs

@@ -1,53 +1,116 @@
 # Kairos — CLAUDE.md
 
-Autonomous DLMM LP agent for Meteora pools on Solana. Forked from Meridian, inspired by https://github.com/yunus-0x/meridian.
+Autonomous DLMM LP agent for Meteora pools on Solana. Forked from Meridian.
 
 ---
 
-## Architecture Overview
+## Quick Reference
 
 ```
-index.js            Main entry: REPL + cron orchestration + Telegram bot polling
-agent.js            ReAct loop (MAX_REACT_DEPTH=6, MAX_TOOL_CALLS_PER_STEP=10): LLM → tool call → repeat
-config.js           Runtime config from user-config.json + .env; exposes config object
-prompt.js           Builds system prompt per role (SCREENER/MANAGER/GENERAL); compressPositions() for compact context
-state.js            Position registry via SQLite
-lessons.js          Learning engine: recordPerformance, evolveThresholds, getRelevantLessons + inferTags
-pool-memory.js      Per-pool deploy history + snapshots
-strategy-library.js Saved LP strategies
-briefing.js         Daily Telegram briefing (HTML)
-telegram.js         Telegram bot: polling, notifications; caveman() applied to outbound
-hive-mind.js        Optional collective intelligence server sync
-smart-wallets.js    KOL/alpha wallet tracker
-token-blacklist.js  Permanent token blacklist
-logger.js           Daily-rotating log files + action audit trail
-watchdog.js         60s polling for emergency loss conditions — emergency close without LLM
+src/
+├── agent/          ReAct loop (intent, fallback, rate-limit, JSON repair)
+├── core/           Engine: cycles, scheduler, state, learning, strategies
+│   └── state/     Position registry, OOR tracking, PnL/trailing TP, events, sync
+├── features/       Pool memory, hive-mind, smart-wallets, blacklists
+├── integrations/   Helius, Jupiter, Meteora, OKX, LPAgent, Solana
+├── notifications/  Telegram bot, briefing generator, notification queue
+├── screening/      Pool discovery from Meteora API
+├── server/         Health endpoint, graceful shutdown
+└── tools/          Tool definitions (36KB), executor, per-domain modules
 
-tools/
-  definitions.js    Tool schemas in OpenAI format
-  executor.js       Tool dispatch: name → fn, safety checks, READ_ONLY_CACHE for cached tools
-  cache.js          Unified TTL cache (60s eviction)
-  caveman.js        Filler stripper for prompt compression; CAVEMAN_ENABLED toggle
-  dlmm.js           Meteora DLMM SDK wrapper (deploy, close, claim, positions, PnL)
-  screening.js      Pool discovery from Meteora API
-  wallet.js         SOL/token balances (Helius) + Jupiter swap
-  token.js          Token info/holders/narrative (Jupiter API)
-  study.js          Top LPer study via LPAgent API
+cycles.js          Canonical — scheduler/watchdog/index.js use this
+orchestration.js   Parallel to cycles.js — telegram-handlers.js imports from here
+agent.js           Deprecated stub — re-exports from agent/index.js
 ```
+
+---
+
+## Entry Points
+
+| File | Role |
+|------|------|
+| `index.js` | Main: REPL + cron orchestration + Telegram polling |
+| `cli.js` | Standalone CLI (`kairos <subcommand>`) — 40+ subcommands |
+| `repl.js` | REPL line handler: number-pick deploy, slash commands |
+| `watchdog.js` | 60s polling for emergency loss → triggers management cycle directly |
+| `telegram-handlers.js` | Telegram bot: 9 commands + free-form LLM chat |
+| `setup.js` | Interactive first-run wizard |
+
+---
+
+## Core Cycle System
+
+**`cycles.js`** is canonical. `orchestration.js` is a parallel file (identical signatures, minor differences: `escapeHTMLLocal` copy vs re-export, `IS_DRY_RUN` inline vs function). Everything runtime uses `cycles.js`:
+- `scheduler.js` — cron triggers (`startCronJobs` / `stopCronJobs`)
+- `watchdog.js` — emergency polling
+- `index.js` — main entry
+- `telegram-handlers.js` — **uses `orchestration.js`** (inconsistency to fix)
+
+**`_busyState` object** — Node.js v24.14.1 regressed exported `let` bindings (read-only when imported). All busy flags (`_managementBusy`, `_screeningBusy`) live in `scheduler._busyState` and are accessed as `._managementBusy` / `._screeningBusy`.
+
+### `runManagementCycle()`
+- Fetches positions + balances
+- Deterministic rule engine → action map (CLOSE/CLAIM/STAY/INSTRUCTION)
+- JS trailing TP check via `updatePnlAndCheckExits`
+- Calls LLM only if action needed (role: MANAGER)
+- Post-trade: `autoSwapRewardFees()`
+- Triggers screening cycle if under max positions
+- Circuit breaker: halt (daily loss limit) or preserve (daily profit target met)
+
+### `runScreeningCycle()`
+- Pre-checks: max positions, SOL balance
+- `getTopCandidates()` → per-candidate token recon (`fetchAndReconCandidates`)
+- Hard filters: launchpads, bots, toxic tokens (pool-memory)
+- Active bin pre-fetch in parallel
+- Market phase detection → phase-matched strategies
+- `simulatePoolDeploy()` → confidence + risk score per candidate
+- Token scoring (`computeTokenScore`) — filters to GOOD/EXCELLENT
+- Calls LLM (role: SCREENER) with ranked candidates
+
+### `scheduler.js` — Cron Jobs
+| Job | Interval | Function |
+|-----|----------|----------|
+| Management | `*/managementIntervalMin` min | `runManagementCycle()` |
+| Screening | `*/screeningIntervalMin` min | `runScreeningCycle()` |
+| Briefing | `0 1 * * *` UTC | `runBriefing()` |
+| Briefing watchdog | `0 */6 * * *` UTC | `maybeRunMissedBriefing()` |
+| PnL poller | 30s | `updatePnlAndCheckExits` per position, triggers management on exit signal |
+
+---
+
+## State System (`src/core/state/`)
+
+| Module | Responsibility |
+|--------|---------------|
+| `registry.js` | Position CRUD: `trackPosition`, `updatePositionStatus`, `recordClose`, `recordRebalance`, `recordClaim`, `setPositionInstruction`, `getStateSummary` |
+| `oor.js` | OOR single source of truth: `markOutOfRange`, `markInRange`, `minutesOutOfRange` |
+| `pnl.js` | `updatePnlAndCheckExits` — peak_pnl, volatility-adaptive trailing TP, 4 exit signals |
+| `events.js` | Event log: `pushEvent`, `getRecentEvents` |
+| `sync.js` | `syncOpenPositions` — on-chain state reconciliation |
+
+---
+
+## ReAct Agent (`src/agent/`)
+
+| File | Purpose |
+|------|---------|
+| `react.js` | Core loop: MAX_REACT_DEPTH=6, MAX_TOOL_CALLS_PER_STEP=10, caveman compression, once-per-session tool blocking, rate-limit retry, 120s wall-clock timeout |
+| `intent.js` | 16 intent patterns → tool subsets for GENERAL role; DEFAULT_MODEL / FALLBACK_MODEL |
+| `fallback.js` | OpenAI client (OpenRouter/LM Studio), `callWithRetry` — 3 retries, falls back to FALLBACK_MODEL on 502/503/529 |
+| `tools.js` | `MANAGER_TOOLS`, `SCREENER_TOOLS`, `getToolsForRole()` — strict schema enforcement |
+| `repair.js` | `parseToolArgs` — `jsonrepair` fixes malformed LLM JSON tool call arguments |
+| `rate.js` | `isRateLimitError`, `rateLimitBackoff` (caps at 120s), `sleep` |
+| `index.js` | Barrel re-export |
 
 ---
 
 ## Agent Roles & Tool Access
 
-Three roles filter which tools LLM can call:
-
 | Role | Purpose | Key Tools |
 |------|---------|-----------|
-| `SCREENER` | Find + deploy new positions | deploy_position, get_top_candidates, get_token_holders, check_smart_wallets_on_pool |
-| `MANAGER` | Manage open positions | close_position, claim_fees, swap_token, get_position_pnl, set_position_note |
-| `GENERAL` | Chat / manual commands | All tools |
-
-Sets defined in `agent.js:7-8`. If you add a tool, add it to the relevant sets.
+| `SCREENER` | Find + deploy new positions | `deploy_position`, `get_top_candidates`, `get_token_holders`, `check_smart_wallets_on_pool` |
+| `MANAGER` | Manage open positions | `close_position`, `claim_fees`, `swap_token`, `get_position_pnl`, `set_position_note` |
+| `GENERAL` | Chat / manual commands | All tools (filtered by `getToolsForRole`) |
 
 ---
 
@@ -55,54 +118,58 @@ Sets defined in `agent.js:7-8`. If you add a tool, add it to the relevant sets.
 
 1. **`tools/definitions.js`** — Add OpenAI-format schema object to `tools` array
 2. **`tools/executor.js`** — Add `tool_name: functionImpl` to `toolMap`; if read-only, add to `READ_ONLY_CACHE`
-3. **`agent.js`** — Add tool name to `MANAGER_TOOLS` and/or `SCREENER_TOOLS` if role-restricted
+3. **`agent/tools.js`** — Add tool name to `MANAGER_TOOLS` and/or `SCREENER_TOOLS`
 4. If tool writes on-chain state, add to `WRITE_TOOLS` in executor.js
 
 ---
 
 ## Config System
 
-`config.js` loads `user-config.json` at startup. Runtime mutations go through `update_config` tool which updates live config + persists to `user-config.json` + restarts crons if intervals changed.
+`config.js` loads `user-config.json` at startup. Runtime mutations via `update_config` tool → updates live config + persists + restarts crons if intervals changed.
 
 **Valid keys:**
 
 | Key | Section | Default |
 |-----|---------|---------|
-| minFeeActiveTvlRatio | screening | 0.05 |
-| minTvl / maxTvl | screening | 10k / 150k |
-| minVolume | screening | 500 |
-| minOrganic | screening | 60 |
-| minHolders | screening | 500 |
-| minMcap / maxMcap | screening | 150k / 10M |
-| minBinStep / maxBinStep | screening | 80 / 125 |
-| timeframe | screening | "5m" |
-| category | screening | "trending" |
-| minTokenFeesSol | screening | 30 |
-| maxBundlersPct | screening | 30 |
-| maxTop10Pct | screening | 60 |
-| blockedLaunchpads | screening | [] |
-| deployAmountSol | management | 0.5 |
-| maxDeployAmount | risk | 50 |
-| maxPositions | risk | 3 |
-| gasReserve | management | 0.2 |
-| deployAmountSol | management | 0.5 |
-| minSolToOpen | management | 0.55 |
-| outOfRangeWaitMinutes | management | 30 |
-| managementIntervalMin | schedule | 10 |
-| screeningIntervalMin | schedule | 30 |
-| managementModel / screeningModel / generalModel | llm | minimax/minimax-01 |
-| models.manager / screener / general / evolve | llm | free-tier defaults |
-| cavemanEnabled | behavior | false |
+| `minFeeActiveTvlRatio` | screening | 0.05 |
+| `minTvl` / `maxTvl` | screening | 10k / 150k |
+| `minVolume` | screening | 500 |
+| `minOrganic` | screening | 60 |
+| `minHolders` | screening | 500 |
+| `minMcap` / `maxMcap` | screening | 150k / 10M |
+| `minBinStep` / `maxBinStep` | screening | 80 / 125 |
+| `timeframe` | screening | "5m" |
+| `category` | screening | "trending" |
+| `minTokenFeesSol` | screening | 30 |
+| `maxBundlersPct` | screening | 30 |
+| `maxTop10Pct` | screening | 60 |
+| `blockedLaunchpads` | screening | [] |
+| `deployAmountSol` | management | 0.5 |
+| `maxDeployAmount` | risk | 50 |
+| `maxPositions` | risk | 3 |
+| `gasReserve` | management | 0.2 |
+| `minSolToOpen` | management | 0.55 |
+| `outOfRangeWaitMinutes` | management | 30 |
+| `stopLossPct` | management | -10 |
+| `takeProfitFeePct` | management | 20 |
+| `trailingTakeProfit` | management | false |
+| `trailingTriggerPct` / `trailingDropPct` | management | 5 / 3 |
+| `managementIntervalMin` | schedule | 10 |
+| `screeningIntervalMin` | schedule | 30 |
+| `dailyProfitTarget` / `dailyLossLimit` | risk | 2 / -5 |
+| `managementModel` / `screeningModel` / `generalModel` | llm | minimax/minimax-01 |
+| `models.manager` / `screener` / `general` / `evolve` | llm | free-tier defaults |
+| `cavemanEnabled` | behavior | false |
 
-**`computeDeployAmount(walletSol)`** — scales position size: `clamp(deployable × deployAmountSol, floor=deployAmountSol, ceil=maxDeployAmount)`.
+**`computeDeployAmount(walletSol, positionCount, conviction?)`** — scales position size: `clamp(deployable × deployAmountSol, floor=deployAmountSol, ceil=maxDeployAmount)`.
 
 ---
 
 ## Position Lifecycle
 
-1. **Deploy**: `deploy_position` → executor safety checks → `trackPosition()` in state.js → Telegram notify
-2. **Monitor**: management cron → `getMyPositions()` → `getPositionPnl()` → OOR detection → pool-memory snapshots
-3. **Close**: `close_position` → `recordPerformance()` in lessons.js → auto-swap base → Telegram notify
+1. **Deploy**: `deploy_position` → executor safety checks → `trackPosition()` → Telegram notify
+2. **Monitor**: management cron → `getMyPositions()` → `updatePnlAndCheckExits()` → OOR detection → pool-memory snapshots
+3. **Close**: `close_position` → `recordPerformance()` → auto-swap base → Telegram notify
 4. **Learn**: `evolveThresholds()` on performance data → updates config → persists to user-config.json
 
 ---
@@ -112,11 +179,55 @@ Sets defined in `agent.js:7-8`. If you add a tool, add it to the relevant sets.
 Before `deploy_position`:
 - `bin_step` must be within `[minBinStep, maxBinStep]`
 - Position count must be below `maxPositions` (force-fresh scan)
-- No duplicate pool_address
-- No duplicate base_mint across pools
-- If `amount_x > 0`: strip `amount_y` and `amount_sol` (tokenX-only deploy — no SOL needed)
-- SOL balance must cover `amount_y + gasReserve` (skipped for tokenX-only)
-- `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates
+- No duplicate `pool_address`
+- No duplicate `base_mint` across pools
+- `blockedLaunchpads` enforced in `getTopCandidates()`
+- `maxPositionsPerToken` enforced (correlation check)
+- SOL balance must cover `amount_y + gasReserve`
+- If `amount_x > 0`: tokenX-only deploy (no SOL needed)
+
+---
+
+## Market Phases (`core/phases.js`)
+
+```
+detectMarketPhase(pool) → pump | runner | pullback | bear | consolidation | normal
+```
+
+Phase thresholds: price_change_24h, vol_ratio (volume/TVL), volatility.
+
+`PHASE_CONFIG[phase].preferredStrategies` — strategies matched per phase via `findStrategiesForPhase()`.
+
+---
+
+## Token Scoring (`core/token-score.js`)
+
+`computeTokenScore(tokenInfo, pool)` → 0-100 score with label:
+- `terrible` (0–20) | `poor` (21–40) | `fair` (41–60) | `good` (61–80) | `excellent` (81–100)
+
+Used by screener to filter candidates — prefers GOOD or EXCELLENT tokens.
+
+---
+
+## Pool Simulation (`core/simulator.js`)
+
+`simulatePoolDeploy(pool, deployAmountSol, solPriceUsd)` returns:
+- `daily_fees_usd`, `expected_il_usd`, `net_daily_usd`
+- `risk_score` (0–100, caps at 100)
+- `confidence` (0–100)
+- `passes` — filter: net_daily >= min_required AND risk_score <= 40 AND confidence >= 40
+
+Risk increases: young (<12h), high volatility, high bundle %, low organic score.
+Confidence increases: older (>=48h), low volatility, high fee/TVL ratio.
+
+---
+
+## Daily Circuit Breaker (`core/daily-tracker.js`)
+
+`checkDailyCircuitBreaker()` → based on realized PnL from `performance` table:
+- `halt` — daily loss limit hit → skip everything
+- `preserve` — daily profit target hit → manage existing, no new deploys
+- `trade` — normal operation
 
 ---
 
@@ -130,88 +241,80 @@ bins_below = round(35 + (volatility / 5) * 34), clamped to [35, 69]
 
 ---
 
+## Lessons System
+
+| Function | Purpose |
+|----------|---------|
+| `recordPerformance(closeResult)` | Called from executor after `close_position` |
+| `evolveThresholds()` | Adjusts thresholds from winners vs losers; persists to config + user-config.json |
+| `getRelevantLessons(context, limit)` | Tag-ranked retrieval (infers from pair, tvl, oor, pnl_pct, binStep) |
+| `getLessonsForPrompt({ agentType })` | Injects lessons into system prompt |
+| `getPerformanceSummary()` | Win rate, avg PnL, total closed, near-miss stats |
+| `MIN_EVOLVE_POSITIONS = 5` | Minimum closed positions before evolution |
+
+Lesson persistence: `core/lesson-repo.js` → `lessons.json`.
+
+---
+
 ## Telegram Commands
 
-Handled directly in `index.js` (bypass LLM):
+Handled directly in `telegram-handlers.js` (bypass LLM):
 
 | Command | Action |
 |---------|--------|
-| `/positions` | List open positions |
+| `/positions` | List open positions with PnL + OOR warnings |
 | `/close <n>` | Close by list index |
 | `/set <n> <note>` | Set instruction on position |
-| `/balance` | Wallet breakdown |
+| `/balance` | Wallet breakdown with USD values |
 | `/briefing` | Morning briefing HTML |
-| `/teach pin\|unpin <id>` | Pin/unpin lessons |
+| `/teach pin\|unpin\|rate\|stats\|list [role]` | Manage lessons |
 | `/evolve` | Manual threshold evolution |
-| `/thresholds` | Show thresholds + perf stats |
+| `/thresholds` | Show all config thresholds + perf stats |
 | `/learn` or `/learn <addr>` | Study top LPers |
 | `/caveman` | Toggle prompt compression |
+| `/screen` | Trigger manual screening cycle |
+| `/swap-all` | Sweep all tokens to SOL |
+| `/candidates` | Show top 5 candidates |
+| `/status` | Combined positions + wallet status |
 
-Progress bar: `[████████░░░░░░░░░░░░] 40%`
+Free-form text → LLM chat (role: GENERAL or SCREENER if deploy intent detected).
+
+When busy: messages queued (max 5), drained when idle.
 
 ---
 
-## Race Condition: Double Deploy
+## Race Condition Guards
 
-`_screeningLastTriggered` in index.js prevents concurrent screener invocations. `deploy_position` safety check uses `force: true` on `getMyPositions()` for fresh count.
+- `_busyState._screeningBusy` — prevents concurrent screening cycles
+- `_busyState._managementBusy` — prevents concurrent management cycles
+- `_screeningLastTriggered` — cooldown between post-management screening triggers
+- `ONCE_PER_SESSION` set in `agent/react.js` — blocks duplicate `deploy_position` / `swap_token` / `close_position` per session
+- `deploy_position` safety check uses `force: true` on `getMyPositions()` for fresh count
 
 ---
 
-## Bundler Detection (token.js)
+## Bundler Detection (`integrations/jupiter.js` + `getTokenHolders`)
 
-Two signals in `getTokenHolders()`:
+Two signals:
 - `common_funder` — multiple wallets funded by same source
 - `funded_same_window` — multiple wallets funded in same time window
 
 **Thresholds:** `maxBundlersPct` (default 30%), `maxTop10Pct` (default 60%)
-Jupiter audit API: `botHoldersPercentage` 5–25% normal for legitimate tokens.
 
 ---
 
-## Base Fee Calculation (dlmm.js)
-
-```js
-const baseFactor = pool.lbPair.parameters?.baseFactor ?? 0;
-const actualBaseFee = baseFactor > 0
-  ? parseFloat((baseFactor * actualBinStep / 1e6 * 100).toFixed(4))
-  : null;
-```
-
----
-
-## Model Configuration
-
-- Default: `process.env.LLM_MODEL` or `minimax/minimax-01` (free-tier)
-- Fallback on 502/503/529: `stepfun/step-3.5-flash:free`
-- Per-role: `models.manager`, `models.screener`, `models.general` (nested) or flat keys
-- LM Studio: `LLM_BASE_URL=http://localhost:1234/v1`, `LLM_API_KEY=lm-studio`
-- `maxOutputTokens` min: 2048
-
----
-
-## Lessons System
-
-`lessons.js` records closed position performance + auto-derives lessons:
-- `getLessonsForPrompt({ agentType })` — inject lessons into system prompt
-- `getRelevantLessons(context, limit)` — tag-ranked retrieval (infers from pair, tvl, oor, pnl_pct, binStep)
-- `evolveThresholds()` — adjusts thresholds from winners vs losers; persists ALL changed keys to config + user-config.json
-- `recordPerformance()` — called from executor.js after `close_position`
-- `MIN_EVOLVE_POSITIONS = 5`
-
----
-
-## Tool Cache (executor.js)
+## Tool Cache (`tools/executor.js`)
 
 Read-only tools use `cachedTool()` with per-tool TTLs:
 
 | Tool | TTL |
 |------|-----|
-| get_candidates, discover_pools | 5 min |
-| pool_detail, search_pools | 3 min |
-| active_bin | 1 min |
-| token_info, token_holders | 10 min |
-| get_position_pnl | 2 min |
-| get_my_positions, get_balances, get_wallet_balance | 5 min |
+| `get_candidates`, `discover_pools` | 5 min |
+| `pool_detail`, `search_pools` | 3 min |
+| `active_bin` | 1 min |
+| `token_info`, `token_holders` | 10 min |
+| `get_position_pnl` | 2 min |
+| `get_my_positions`, `get_balances`, `get_wallet_balance` | 5 min |
 
 Eviction every 60s. Write tools bypass cache.
 
@@ -222,28 +325,96 @@ Eviction every 60s. Write tools bypass cache.
 Toggle: `/caveman` in REPL (in-memory). Persisted via `cavemanEnabled: true` in user-config.json.
 
 When enabled:
-- System prompts compressed before LLM call
+- System prompts compressed before LLM call (`caveman()`)
 - User goals compressed before injection
 - Telegram outbound messages compressed
 
-Filler stripped: articles, hedging, "please note that", "I would recommend", etc. Code blocks + JSON preserved.
+Filler stripped: articles, hedging, pleasantries. Code blocks + JSON preserved.
+`stripThink()` also removes `<truncated_thought>` blocks from LLM output.
 
 ---
 
-## Watchdog (watchdog.js)
+## Watchdog (`watchdog.js`)
 
 Polls open positions every 60s — no LLM unless triggered:
 - `pnl_pct <= stopLossPct` → emergency close immediately (no LLM)
 - `pnl_pct <= -4%` → trigger unscheduled management cycle
-- Out-of-range → update `oor_since` timestamp
-
-Started automatically via `launchCron()`.
+- Out-of-range → `markOutOfRange()` in `state/oor.js`
 
 ---
 
-## Hive Mind (hive-mind.js)
+## Hive Mind (`features/hive-mind.js`)
 
-Optional. Enable: `HIVE_MIND_URL` + `HIVE_MIND_API_KEY` in `.env`. Syncs lessons/deploys to shared server, queries consensus patterns.
+Optional. Enable: `HIVE_MIND_URL` + `HIVE_MIND_API_KEY` in `.env`.
+Syncs lessons/deploys to shared server, queries consensus patterns.
+
+---
+
+## Pool Memory (`features/pool-memory.js`)
+
+Per-pool deploy history + snapshots. `isTokenToxic()` filter — token blocked if >66% loss rate across 3+ deploys.
+
+---
+
+## CLI (`cli.js`)
+
+Standalone alternative to REPL — `kairos <subcommand>`:
+
+| Subcommand | Description |
+|------------|-------------|
+| `balance` | Wallet breakdown |
+| `positions` | Open positions |
+| `pnl` | Closed position performance |
+| `screen` | Run screening cycle |
+| `manage` | Run management cycle |
+| `deploy` | Deploy to a pool |
+| `close` | Close a position |
+| `claim` | Claim fees |
+| `swap` | Swap tokens |
+| `candidates` | List top candidates |
+| `study [addr]` | Study top LPers |
+| `token-info <addr>` | Token metadata |
+| `token-holders <addr>` | Token holder analysis |
+| `pool-detail <addr>` | Pool details |
+| `config get\|set <key> <value>` | Read/write config |
+| `lessons list\|stats` | Learning system |
+| `pool-memory <addr>` | Pool deploy history |
+| `evolve` | Trigger threshold evolution |
+| `blacklist list\|add\|remove` | Token blacklist |
+| `performance` | Full performance history |
+| `start` | Start autonomous cycles |
+
+---
+
+## Integrations
+
+### Helius (`integrations/helius/`)
+- `balances.js` — SOL + token balances with USD conversion
+- `swaps.js` — Jupiter swap execution with retry
+- `auto.js` — Auto-swap fee rewards to SOL
+- `normalize.js` — Balance normalization
+
+### Meteora (`integrations/meteora/`)
+- `positions.js` — Position fetching/parsing
+- `pool.js` — Pool data fetching
+- `close.js` — Position closing with fee claiming
+- `pnl.js` — Per-position PnL calculation
+
+### Other
+- `jupiter.js` — Token info, holders, narrative, pool search
+- `okx.js` — OKX exchange data for enriched pool info
+- `lpagent.js` — LPAgent API: study top LPers
+- `solana.js` — Solana RPC helpers
+
+---
+
+## Model Configuration
+
+- Default: `process.env.LLM_MODEL` or `minimax/minimax-01` (free-tier)
+- Fallback on 502/503/529: `stepfun/step-3.5-flash:free`
+- Per-role: `models.manager`, `models.screener`, `models.general` (nested) or flat keys
+- LM Studio: `LLM_BASE_URL=http://localhost:1234/v1`, `LLM_API_KEY=lm-studio`
+- `maxOutputTokens` min: 2048
 
 ---
 
@@ -262,10 +433,20 @@ Optional. Enable: `HIVE_MIND_URL` + `HIVE_MIND_API_KEY` in `.env`. Syncs lessons
 | `HIVE_MIND_URL` | No | Collective intelligence server |
 | `HIVE_MIND_API_KEY` | No | Hive mind auth token |
 | `HELIUS_API_KEY` | No | Enhanced wallet balance data |
+| `JUPITER_DATAPI_BASE_URL` | No | Jupiter API base |
+| `POOL_DISCOVERY_API_BASE` | No | Meteora pool discovery API |
+
+---
+
+## Node.js v24.14.1 — `_busyState` Workaround
+
+Node.js v24.14.1 regressed ES module live bindings — imported `let` exports are read-only when imported directly. All busy flags are stored in `scheduler._busyState` object and accessed as `._managementBusy` / `._screeningBusy`. **Do not import busy flags directly as named imports and attempt to reassign them.**
 
 ---
 
 ## Known Issues / Tech Debt
 
-All Phase 1 correctness bugs resolved. Remaining:
-- Caveman mode persisted via user-config.json; startup reads `cavemanEnabled` automatically.
+- `telegram-handlers.js` imports from `orchestration.js` while everything else uses `cycles.js` — should be consolidated
+- `agent.js` is a deprecated stub — all actual code moved to `agent/index.js` + `agent/react.js`
+- `cli.js` completely undocumented in original CLAUDE.md despite being a full 40+ subcommand interface
+- `orchestration.js` and `cycles.js` are near-identical 34-35KB files — should be merged

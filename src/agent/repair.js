@@ -10,12 +10,19 @@ import { log } from "../core/logger.js";
  * Returns { args, repaired } where repaired is true if jsonrepair was used.
  */
 export function parseToolArgs(rawArgs, functionName) {
+  let str = typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs);
   try {
-    return { args: JSON.parse(rawArgs), repaired: false };
+    const parsed = JSON.parse(str);
+    // Non-object primitive (bool/number/etc) means model passed bare value — treat as empty
+    if (parsed !== null && typeof parsed !== "object") {
+      log("debug", "agent", `${functionName}: bare primitive ${typeof parsed}, treating as {}`);
+      return { args: {}, repaired: false };
+    }
+    return { args: parsed, repaired: false };
   } catch (e) {
     log("debug", "agent", `JSON.parse failed for ${functionName}: ${e?.message}`);
     try {
-      const repaired = JSON.parse(jsonrepair(rawArgs));
+      const repaired = JSON.parse(jsonrepair(str));
       log("warn", "agent", `Repaired malformed JSON args for ${functionName}`);
       return { args: repaired, repaired: true };
     } catch (parseError) {

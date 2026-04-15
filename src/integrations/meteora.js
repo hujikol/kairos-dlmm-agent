@@ -8,7 +8,6 @@ export {
   getDLMM,
   applyPriorityFee,
   sendTx,
-  poolCache,
   getPool,
   getActiveBin,
   searchPools,
@@ -17,8 +16,6 @@ export {
 
 export {
   POSITIONS_CACHE_TTL,
-  _positionsCache,
-  _positionsCacheAt,
   invalidatePositionsCache,
   deployPosition,
   getMyPositions,

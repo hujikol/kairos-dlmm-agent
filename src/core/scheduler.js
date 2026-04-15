@@ -36,8 +36,12 @@ export function formatCountdown(seconds) {
 //  CRON STATE (re-exported so index.js can use guards)
 // ═══════════════════════════════════════════
 export let _cronTasks = [];
-export let _managementBusy = false;
-export let _screeningBusy = false;
+// NOTE: Node.js v24 regressed — exported `let` bindings are read-only when imported.
+// Use object wrapper so imported modules can modify properties (not bindings).
+export const _busyState = {
+  _managementBusy: false,
+  _screeningBusy: false,
+};
 export let _screeningLastTriggered = 0;
 export let _pollTriggeredAt = 0;
 
@@ -98,7 +102,7 @@ export async function startCronJobs() {
   const mgmtTask = cron.schedule(
     `*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`,
     async () => {
-      if (_managementBusy) return;
+      if (_busyState._managementBusy) return;
       timers.managementLastRun = Date.now();
       try {
         await runManagementCycle();
@@ -144,7 +148,7 @@ export async function startCronJobs() {
   // Lightweight 30s PnL poller — updates trailing TP state between management cycles
   let _pnlPollBusy = false;
   const pnlPollInterval = setInterval(async () => {
-    if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
+    if (_busyState._managementBusy || _busyState._screeningBusy || _pnlPollBusy) return;
     _pnlPollBusy = true;
     try {
       const result = await getMyPositions({ force: true, silent: true }).catch(e => {

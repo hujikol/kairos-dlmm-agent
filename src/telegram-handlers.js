@@ -1,4 +1,5 @@
-import { getWalletBalances, getMyPositions, closePosition } from "./integrations/meteora.js";
+import { getMyPositions, closePosition } from "./integrations/meteora.js";
+import { getWalletBalances } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
 import { runScreeningCycle, escapeHTML } from "./core/orchestration.js";
 import { swapAllTokensToSol } from "./integrations/helius.js";
@@ -8,7 +9,7 @@ import { config } from "./config.js";
 import { agentLoop } from "./agent/index.js";
 import { stripThink } from "./tools/caveman.js";
 import { startPolling, sendHTML, sendMessage } from "./notifications/telegram.js";
-import { _managementBusy, _screeningBusy } from "./core/scheduler.js";
+import { _busyState } from "./core/scheduler.js";
 import { rl, buildPrompt } from "./rl-shared.js";
 
 // Module-level queue and busy flag (not shared with index.js)
@@ -21,7 +22,7 @@ const TOKEN_SWAP_MIN_BALANCE = 0.01;
 export { MAX_TELEGRAM_QUEUE, TOKEN_SWAP_MIN_BALANCE };
 export { busy };
 export async function drainTelegramQueue() {
-  while (_telegramQueue.length > 0 && !_managementBusy && !_screeningBusy && !busy) {
+  while (_telegramQueue.length > 0 && !_busyState._managementBusy && !_busyState._screeningBusy && !busy) {
     const queued = _telegramQueue.shift();
     await telegramHandler(queued);
   }
@@ -107,7 +108,7 @@ async function handleTeachCommand(sub, { sendHTML, escapeHTML }) {
 
 // ─── Main Telegram handler ─────────────────────────────────────────────────────
 export async function telegramHandler(text) {
-  if (_managementBusy || _screeningBusy || busy) {
+  if (_busyState._managementBusy || _busyState._screeningBusy || busy) {
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(text);
       sendHTML(`⏳ <b>Queued</b> (${_telegramQueue.length} in queue): "<i>${escapeHTML(text.slice(0, 60))}</i>"`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message }));

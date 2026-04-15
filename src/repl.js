@@ -1,6 +1,7 @@
 import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
-import { getWalletBalances, getMyPositions } from "./integrations/meteora.js";
+import { getWalletBalances } from "./integrations/helius.js";
+import { getMyPositions } from "./integrations/meteora.js";
 import { getTopCandidates } from "./screening/discovery.js";
 import { config, reloadScreeningThresholds } from "./config.js";
 import { startCronJobs } from "./core/scheduler.js";

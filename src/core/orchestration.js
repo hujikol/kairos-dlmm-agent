@@ -1,32 +1,31 @@
 import "dotenv/config";
-import { agentLoop } from "./agent.js";
-import { log } from "./core/logger.js";
-import { getMyPositions, getActiveBin } from "./integrations/meteora.js";
-import { getWalletBalances, autoSwapRewardFees } from "./integrations/helius.js";
-import { getTopCandidates } from "./screening/discovery.js";
-import { addrShort } from "./tools/addrShort.js";
-import { config, computeDeployAmount, isDryRun } from "./config.js";
+import { agentLoop } from "../agent.js";
+import { log } from "./logger.js";
+import { getMyPositions, getActiveBin } from "../integrations/meteora.js";
+import { getWalletBalances, autoSwapRewardFees } from "../integrations/helius.js";
+import { getTopCandidates } from "../screening/discovery.js";
+import { addrShort } from "../tools/addrShort.js";
+import { config, computeDeployAmount, isDryRun } from "../config.js";
 import {
   timers,
-  _managementBusy,
-  _screeningBusy,
+  _busyState,
   _screeningLastTriggered,
-} from "./core/scheduler.js";
-import { flushNotifications, hasPendingNotifications, pushNotification } from "./notifications/queue.js";
-import { sendHTML, isEnabled as telegramEnabled } from "./notifications/telegram.js";
-import { getTrackedPosition } from "./core/state/registry.js";
-import { updatePnlAndCheckExits } from "./core/state/pnl.js";
-import { getActiveStrategy } from "./core/strategy-library.js";
-import { recordPositionSnapshot, recallForPool, isTokenToxic } from "./features/pool-memory.js";
-import { checkSmartWalletsOnPool } from "./features/smart-wallets.js";
-import { getTokenNarrative, getTokenInfo } from "./integrations/jupiter.js";
-import { detectMarketPhase, PHASE_CONFIG } from "./core/phases.js";
-import { computeTokenScore } from "./core/token-score.js";
-import { findStrategiesForPhase } from "./core/lparmy-strategies.js";
-import { checkDailyCircuitBreaker } from "./core/daily-tracker.js";
-import { simulatePoolDeploy } from "./core/simulator.js";
-import { checkTokenCorrelation } from "./core/correlation.js";
-import { stripThink } from "./tools/caveman.js";
+} from "./scheduler.js";
+import { flushNotifications, hasPendingNotifications, pushNotification } from "../notifications/queue.js";
+import { sendHTML, isEnabled as telegramEnabled } from "../notifications/telegram.js";
+import { getTrackedPosition } from "./state/registry.js";
+import { updatePnlAndCheckExits } from "./state/pnl.js";
+import { getActiveStrategy } from "./strategy-library.js";
+import { recordPositionSnapshot, recallForPool, isTokenToxic } from "../features/pool-memory.js";
+import { checkSmartWalletsOnPool } from "../features/smart-wallets.js";
+import { getTokenNarrative, getTokenInfo } from "../integrations/jupiter.js";
+import { detectMarketPhase, PHASE_CONFIG } from "./phases.js";
+import { computeTokenScore } from "./token-score.js";
+import { findStrategiesForPhase } from "./lparmy-strategies.js";
+import { checkDailyCircuitBreaker } from "./daily-tracker.js";
+import { simulatePoolDeploy } from "./simulator.js";
+import { checkTokenCorrelation } from "./correlation.js";
+import { stripThink } from "../tools/caveman.js";
 
 import {
   PNL_SUSPECT_PCT,
@@ -37,7 +36,7 @@ import {
   MAX_LLM_OUTPUT_DISPLAY,
   MAX_HTML_MSG_LEN,
   PRICE_FORMAT_THRESHOLD,
-} from "./core/constants.js";
+} from "./constants.js";
 
 // ─── HTML escaper ─────────────────────────────────────────────────────────────
 
@@ -205,8 +204,8 @@ async function autoSwapAndNotify(executedActions) {
 const IS_DRY_RUN = isDryRun();
 
 export async function runManagementCycle({ silent = false } = {}) {
-  if (_managementBusy) return null;
-  _managementBusy = true;
+  if (_busyState._managementBusy) return null;
+  _busyState._managementBusy = true;
   timers.managementLastRun = Date.now();
   log("info", "cron", "Starting management cycle");
   let mgmtReport = null;
@@ -319,7 +318,7 @@ After executing, write a brief one-line result per position.
     log("error", "cron", `Management cycle failed: ${error.message}`);
     mgmtReport = `Management cycle failed: ${error.message}`;
   } finally {
-    _managementBusy = false;
+    _busyState._managementBusy = false;
     if (!silent && telegramEnabled()) {
       // Batch OOR positions
       const oorPositions = positions.filter(
@@ -551,11 +550,11 @@ function buildCandidateBlocks(passing, activeBinResults, simulations) {
 // ─── Screening cycle ─────────────────────────────────────────────────────────
 
 export async function runScreeningCycle({ silent = false } = {}) {
-  if (_screeningBusy) {
+  if (_busyState._screeningBusy) {
     log("info", "screening", "Screening skipped — previous cycle still running");
     return null;
   }
-  _screeningBusy = true; // set immediately — prevents TOCTOU race with concurrent callers
+  _busyState._screeningBusy = true; // set immediately — prevents TOCTOU race with concurrent callers
   _screeningLastTriggered = Date.now();
 
   // Hard guards — don't even run the agent if preconditions aren't met
@@ -564,13 +563,13 @@ export async function runScreeningCycle({ silent = false } = {}) {
     [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
     if (prePositions.total_positions >= config.risk.maxPositions) {
       log("info", "cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
-      _screeningBusy = false;
+      _busyState._screeningBusy = false;
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
     if (preBalance.sol < minRequired && !IS_DRY_RUN) {
       log("info", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
-      _screeningBusy = false;
+      _busyState._screeningBusy = false;
       return null;
     }
     if (preBalance.sol < minRequired && IS_DRY_RUN) {
@@ -578,7 +577,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     }
   } catch (e) {
     log("error", "cron", `Screening pre-check failed: ${e.message}`);
-    _screeningBusy = false;
+    _busyState._screeningBusy = false;
     return null;
   }
   timers.screeningLastRun = Date.now();
@@ -592,7 +591,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
   log("info", "daily-pnl", `Screening circuit: ${circuit.action} (realized: $${(circuit.pnl || 0).toFixed(2)}, reason: ${circuit.reason || "normal"})`);
   if (circuit.action === "halt") {
     log("warn", "daily-pnl", `CIRCUIT BREAKER (screening): daily loss limit hit — skipping screening entirely`);
-    _screeningBusy = false;
+    _busyState._screeningBusy = false;
     return null;
   }
   if (circuit.action === "preserve") {
@@ -700,7 +699,7 @@ STEPS:
     log("error", "cron", `Screening cycle failed: ${error.message}`);
     screenReport = `Screening cycle failed: ${error.message}`;
   } finally {
-    _screeningBusy = false;
+    _busyState._screeningBusy = false;
     if (!silent && telegramEnabled()) {
       // Only send if agent actually deployed a position (action taken)
       if (screenReport && /DEPLOYED/i.test(screenReport)) {

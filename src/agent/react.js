@@ -80,7 +80,9 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
     log("info", "agent", `Step ${step + 1}/${effectiveMaxSteps}`);
 
     try {
-      const { response, usedModel } = await callWithRetry(agentType, goal, messages, model);
+      const tools = getToolsForRole(agentType, goal);
+      const options = { maxTokens: maxOutputTokens };
+      const { response, usedModel } = await callWithRetry(client, model, messages, tools, options);
       if (!response?.choices?.length) {
         log("error", "agent", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
         throw new Error(`API returned no choices: ${response?.error?.message || JSON.stringify(response)}`);
@@ -104,8 +106,8 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
           if (tc.function?.arguments) {
-            const { repaired } = parseToolArgs(tc.function.arguments, tc.function?.name);
-            tc.function.arguments = JSON.stringify(repaired);
+            const { args } = parseToolArgs(tc.function.arguments, tc.function?.name);
+            tc.function.arguments = JSON.stringify(args);
           }
         }
       }
@@ -147,7 +149,8 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
 
       const toolResults = await Promise.all(msg.tool_calls.map(async (toolCall) => {
         const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
-        const { args } = parseToolArgs(toolCall.function.arguments, functionName);
+        const rawArgs = toolCall.function.arguments ?? "{}";
+        const { args } = parseToolArgs(rawArgs, functionName);
 
         // Block once-per-session tools from firing a second time
         if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {

@@ -4,7 +4,7 @@
  * Docs: https://web3.okx.com/build/dev-docs/
  */
 
-import { config } from "./config.js";
+import { config } from "../config.js";
 
 const BASE = process.env.OKX_API_BASE || "https://web3.okx.com";
 const CHAIN_SOLANA = "501";
