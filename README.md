@@ -21,7 +21,7 @@ Optional:
 
 ```bash
 # Navigate to the project directory
-cd meridian
+cd kairos-dllm-agent
 
 # Install dependencies
 npm install
@@ -108,13 +108,13 @@ DRY_RUN=true node src/index.js
 # Confirm DRY_RUN=false in .env before running
 
 # Start with PM2 (recommended)
-pm2 start ecosystem.config.js --name meridian
+pm2 start ecosystem.config.js --name kairos
 
 # View logs
-pm2 logs meridian
+pm2 logs kairos
 
 # Restart
-pm2 restart meridian
+pm2 restart kairos
 
 # Auto-start on boot
 pm2 save
@@ -193,10 +193,10 @@ Start a chat with your bot and send:
 ### Database recovery
 ```bash
 # Restore from a backup
-cp backups/meridian-YYYY-MM-DD.db src/core/meridian.db
+cp backups/kairos-YYYY-MM-DD.db src/core/kairos.db
 
 # Restart
-pm2 restart meridian
+pm2 restart kairos
 ```
 
 ---
@@ -206,7 +206,7 @@ pm2 restart meridian
 ```bash
 git pull
 npm install
-pm2 restart meridian
+pm2 restart kairos
 ```
 
 ---
