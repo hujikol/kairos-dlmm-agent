@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { agentLoop } from "./agent.js";
+import { agentLoop } from "../agent.js";
 import { log } from "./core/logger.js";
 import { getMyPositions, getActiveBin } from "./integrations/meteora.js";
 import { getWalletBalances, autoSwapRewardFees } from "./integrations/helius.js";
