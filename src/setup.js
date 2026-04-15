@@ -138,7 +138,7 @@ const ev = (key, fallback) => existingEnv[key] ?? fallback;
 // ─── Banner ────────────────────────────────────────────────────────────────────
 console.log(`
 ╔═══════════════════════════════════════════════╗
-║        Meridian — Setup Wizard                ║
+║        kairos — Setup Wizard                ║
 ║        Autonomous Meteora DLMM LP Agent       ║
 ╚═══════════════════════════════════════════════╝
 

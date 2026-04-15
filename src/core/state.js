@@ -1,5 +1,5 @@
 /**
- * Persistent agent state — stored in SQLite (meridian.db).
+ * Persistent agent state — stored in SQLite (kairos.db).
  *
  * Tracks position metadata that isn't available on-chain:
  * - When a position was deployed

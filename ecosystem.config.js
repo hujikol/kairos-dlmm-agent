@@ -1,23 +1,23 @@
 /**
- * PM2 process manager configuration for meridian.
+ * PM2 process manager configuration for kairos.
  *
  * Setup:
  *   npm install -g pm2
- *   pm2 start ecosystem.config.js --name meridian
+ *   pm2 start ecosystem.config.js --name kairos
  *   pm2 save
  *   pm2 startup  # generates init script for your OS
  *
  * Useful commands:
  *   pm2 monit              — live dashboard
- *   pm2 logs meridian       — tail logs
- *   pm2 restart meridian    — restart
- *   pm2 stop meridian       — stop
- *   pm2 delete meridian     — remove from PM2
+ *   pm2 logs kairos       — tail logs
+ *   pm2 restart kairos    — restart
+ *   pm2 stop kairos       — stop
+ *   pm2 delete kairos     — remove from PM2
  */
 module.exports = {
   apps: [
     {
-      name: "meridian",
+      name: "kairos",
       script: "src/index.js",
       interpreter: "node",
       node_args: "--require dotenv/config",

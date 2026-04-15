@@ -3,7 +3,7 @@
  * Uses Node's built-in test runner (node:test).
  *
  * Tests against an in-memory SQLite database to avoid polluting
- * the real meridian.db.
+ * the real kairos.db.
  *
  * Run: node --test test/test-lesson-repo.js
  */

@@ -4,7 +4,7 @@
 
 1. Go to [sentry.io](https://sentry.io) and sign in (or create an account)
 2. Click **"Create Project"** → select **Node.js** as the platform
-3. Name your project (e.g., `meridian-dlmm-agent`)
+3. Name your project (e.g., `kairos-dlmm-agent`)
 4. Copy the **DSN** from the project settings
 
 ## Finding the DSN

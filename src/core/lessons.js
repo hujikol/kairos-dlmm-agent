@@ -1,6 +1,6 @@
 /**
  * Agent learning system.
- * Backed by SQLite (meridian.db).
+ * Backed by SQLite (kairos.db).
  *
  * Extracted modules:
  *   - src/core/threshold-evolver.js   — threshold evolution logic

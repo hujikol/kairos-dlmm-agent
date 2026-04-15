@@ -5,7 +5,7 @@ import { log } from "./logger.js";
 import { MIGRATIONS } from "../../migrations/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, "meridian.db");
+const DB_PATH = path.join(__dirname, "kairos.db");
 
 let _db = null;
 

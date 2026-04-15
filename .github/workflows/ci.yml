@@ -19,23 +19,23 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: meridian/package-lock.json
+          cache-dependency-path: kairos/package-lock.json
 
       - name: Install dependencies
         run: npm ci
-        working-directory: meridian
+        working-directory: kairos
 
       - name: Security audit
         run: npm audit --audit-level=high
-        working-directory: meridian
+        working-directory: kairos
 
       - name: Lint (if exists)
         run: npm run lint 2>/dev/null || true
-        working-directory: meridian
+        working-directory: kairos
 
       - name: Run automated tests
         run: node --test test/test-config.js test/test-evolve.js test/test-lesson-repo.js test/test-addrShort.js test/helius-cache.js test/notifications.js test/postmortem-signalweights.js test/test-management-cycle.js test/test-deploy-safety.js test/test-close-flow.js test/test-screening-exits.js
-        working-directory: meridian
+        working-directory: kairos
         env:
           WALLET_PRIVATE_KEY: "[]"
           RPC_URL: "https://api.mainnet-beta.solana.com"
@@ -55,12 +55,12 @@ jobs:
 
       - name: Check core files parse
         run: |
-          node --check meridian/src/index.js
-          node --check meridian/src/agent.js
-          node --check meridian/src/core/db.js
-          node --check meridian/src/core/logger.js
-          node --check meridian/src/core/scheduler.js
-          node --check meridian/src/integrations/meteora.js
-          node --check meridian/src/integrations/helius.js
-          node --check meridian/src/core/postmortem.js
-          node --check meridian/src/core/simulator.js
+          node --check kairos/src/index.js
+          node --check kairos/src/agent.js
+          node --check kairos/src/core/db.js
+          node --check kairos/src/core/logger.js
+          node --check kairos/src/core/scheduler.js
+          node --check kairos/src/integrations/meteora.js
+          node --check kairos/src/integrations/helius.js
+          node --check kairos/src/core/postmortem.js
+          node --check kairos/src/core/simulator.js

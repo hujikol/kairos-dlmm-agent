@@ -1,5 +1,5 @@
 /**
- * Hive Mind — opt-in collective intelligence for meridian agents.
+ * Hive Mind — opt-in collective intelligence for kairos agents.
  *
  * When enabled, agents share anonymized performance data (lessons, deploy
  * outcomes, screening thresholds) with a central server. In return, they

@@ -11,7 +11,7 @@ Discord LP Army signal monitoring disabled (2026-04-13). Selfbot approach (`disc
 ## Architecture
 
 ```
-discord-bot/               # New top-level dir inside meridian/
+discord-bot/               # New top-level dir inside kairos/
 ├── bot.js                 # Bot entry, slash commands, message ingestion
 ├── signals/
 │   ├── queue.js           # Load/save discord-signals.json
@@ -52,9 +52,9 @@ discord-bot/               # New top-level dir inside meridian/
 - Install `discord.js` v14 (not selfbot variant)
 - Basic bot with `Client` + `GatewayIntentBits`
 - `DISCORD_BOT_TOKEN` gate in `index.js`
-- `meridian discord-signals` CLI command restored
+- `kairos discord-signals` CLI command restored
 
-**Verify:** Bot connects, slash commands register, `!meridian start` in monitored channel triggers queue write.
+**Verify:** Bot connects, slash commands register, `!kairos start` in monitored channel triggers queue write.
 
 ### Phase 2 — Channel Monitoring
 

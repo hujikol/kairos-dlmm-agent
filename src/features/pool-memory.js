@@ -4,7 +4,7 @@
  * Keyed by pool address. Automatically updated when positions close
  * (via recordPerformance in lessons.js). Agent can query before deploying.
  *
- * Backed by SQLite (meridian.db).
+ * Backed by SQLite (kairos.db).
  */
 
 import { getDB } from "../core/db.js";

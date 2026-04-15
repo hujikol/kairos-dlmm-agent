@@ -96,7 +96,7 @@ RPC (Solana) ←→ meteora.js (DLMM deploy/close/claim)
 | `src/features/hive-mind.js` | Collective intelligence sync |
 | `src/core/logger.js` | Log rotation |
 
-## Database Schema (SQLite — `meridian.db`)
+## Database Schema (SQLite — `kairos.db`)
 
 ```sql
 -- Key-Value store (lastBriefingDate, lastUpdated, etc.)

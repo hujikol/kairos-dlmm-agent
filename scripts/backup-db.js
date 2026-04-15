@@ -1,5 +1,5 @@
 /**
- * DB Backup — copies meridian.db to backups/meridian-{date}.db
+ * DB Backup — copies kairos.db to backups/kairos-{date}.db
  * Keeps last 7 backups, pruning older ones.
  *
  * Usage:
@@ -7,7 +7,7 @@
  *   node scripts/backup-db.js --dry-run   — show what would happen
  *
  * Cron example (daily at 03:00):
- *   0 3 * * * cd /path/to/meridian && node scripts/backup-db.js
+ *   0 3 * * * cd /path/to/kairos && node scripts/backup-db.js
  */
 
 import fs from "fs";
@@ -16,7 +16,7 @@ import { fileURLToPath } from "url";
 import sqlite3 from "better-sqlite3";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH   = path.join(__dirname, "../src/core/meridian.db");
+const DB_PATH   = path.join(__dirname, "../src/core/kairos.db");
 const BACKUP_DIR = path.join(__dirname, "../backups");
 const MAX_BACKUPS = 7;
 
@@ -60,7 +60,7 @@ export async function runBackup() {
   }
 
   const dateStr = new Date().toISOString().split("T")[0];
-  const snapshotFile = path.join(BACKUP_DIR, `meridian-${dateStr}.db`);
+  const snapshotFile = path.join(BACKUP_DIR, `kairos-${dateStr}.db`);
 
   const pruned = [];
 
@@ -79,7 +79,7 @@ export async function runBackup() {
 
   // Prune backups older than MAX_BACKUPS
   const backups = fs.readdirSync(BACKUP_DIR)
-    .filter(f => f.startsWith("meridian-") && f.endsWith(".db"))
+    .filter(f => f.startsWith("kairos-") && f.endsWith(".db"))
     .map(f => ({ file: f, path: path.join(BACKUP_DIR, f), mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtime }))
     .sort((a, b) => b.mtime.getTime() - a.mtime.getTime()); // newest first
 

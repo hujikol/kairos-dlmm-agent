@@ -14,7 +14,7 @@ const DEFAULT_STRATEGIES = {
   custom_ratio_spot: {
     id: "custom_ratio_spot",
     name: "Custom Ratio Spot",
-    author: "meridian",
+    author: "kairos",
     lp_strategy: "spot",
     token_criteria: { notes: "Any token. Ratio expresses directional bias." },
     entry: { condition: "Directional view on token", single_side: null, notes: "75% token = bullish (sell on pump out of range). 75% SOL = bearish/DCA-in (buy on dip). Set bins_below:bins_above proportional to ratio." },
@@ -25,7 +25,7 @@ const DEFAULT_STRATEGIES = {
   single_sided_reseed: {
     id: "single_sided_reseed",
     name: "Single-Sided Bid-Ask + Re-seed",
-    author: "meridian",
+    author: "kairos",
     lp_strategy: "bid_ask",
     token_criteria: { notes: "Volatile tokens with strong narrative. Must have active volume." },
     entry: { condition: "Deploy token-only (amount_x only, amount_y=0) bid-ask, bins below active bin only", single_side: "token", notes: "As price drops through bins, token sold for SOL. Bid-ask concentrates at bottom edge." },
@@ -36,7 +36,7 @@ const DEFAULT_STRATEGIES = {
   fee_compounding: {
     id: "fee_compounding",
     name: "Fee Compounding",
-    author: "meridian",
+    author: "kairos",
     lp_strategy: "any",
     token_criteria: { notes: "Stable volume pools with consistent fee generation." },
     entry: { condition: "Deploy normally with any shape", notes: "Strategy is about management, not entry shape." },
@@ -47,7 +47,7 @@ const DEFAULT_STRATEGIES = {
   multi_layer: {
     id: "multi_layer",
     name: "Multi-Layer",
-    author: "meridian",
+    author: "kairos",
     lp_strategy: "mixed",
     token_criteria: { notes: "High volume pools. Layer multiple shapes into ONE position via addLiquidityByStrategy to sculpt a composite distribution." },
     entry: {
@@ -66,7 +66,7 @@ const DEFAULT_STRATEGIES = {
   partial_harvest: {
     id: "partial_harvest",
     name: "Partial Harvest",
-    author: "meridian",
+    author: "kairos",
     lp_strategy: "any",
     token_criteria: { notes: "High fee pools where taking profit incrementally is preferred." },
     entry: { condition: "Deploy normally", notes: "Strategy is about progressive profit-taking, not entry." },

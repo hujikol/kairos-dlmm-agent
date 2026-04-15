@@ -7,7 +7,7 @@
 node src/index.js
 
 # Production (PM2)
-pm2 start ecosystem.config.js --name meridian
+pm2 start ecosystem.config.js --name kairos
 pm2 monit
 ```
 
@@ -72,16 +72,16 @@ pm2 monit
 
 ```bash
 # Start
-pm2 start ecosystem.config.js --name meridian
+pm2 start ecosystem.config.js --name kairos
 
 # View logs
-pm2 logs meridian
+pm2 logs kairos
 
 # Restart
-pm2 restart meridian
+pm2 restart kairos
 
 # Stop
-pm2 stop meridian
+pm2 stop kairos
 
 # Auto-start on boot (automated)
 node scripts/setup-pm2-startup.js
@@ -123,10 +123,10 @@ node scripts/backup-db.js
 node scripts/backup-db.js --dry-run
 
 # Automated — add to crontab:
-# 0 3 * * * cd /path/to/meridian && node scripts/backup-db.js >> logs/backup.log 2>&1
+# 0 3 * * * cd /path/to/kairos && node scripts/backup-db.js >> logs/backup.log 2>&1
 ```
 
-Backups stored in `backups/meridian-YYYY-MM-DD.db`. Script keeps last 7.
+Backups stored in `backups/kairos-YYYY-MM-DD.db`. Script keeps last 7.
 
 ## Log Rotation
 
@@ -147,7 +147,7 @@ git pull
 npm install
 
 # Restart
-pm2 restart meridian
+pm2 restart kairos
 ```
 
 ## Panic Recovery
@@ -159,13 +159,13 @@ If the bot goes sideways:
 pm2 list
 
 # Force restart
-pm2 restart meridian --update-env
+pm2 restart kairos --update-env
 
 # View last errors
-pm2 logs meridian --err --lines 50
+pm2 logs kairos --err --lines 50
 
 # If DB is corrupted:
-#   cp backups/meridian-YYYY-MM-DD.db src/core/meridian.db
+#   cp backups/kairos-YYYY-MM-DD.db src/core/kairos.db
 ```
 
 ## Key Files
