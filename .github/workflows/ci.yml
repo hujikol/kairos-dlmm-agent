@@ -25,12 +25,16 @@ jobs:
         run: npm ci
         working-directory: meridian
 
+      - name: Security audit
+        run: npm audit --audit-level=high
+        working-directory: meridian
+
       - name: Lint (if exists)
         run: npm run lint 2>/dev/null || true
         working-directory: meridian
 
       - name: Run automated tests
-        run: node --test test/test-config.js test/test-evolve.js test/test-lesson-repo.js test/test-addrShort.js test/helius-cache.test.js
+        run: node --test test/test-config.js test/test-evolve.js test/test-lesson-repo.js test/test-addrShort.js test/helius-cache.js test/notifications.js test/postmortem-signalweights.js test/test-management-cycle.js test/test-deploy-safety.js test/test-close-flow.js test/test-screening-exits.js
         working-directory: meridian
         env:
           WALLET_PRIVATE_KEY: "[]"

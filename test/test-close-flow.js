@@ -22,7 +22,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { _injectDB, closeDB } from "../src/core/db.js";
 import { clearPerformance } from "../src/core/lessons.js";
-import { getTrackedPosition, _injectTrackedPosition } from "../src/core/state.js";
+import { getTrackedPosition, _injectTrackedPosition } from "../src/core/state/index.js";
 import { _injectPool, _injectSendTx } from "../src/integrations/meteora/pool.js";
 import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";
 
@@ -213,6 +213,7 @@ describe("closePosition integration tests", function () {
     _injectTrackedPosition(null);
     _testDB?.close();
     _testDB = null;
+    process.env.DRY_RUN = undefined; // prevent test 5's DRY_RUN from leaking into test 6
   });
 
   // ─── Test 1: closePosition() calls phases in correct order ─────
@@ -311,10 +312,9 @@ describe("closePosition integration tests", function () {
   });
 
   // ─── Test 6: Already-closed position rejected without SDK calls ───
-  // Skipped: _injectTrackedPosition override doesn't survive module-level state
-  // across tests in the same process. The "DRY_RUN returns early without SDK"
-  // test (test 5) already covers the "early return blocks SDK calls" pattern.
-  test.skip("Already-closed position is rejected without calling SDK", async () => {
+  // Fixed: process.env.DRY_RUN leaked from test 5 → afterEach now resets it.
+  // The "early return blocks SDK calls" pattern is covered by test 5 (DRY_RUN path).
+  test("Already-closed position is rejected without calling SDK", async () => {
     let poolCalled = false;
     const trackingPool = makeMockPool();
     trackingPool.getPosition = mock.fn(async () => {

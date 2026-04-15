@@ -170,7 +170,9 @@ async function runSafetyChecks(name, args) {
 
       const gasReserve = config.management.gasReserve;
       const minRequired = amountY + gasReserve;
-      if (balance.sol < minRequired) {
+      // Token-only deploys (amount_x > 0) don't need SOL for the position — only gas
+      const isTokenOnly = args.amount_x != null && args.amount_x > 0 && (args.amount_y == null || args.amount_y === 0);
+      if (!isTokenOnly && balance.sol < minRequired) {
         return { pass: false, reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).` };
       }
 

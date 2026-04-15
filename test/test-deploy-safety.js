@@ -157,10 +157,8 @@ describe("deploy_position safety checks", () => {
     );
   });
 
-  // Skipped: the token-only (amount_x > 0) SOL bypass in runSafetyChecks is not
-  // implemented — computeDeployAmount always checks SOL. With a working mock,
-  // this test exposes the real bug. Marked skipped until code is fixed.
-  test.skip("token-only deploy (amount_x > 0) bypasses SOL balance requirement", async () => {
+  // Token-only deploys (amount_x > 0) don't require SOL balance check — only gas
+  test("token-only deploy (amount_x > 0) bypasses SOL balance requirement", async () => {
     _injectPositionsCache({ wallet: "TestWallet", total_positions: 0, positions: [] });
     _injectBalances({ sol: 5.0, sol_price: 150, tokens: [] });
 
