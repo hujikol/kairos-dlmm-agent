@@ -1,8 +1,8 @@
 {
-  "name": "meridian",
+  "name": "kairos-dllm-agent",
   "version": "1.0.0",
   "type": "module",
-  "description": "Autonomous DLMM LP agent for Meteora pools on Solana",
+  "description": "Autonomous DLMM LP agent for Meteora pools on Solana — Kairos fork of Meridian",
   "main": "src/index.js",
   "bin": {
     "meridian": "src/cli.js"

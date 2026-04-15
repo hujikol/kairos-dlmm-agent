@@ -1,6 +1,6 @@
-# Meridian
+# Kairos
 
-Autonomous DLMM LP agent for Meteora pools on Solana. Screens new pairs for safety, deploys and manages liquidity positions, auto-compounds yield, and is monitored and controlled via Telegram.
+> **Inspired by [Meridian](https://github.com/yunus-0x/meridian)** — autonomous DLMM LP agent for Meteora pools on Solana. Screens new pairs for safety, deploys and manages liquidity positions, auto-compounds yield, and is monitored and controlled via Telegram.
 
 ---
 

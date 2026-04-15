@@ -1,6 +1,6 @@
-# Meridian — CLAUDE.md
+# Kairos — CLAUDE.md
 
-Autonomous DLMM LP agent for Meteora pools on Solana.
+Autonomous DLMM LP agent for Meteora pools on Solana. Forked from Meridian, inspired by https://github.com/yunus-0x/meridian.
 
 ---
 
