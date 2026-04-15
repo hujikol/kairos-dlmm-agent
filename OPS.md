@@ -83,7 +83,10 @@ pm2 restart meridian
 # Stop
 pm2 stop meridian
 
-# Auto-start on boot
+# Auto-start on boot (automated)
+node scripts/setup-pm2-startup.js
+
+# Auto-start on boot (manual equivalent)
 pm2 save
 pm2 startup  # run once after install, copies init script
 ```
@@ -94,6 +97,21 @@ pm2 startup  # run once after install, copies init script
 curl http://localhost:3030/health
 # Returns: ok
 ```
+
+### Health Check Monitoring
+
+The health endpoint is at `http://localhost:3030/health` (or `HEALTH_PORT` env var).
+
+**Free external monitoring** — use Better Uptime or UptimeRobot:
+1. Sign up at https://betterstack.co (free tier)
+2. Add a monitor for `https://your-domain.com:3030/health`
+3. Set check interval to 1 minute
+4. Configure alert channels (email, Slack, PagerDuty)
+
+**Self-hosted Prometheus** — add to `src/server/health.js`:
+- Expose `/metrics` endpoint using `prom-client`
+- Increment counter on each health check
+- Track: `up`, `position_count`, `last_cycle_timestamp`
 
 ## Database Backup
 

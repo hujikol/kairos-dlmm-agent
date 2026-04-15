@@ -85,6 +85,17 @@ export function stopCronJobs() {
   _cronTasks = [];
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  CIRCULAR LAZY IMPORT — do not add top-level imports here from index.js or
+//  orchestration.js.  scheduler.js (cron) and index.js (orchestration) have a
+//  mutual dependency: scheduler needs runManagementCycle / runScreeningCycle
+//  from index.js, but index.js imports scheduler at top level to access timers
+//  and cron guards.  To break the cycle the cycles are imported lazily here
+//  (lines 89-97).  If you add a top-level `import ... from "../index.js"` in
+//  this file the module graph will break at startup.  Same applies to any file
+//  that index.js or orchestration.js would transitively import.
+// ═══════════════════════════════════════════════════════════════════════════
+
 // Imported lazily to avoid circular dependency
 let _cyclesPromise = null;
 

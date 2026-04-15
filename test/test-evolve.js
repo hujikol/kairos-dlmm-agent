@@ -15,9 +15,15 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getDB, closeDB } from "../src/core/db.js";
+import Database from "better-sqlite3";
+import { _injectDB, initSchema, getDB, closeDB } from "../src/core/db.js";
 import { evolveThresholds, clearPerformance } from "../src/core/lessons.js";
 import { config, USER_CONFIG_PATH } from "../src/config.js";
+
+// Use isolated in-memory DB so this test file never touches the real meridian.db
+const _testDb = new Database(":memory:");
+initSchema(_testDb);
+_injectDB(_testDb);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

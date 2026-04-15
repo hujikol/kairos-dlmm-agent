@@ -9,8 +9,8 @@
 └──────────────┬───────────────────┬────────────────────┘
                │                   │
       ┌────────▼────────┐  ┌──────▼──────┐
-      │  scheduler.js   │  │telegram-    │
-      │  (cron jobs)    │  │poller.js    │
+      │  scheduler.js   │  │telegram.js  │
+      │  (cron jobs)    │  │(notifications)│
       └─────────────────┘  └─────────────┘
 ```
 
@@ -291,6 +291,49 @@ CREATE TABLE postmortem_rules (
   created_at TEXT, updated_at TEXT
 );
 ```
+
+## Circular Lazy Imports
+
+The module graph contains two intentional circular dependencies that are resolved
+with dynamic (`import()`) lazy loading.  Static analysis tools cannot see these
+cycles — the graph is only valid at runtime.
+
+### Pattern 1: `scheduler.js ↔ index.js`
+
+```
+index.js (top-level)  ─── imports ──→  scheduler.js
+      ↑                                      │
+      └── lazy import (getCycles) ── runManagementCycle / runScreeningCycle
+```
+
+`scheduler.js` needs `runManagementCycle` and `runScreeningCycle` from `index.js`,
+but `index.js` imports `scheduler.js` at top level (for `timers`, `_managementBusy`,
+`_screeningBusy`, etc.).  The cycle is broken by importing the two cycle
+functions lazily inside `startCronJobs()` via `getCycles()` (scheduler.js line 91).
+
+**Rule:** Never add a top-level `import ... from "../index.js"` or
+`import ... from "./orchestration.js"` in `scheduler.js`.  If you need a function
+from `index.js` in a new code path, call it lazily via `getCycles()` or extract
+the needed function into a third file with no index.js dependency.
+
+### Pattern 2: `pool.js → state/index.js` (lazy)
+
+`src/integrations/meteora/pool.js` uses a lazy import at line 181 to call
+`getTrackedPosition` from `state/index.js`.  This avoids pulling `state/index.js`
+(and its SQLite dependencies) into memory when the Meteora SDK is loaded statically.
+No reverse path exists — `state/index.js` does not import pool.js — so this is a
+one-way lazy load rather than a true cycle.  It is documented here for
+completeness because the pattern is the same.
+
+### General Rule
+
+When refactoring code in this codebase:
+- **Never** add a top-level import of `scheduler.js` in `index.js` or any module
+  that `index.js` transitively imports at top level.
+- If a refactor requires a function from `scheduler.js` in a new context, extract
+  it to a shared utility file with no circular dependencies, or use a lazy import.
+- When using lazy imports (`import(...)`), keep them close to the call site so
+  reviewers can spot potential cycles.
 
 ## Config System
 

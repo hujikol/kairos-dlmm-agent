@@ -9,14 +9,11 @@ import assert from "node:assert";
 import Database from "better-sqlite3";
 import { fileURLToPath } from "url";
 import path from "path";
-import fs from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEST_DB = path.join(__dirname, "test-state-exits.db");
 
 function makeTestDB() {
-  try { fs.unlinkSync(TEST_DB); } catch {}
-  const db = new Database(TEST_DB);
+  const db = new Database(":memory:");
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
