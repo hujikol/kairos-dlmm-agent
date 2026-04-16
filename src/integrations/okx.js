@@ -5,6 +5,14 @@
  */
 
 import { config } from "../config.js";
+import { createCircuitBreaker, CircuitOpenError } from "../core/circuit-breaker.js";
+
+// OKX API breaker — protects getAdvancedInfo, getClusterList, getRiskFlags
+const okxApi = createCircuitBreaker("okxApi", {
+  failureThreshold:  5,
+  recoveryTimeoutMs: 60_000,
+  halfOpenProbes:    3,
+});
 
 const BASE = process.env.OKX_API_BASE || "https://web3.okx.com";
 const CHAIN_SOLANA = "501";
@@ -77,10 +85,18 @@ function collectRiskEntries(section) {
  * Rugpull is informational only; wash trading is used as a hard filter upstream.
  */
 export async function getRiskFlags(tokenAddress, chainId = CHAIN_SOLANA) {
+  if (okxApi.isOpen()) throw new CircuitOpenError("okxApi");
   if (_testOkxOverride !== null) return _testOkxOverride(tokenAddress);
   const ts = Date.now();
   const path = `/priapi/v1/dx/market/v2/risk/new/check?chainId=${chainId}&tokenContractAddress=${tokenAddress}&t=${ts}`;
-  const data = await okxGet(path);
+  let data;
+  try {
+    data = await okxGet(path);
+  } catch (err) {
+    okxApi.recordFailure();
+    throw err;
+  }
+  okxApi.recordSuccess();
 
   const entries = [
     ...collectRiskEntries(data?.allAnalysis),
@@ -104,11 +120,19 @@ export async function getRiskFlags(tokenAddress, chainId = CHAIN_SOLANA) {
  * Advanced token info — risk level, bundle/sniper/suspicious %, dev rug history, token tags.
  */
 export async function getAdvancedInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
+  if (okxApi.isOpen()) throw new CircuitOpenError("okxApi");
   if (_testOkxOverride !== null) {
     return _testOkxOverride(tokenAddress);
   }
   const path = `/api/v6/dex/market/token/advanced-info?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
-  const data = await okxGet(path);
+  let data;
+  try {
+    data = await okxGet(path);
+  } catch (err) {
+    okxApi.recordFailure();
+    throw err;
+  }
+  okxApi.recordSuccess();
   const d = Array.isArray(data) ? data[0] : data;
   if (!d) return null;
 
@@ -141,9 +165,17 @@ export async function getAdvancedInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
  * Condenses to top N clusters for LLM consumption.
  */
 export async function getClusterList(tokenAddress, chainIndex = CHAIN_SOLANA, limit = 5) {
+  if (okxApi.isOpen()) throw new CircuitOpenError("okxApi");
   if (_testOkxOverride !== null) return _testOkxOverride(tokenAddress);
   const path = `/api/v6/dex/market/token/cluster/list?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
-  const data = await okxGet(path);
+  let data;
+  try {
+    data = await okxGet(path);
+  } catch (err) {
+    okxApi.recordFailure();
+    throw err;
+  }
+  okxApi.recordSuccess();
   // Public endpoint returns data.clusterList (not data[0].clustList)
   const raw = data?.clusterList ?? (Array.isArray(data) ? data[0]?.clustList ?? [] : []);
   if (!raw.length) return [];

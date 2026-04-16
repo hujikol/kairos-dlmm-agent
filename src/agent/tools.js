@@ -3,7 +3,7 @@
  * GENERAL role uses intent classification to narrow the tool set.
  */
 
-import { tools } from "../tools/definitions.js";
+import { ALL_TOOLS as tools } from "../tools/definitions.js";
 import { INTENT_PATTERNS, INTENT_TOOLS, shouldRequireRealToolUse } from "./intent.js";
 
 export const MANAGER_TOOLS  = new Set(["close_position", "claim_fees", "swap_token", "update_config", "get_position_pnl", "get_my_positions", "set_position_note", "add_pool_note", "get_wallet_balance", "get_wallet_positions"]);

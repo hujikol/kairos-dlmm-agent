@@ -17,6 +17,9 @@ import { WATCHDOG_POLL_INTERVAL_MS } from './core/constants.js';
 let _healerRunning = false;
 let _watchdogInterval = null;
 
+// Track consecutive failures per position address
+const _consecutiveFailures = new Map();
+
 export function setHealerRunning(v) { _healerRunning = v; }
 
 /**
@@ -28,6 +31,37 @@ export function stopWatchdog() {
     _watchdogInterval = null;
     log("info", "watchdog", "Watchdog stopped");
   }
+}
+
+/**
+ * Record a consecutive failure for a position. Returns the new count.
+ */
+function recordFailure(posAddress) {
+  const count = (_consecutiveFailures.get(posAddress) || 0) + 1;
+  _consecutiveFailures.set(posAddress, count);
+  return count;
+}
+
+/**
+ * Clear failure count on successful poll for a position.
+ */
+function clearFailure(posAddress) {
+  _consecutiveFailures.delete(posAddress);
+}
+
+/**
+ * Remove a position from the watch list due to staleness.
+ */
+function markStaleAndRemove(posAddress, pos) {
+  const db = getDB();
+  db.prepare("UPDATE positions SET status = ? WHERE position = ?").run("stale", posAddress);
+  _consecutiveFailures.delete(posAddress);
+  log("warn", "watchdog", `Position ${pos.pool_name} marked stale after 5 consecutive failures`);
+  pushNotification({
+    type: "stale",
+    pair: pos.pool_name || pos.pool,
+    reason: "consecutive_failures",
+  });
 }
 
 /**
@@ -55,8 +89,18 @@ export async function startWatchdog(config) {
 
         if (live.error) {
           log("error", "watchdog", `Failed to get PnL for ${pos.position}: ${live.error}`);
+          const fails = recordFailure(pos.position);
+          if (fails === 3) {
+            captureAlert(`Watchdog: 3 consecutive failures for ${pos.pool_name || pos.position}`);
+          }
+          if (fails >= 5) {
+            markStaleAndRemove(pos.position, pos);
+          }
           continue;
         }
+
+        // Successful poll — clear any accumulated failure count
+        clearFailure(pos.position);
 
         // Emergency close — no LLM, close immediately
         if (live.pnl_pct != null && live.pnl_pct <= config.management.stopLossPct) {
@@ -97,6 +141,14 @@ export async function startWatchdog(config) {
 
       } catch (e) {
         log("error", "watchdog", `Watchdog error on ${pos.position}: ${e.message}`);
+        const fails = recordFailure(pos.position);
+        if (fails === 3) {
+          captureAlert(`Watchdog: 3 consecutive failures for ${pos.pool_name || pos.position}`);
+        }
+        if (fails >= 5) {
+          markStaleAndRemove(pos.position, pos);
+          continue;
+        }
       }
     }
   }, WATCHDOG_POLL_INTERVAL_MS);

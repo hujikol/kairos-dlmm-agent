@@ -6,9 +6,9 @@
  */
 import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert";
-import Database from "better-sqlite3";
 import { fileURLToPath } from "url";
 import path from "path";
+import { makeMemDB } from "./mem-db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

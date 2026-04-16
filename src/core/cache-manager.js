@@ -14,6 +14,16 @@ class CacheManager {
     return entry.value;
   }
 
+  getWithMetadata(key) {
+    const entry = this.#store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.#store.delete(key);
+      return undefined;
+    }
+    return entry;
+  }
+
   set(key, value, ttlMs) {
     this.#store.set(key, {
       value,

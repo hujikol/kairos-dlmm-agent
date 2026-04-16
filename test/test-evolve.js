@@ -15,17 +15,19 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import Database from "better-sqlite3";
-import { _injectDB, initSchema, getDB, closeDB } from "../src/core/db.js";
+import { _injectDB, closeDB } from "../src/core/db.js";
 import { evolveThresholds, clearPerformance } from "../src/core/lessons.js";
 import { config, USER_CONFIG_PATH } from "../src/config.js";
-
-// Use isolated in-memory DB so this test file never touches the real kairos.db
-const _testDb = new Database(":memory:");
-initSchema(_testDb);
-_injectDB(_testDb);
+import { makeSchemaDB } from "./mem-db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+let _testDb;
+
+async function setupDB() {
+  _testDb = await makeSchemaDB();
+  _injectDB(_testDb);
+}
 
 // ─── Test helpers ──────────────────────────────────────────────
 
@@ -335,7 +337,7 @@ async function runTest() {
   closeDB();
 }
 
-runTest().catch((err) => {
+setupDB().then(() => runTest()).catch((err) => {
   console.error("Test error:", err);
   process.exitCode = 1;
 });
@@ -507,7 +509,7 @@ async function runEdgeCaseTests() {
   closeDB();
 }
 
-runEdgeCaseTests().catch((err) => {
+setupDB().then(() => runEdgeCaseTests()).catch((err) => {
   console.error("Edge case test error:", err);
   process.exitCode = 1;
 });

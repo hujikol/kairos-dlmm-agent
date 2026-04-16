@@ -147,7 +147,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         break;
       }
 
-      const toolResults = await Promise.all(msg.tool_calls.map(async (toolCall) => {
+      const results = await Promise.allSettled(msg.tool_calls.map(async (toolCall) => {
         const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
         const rawArgs = toolCall.function.arguments ?? "{}";
         const { args } = parseToolArgs(rawArgs, functionName);
@@ -173,6 +173,17 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
           content: JSON.stringify(result),
         };
       }));
+      // Log any rejections
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          log("error", "agent", `Tool call ${i} failed`, { reason: r.reason?.message });
+        }
+      });
+      const toolResults = results.map(r => r.status === 'fulfilled' ? r.value : {
+        role: "tool",
+        tool_call_id: msg.tool_calls[results.indexOf(r)].id,
+        content: JSON.stringify({ error: r.reason?.message || "Tool call rejected" }),
+      });
 
       messages.push(...toolResults);
     } catch (error) {
@@ -185,6 +196,10 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         log("info", "agent", `Rate limited (429). Backing off ${backoffMs / 1000}s before retry (attempt ${rateLimitRetryCount})...`);
         if (rateLimitRetryCount >= 3) {
           throw new Error("Rate limited 3 times consecutively — aborting agent loop");
+        }
+        if (step >= MAX_REACT_DEPTH) {
+          log("error", "agent", "Max react depth exceeded, breaking");
+          break;
         }
         await sleep(backoffMs);
         continue;

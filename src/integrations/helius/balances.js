@@ -6,6 +6,14 @@ import { normalizeMint } from "./normalize.js";
 import { getWallet } from "./swaps.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { balanceCache } from "../../core/cache-manager.js";
+import { createCircuitBreaker, CircuitOpenError } from "../../core/circuit-breaker.js";
+
+// Helius API breaker — protects external API calls only, not RPC fallback path
+const heliusApi = createCircuitBreaker("heliusApi", {
+  failureThreshold:  5,
+  recoveryTimeoutMs: 60_000,
+  halfOpenProbes:    3,
+});
 
 // ─── 5-minute TTL cache for getWalletBalances() ─────────────────
 export const CACHE_TTL = parseInt(process.env.HELIUS_BALANCE_CACHE_TTL_MS || String(config.screening?.balanceCacheTtlMs ?? 300_000)); // 5 minutes
@@ -29,10 +37,11 @@ export function _injectBalances(result) {
  * Returns age of cached balance in ms, or null if cache is empty/expired.
  */
 export function getBalanceCacheAgeMs() {
-  const cached = balanceCache.get(_CACHE_KEY);
-  if (cached === undefined) return null;
-  // CacheManager doesn't expose the stored timestamp, so we track age via module-level variable
-  return null; // age tracking handled by CacheManager TTL
+  const entry = balanceCache.getWithMetadata(_CACHE_KEY);
+  if (entry === undefined) return null;
+  const ageMs = Date.now() - (entry.expiresAt - CACHE_TTL);
+  if (ageMs < 0) return null; // safety guard
+  return ageMs;
 }
 
 /**
@@ -118,12 +127,15 @@ export async function getWalletBalances() {
   }
 
   try {
+    if (heliusApi.isOpen()) throw new CircuitOpenError("heliusApi");
     const url = `https://api.helius.xyz/v1/wallet/${walletAddress}/balances?api-key=${HELIUS_KEY}`;
     const res = await fetch(url).catch(err => { throw new Error(`fetch failed: ${err?.message}`); });
 
     if (!res.ok) {
+      heliusApi.recordFailure();
       throw new Error(`Helius API error: ${res.status} ${res.statusText}`);
     }
+    heliusApi.recordSuccess();
 
     const data = await res.json();
     const balances = data.balances || [];

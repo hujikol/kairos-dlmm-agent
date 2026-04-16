@@ -1,17 +1,17 @@
 /**
  * Rebuilds native modules for the current Node version.
  *
- * better-sqlite3 is a native addon that must be rebuilt when Node version changes.
- * Run this after upgrading Node, or after npm install --ignore-scripts.
+ * sql.js is pure WASM — no native compilation needed.
+ * Kept as a no-op for compatibility with existing tooling.
  */
 
 import { execSync } from "child_process";
 import console from "console";
 
 try {
-  execSync("npm rebuild better-sqlite3", { stdio: "inherit" });
-  console.log("Rebuilt: better-sqlite3");
+  // sql.js has no native deps — nothing to rebuild
+  console.log("sql.js: no native rebuild needed");
 } catch (e) {
-  console.error("Failed to rebuild better-sqlite3:", e.message);
+  console.error("rebuild-native:", e.message);
   process.exit(1);
 }

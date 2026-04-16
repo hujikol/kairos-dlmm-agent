@@ -57,6 +57,8 @@ pm2 monit
 | `LOG_FORMAT` | No | `text` | `text` or `json` |
 | `LOG_MAX_SIZE` | No | `10000000` | Bytes per log file before rotation |
 | `LOG_MAX_FILES` | No | `7` | Number of rotated log files to keep |
+| `BACKUP_DEST_DIR` | No | — | Offsite backup mount path (copied to in addition to local `backups/`) |
+| `KAIROS_DB_PATH` | No | `src/core/kairos.db` | SQLite DB path (must be set if running from different CWD than project root) |
 | `HEALTH_PORT` | No | `3030` | Health endpoint port |
 | `TELEGRAM_MSG_DELAY_MS` | No | `1500` | Delay between Telegram messages |
 | `TELEGRAM_POLL_TIMEOUT_MS` | No | `35000` | Telegram long-poll timeout |
@@ -120,7 +122,9 @@ public internet without a reverse proxy that restricts access. See
 `HEALTH_MONITORING.md` for recommended reverse-proxy patterns.
 - Track: `up`, `position_count`, `last_cycle_timestamp`
 
-## Database Backup
+## Backup & Restore
+
+### Backup
 
 ```bash
 # Manual
@@ -129,13 +133,36 @@ node scripts/backup-db.js
 # Dry run first
 node scripts/backup-db.js --dry-run
 
+# Verify most recent backup (PRAGMA integrity_check)
+node scripts/backup-db.js --verify
+
 # Automated — add to crontab:
 # 0 3 * * * cd /path/to/kairos && node scripts/backup-db.js >> logs/backup.log 2>&1
+# Verify in a separate crontab entry:
+# 30 3 * * * cd /path/to/kairos && node scripts/backup-db.js --verify >> logs/backup.log 2>&1
 ```
 
 Backups stored in `backups/kairos-YYYY-MM-DD.db`. Script keeps last 7.
 
-## Log Rotation
+**Offsite backup:** Set `BACKUP_DEST_DIR` to a mount path (e.g., NFS, USB, SMB share). The local backup is always written first; the offsite copy is attempted after and failures are logged but non-fatal. Check the mount periodically to ensure it is reachable.
+
+### Restore
+
+```bash
+# 1. Stop the agent
+pm2 stop kairos
+
+# 2. Restore the DB file from a backup
+cp backups/kairos-YYYY-MM-DD.db src/core/kairos.db
+
+# 3. Verify integrity
+sqlite3 src/core/kairos.db "PRAGMA integrity_check;"
+
+# 4. Restart the agent
+pm2 restart kairos
+```
+
+### Log Rotation
 
 Logs rotate automatically when file exceeds 10MB. Keeping 7 rotated files per type.
 
@@ -239,6 +266,27 @@ pm2 logs kairos --err --lines 50
 - PM2 max_memory_restart set to 512MB
 - Logs in `logs/` — rotate or prune old files
 - `backups/` directory — prune backups older than 7 days
+
+## Telegram Queue
+
+When the agent is busy, inbound Telegram messages are queued (max 5) and drained when idle. This explains message pile-up during heavy activity (e.g., active management cycles or screening).
+
+## bins_below Calculation
+
+The screener uses a volatility-based `bins_below` calculation:
+
+```
+bins_below = round(35 + (volatility / 5) * 34), clamped to [35, 69]
+```
+
+- volatility 0 → 35 bins (tight position in stable pool)
+- volatility 5+ → 69 bins (wide position in volatile pool)
+
+Higher volatility = more bins below active bin = wider position = larger position footprint.
+
+## LLM Fallback Chain
+
+LLM calls retry up to 3 times. On HTTP 502/503/529 responses, the agent automatically switches from the primary model to `stepfun/step-3.5-flash:free` fallback. If all retries fail, the cycle errors out.
 
 ## Discord LP Army Listener (DEPRECATED/REMOVED)
 

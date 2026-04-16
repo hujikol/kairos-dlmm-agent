@@ -1,12 +1,31 @@
 const DATAPI_BASE = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
+import { createCircuitBreaker, CircuitOpenError } from "../core/circuit-breaker.js";
+
+// Jupiter datapi breaker — protects token info, holders, narrative calls
+const jupiterApi = createCircuitBreaker("jupiterApi", {
+  failureThreshold:  5,
+  recoveryTimeoutMs: 60_000,
+  halfOpenProbes:    3,
+});
 
 /**
  * Get the narrative/story behind a token from Jupiter ChainInsight.
  * Useful for understanding if a token has a real community/theme vs nothing.
  */
 export async function getTokenNarrative({ mint }) {
-  const res = await fetch(`${DATAPI_BASE}/chaininsight/narrative/${mint}`);
-  if (!res.ok) throw new Error(`Narrative API error: ${res.status}`);
+  if (jupiterApi.isOpen()) throw new CircuitOpenError("jupiterApi");
+  let res;
+  try {
+    res = await fetch(`${DATAPI_BASE}/chaininsight/narrative/${mint}`);
+  } catch (err) {
+    jupiterApi.recordFailure();
+    throw err;
+  }
+  if (!res.ok) {
+    jupiterApi.recordFailure();
+    throw new Error(`Narrative API error: ${res.status}`);
+  }
+  jupiterApi.recordSuccess();
   const data = await res.json();
   return {
     mint,
@@ -20,9 +39,20 @@ export async function getTokenNarrative({ mint }) {
  * Returns condensed token info useful for confidence scoring.
  */
 export async function getTokenInfo({ query }) {
+  if (jupiterApi.isOpen()) throw new CircuitOpenError("jupiterApi");
   const url = `${DATAPI_BASE}/assets/search?query=${encodeURIComponent(query)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Token search API error: ${res.status}`);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    jupiterApi.recordFailure();
+    throw err;
+  }
+  if (!res.ok) {
+    jupiterApi.recordFailure();
+    throw new Error(`Token search API error: ${res.status}`);
+  }
+  jupiterApi.recordSuccess();
   const data = await res.json();
   const tokens = Array.isArray(data) ? data : [data];
   if (!tokens.length) return { found: false, query };
@@ -91,11 +121,23 @@ export async function getTokenInfo({ query }) {
  */
 export async function getTokenHolders({ mint, limit = 20 }) {
   // Fetch holders and total supply in parallel
-  const [holdersRes, tokenRes] = await Promise.all([
-    fetch(`${DATAPI_BASE}/holders/${mint}?limit=100`),
-    fetch(`${DATAPI_BASE}/assets/search?query=${mint}`),
-  ]);
-  if (!holdersRes.ok) throw new Error(`Holders API error: ${holdersRes.status}`);
+  let holdersRes, tokenRes;
+  try {
+    if (jupiterApi.isOpen()) throw new CircuitOpenError("jupiterApi");
+    [holdersRes, tokenRes] = await Promise.all([
+      fetch(`${DATAPI_BASE}/holders/${mint}?limit=100`),
+      fetch(`${DATAPI_BASE}/assets/search?query=${mint}`),
+    ]);
+  } catch (err) {
+    if (err instanceof CircuitOpenError) throw err;
+    jupiterApi.recordFailure();
+    throw err;
+  }
+  if (!holdersRes.ok) {
+    jupiterApi.recordFailure();
+    throw new Error(`Holders API error: ${holdersRes.status}`);
+  }
+  jupiterApi.recordSuccess();
   const data = await holdersRes.json();
   const tokenData = tokenRes.ok ? await tokenRes.json() : null;
   const tokenInfo = Array.isArray(tokenData) ? tokenData[0] : tokenData;

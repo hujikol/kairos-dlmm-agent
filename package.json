@@ -15,24 +15,27 @@
     "test:watch": "node --test --watch test-*.js",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
-    "postinstall": "node scripts/patch-anchor.js && node scripts/rebuild-native.js"
+    "postinstall": "node scripts/patch-anchor.js"
   },
   "dependencies": {
     "@meteora-ag/dlmm": "1.9.4",
-    "@sentry/node": "^10.48.0",
-    "@sentry/profiling-node": "^10.48.0",
+    "@sentry/node": "10.48.0",
+    "@sentry/profiling-node": "10.48.0",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
-    "better-sqlite3": "12.8.0",
+    "sql.js": "^1.11.0",
     "bn.js": "5.2.3",
     "bs58": "5.0.0",
     "dotenv": "17.3.1",
     "jsonrepair": "3.13.3",
-    "node-cron": "3.0.3",
-    "openai": "^6.34.0",
+    "croner": "^10.0.0",
+    "openai": "6.34.0",
     "write-file-atomic": "7.0.1"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.17.0 || >=22.9.0"
+  },
+  "overrides": {
+    "debug": "^4.3.0"
   }
 }

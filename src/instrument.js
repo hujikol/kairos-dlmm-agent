@@ -9,8 +9,8 @@ export function initSentry() {
       nodeProfilingIntegration(),
       Sentry.captureConsoleIntegration({ levels: ["log", "warn", "error"] }),
     ],
-    tracesSampleRate: 0.1,
-    profilesSampleRate: 0.1,
+    tracesSampleRate: parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE ?? '0.1'),
+    profilesSampleRate: parseFloat(process.env.SENTRY_PROFILES_SAMPLE_RATE ?? '0.1'),
     enableLogs: true,
   });
 }
@@ -25,6 +25,9 @@ export function captureError(err, context = {}) {
  * Use for: circuit breaker halts, emergency closes, panic events.
  */
 export function captureAlert(message, context = {}) {
-  if (!Sentry.isInitialized()) return;
+  if (!Sentry.isInitialized()) {
+    log("error", "alert", message, { ...context });
+    return;
+  }
   Sentry.captureMessage(message, { level: "error", extra: context });
 }

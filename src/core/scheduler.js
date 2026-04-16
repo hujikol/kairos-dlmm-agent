@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { Croner } from "croner";
 import { config } from "../config.js";
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
@@ -99,8 +99,9 @@ export async function startCronJobs() {
 
   const { runManagementCycle, runScreeningCycle } = await import("./cycles.js");
 
-  const mgmtTask = cron.schedule(
+  const mgmtTask = new Croner(
     `*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`,
+    { timezone: "Etc/UTC" },
     async () => {
       if (_busyState._managementBusy) return;
       timers.managementLastRun = Date.now();
@@ -113,8 +114,9 @@ export async function startCronJobs() {
     }
   );
 
-  const screenTask = cron.schedule(
+  const screenTask = new Croner(
     `*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`,
+    { timezone: "Etc/UTC" },
     async () => {
       try {
         await runScreeningCycle();
@@ -126,24 +128,24 @@ export async function startCronJobs() {
   );
 
   // Morning Briefing at 8:00 AM UTC+7 (1:00 AM UTC)
-  const briefingTask = cron.schedule("0 1 * * *", async () => {
+  const briefingTask = new Croner("0 1 * * *", { timezone: "Etc/UTC" }, async () => {
     try {
       await runBriefing();
     } catch (e) {
       captureError(e, { phase: "briefing" });
       log("error", "scheduler", `Briefing error: ${e.message}`);
     }
-  }, { timezone: "UTC" });
+  });
 
   // Every 6h — catch up if briefing was missed
-  const briefingWatchdog = cron.schedule("0 */6 * * *", async () => {
+  const briefingWatchdog = new Croner("0 */6 * * *", { timezone: "Etc/UTC" }, async () => {
     try {
       await maybeRunMissedBriefing();
     } catch (e) {
       captureError(e, { phase: "briefing_watchdog" });
       log("error", "scheduler", `Briefing watchdog error: ${e.message}`);
     }
-  }, { timezone: "UTC" });
+  });
 
   // Lightweight 30s PnL poller — updates trailing TP state between management cycles
   let _pnlPollBusy = false;

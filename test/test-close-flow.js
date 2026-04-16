@@ -17,10 +17,10 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { mock } from "node:test";
-import Database from "better-sqlite3";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { _injectDB, closeDB } from "../src/core/db.js";
+import { makeMemDB } from "./mem-db.js";
 import { clearPerformance } from "../src/core/lessons.js";
 import { getTrackedPosition, _injectTrackedPosition } from "../src/core/state/index.js";
 import { _injectPool, _injectSendTx } from "../src/integrations/meteora/pool.js";

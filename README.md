@@ -90,6 +90,16 @@ Edit `.env` with your values. Key variables:
 | `CAVEMAN_ENABLED` | `false` | Enable prompt compression to reduce token usage |
 | `HEALTH_PORT` | `3030` | Port for the health check endpoint |
 
+### Position Sizing
+
+**`computeDeployAmount(walletSol, positionCount)`** — scales position size:
+
+```
+effective deploy = clamp(deployable_sol * deployAmountSol, floor=deployAmountSol, ceil=maxDeployAmount)
+```
+
+`deployAmountSol=0.1` means minimum 0.1 SOL per position regardless of wallet size, capped at `maxDeployAmount`.
+
 ---
 
 ## Running
@@ -156,6 +166,7 @@ Start a chat with your bot and send:
 | `/evolve` | Manually trigger threshold evolution |
 | `/caveman` | Toggle prompt compression mode |
 | `/teach pin\|unpin <id>` | Pin or unpin a lesson |
+| `ONCE_PER_SESSION` | `deploy_position`, `swap_token`, `close_position` — blocked after first use per session |
 
 ### REPL commands (when running interactively)
 

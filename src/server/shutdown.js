@@ -1,3 +1,4 @@
+import { closeDB } from "../core/db.js";
 import { stopCronJobs } from "../core/scheduler.js";
 import { stopPolling } from "../notifications/telegram.js";
 import { stopWatchdog } from "../watchdog.js";
@@ -11,11 +12,18 @@ async function shutdown(signal) {
   log("info", "shutdown", `Received ${signal}. Shutting down...`);
   clearInterval(_promptRefreshInterval);
   stopCronJobs();
-  stopPolling();
   stopWatchdog();
   if (_healthServer) _healthServer.close();
-  const positions = await getMyPositions();
-  log("info", "shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+
+  await Promise.race([
+    Promise.all([
+      stopPolling(),
+      getMyPositions().catch(() => []),
+    ]),
+    new Promise(r => setTimeout(r, 10_000)),
+  ]);
+
+  await closeDB();
   process.exit(0);
 }
 

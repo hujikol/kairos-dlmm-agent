@@ -4,13 +4,35 @@ import { timers } from "../core/scheduler.js";
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || "3030", 10);
 
+async function checkExternalConnectivity() {
+  // Lightweight check: verify RPC_URL is reachable via a tiny RPC call
+  const rpcUrl = process.env.RPC_URL;
+  if (!rpcUrl) return false;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const resp = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function createHealthServer() {
   return http.createServer(async (req, res) => {
     if (req.url === "/health") {
-      // Lightweight — no external RPC calls, just process metrics + cycle state
-      res.writeHead(200, { "Content-Type": "application/json" });
+      const connected = await checkExternalConnectivity();
+      const statusCode = connected ? 200 : 503;
+      res.writeHead(statusCode, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
-        ok: true,
+        ok: connected,
+        connected,
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         lastCycle: timers.managementLastRun || null,

@@ -8,11 +8,19 @@ import { getConnection as getRpcConnection } from "../solana.js";
 import BN from "bn.js";
 import bs58 from "bs58";
 import { config } from "../../config.js";
+import { createCircuitBreaker, CircuitOpenError } from "../../core/circuit-breaker.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { isPoolOnCooldown } from "../../features/pool-memory.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { poolCache } from "../../core/cache-manager.js";
+
+// Meteora DLMM API breaker — protects pool search + active bin lookups
+const meteoraPool = createCircuitBreaker("meteoraPool", {
+  failureThreshold:  5,
+  recoveryTimeoutMs: 60_000,
+  halfOpenProbes:    3,
+});
 
 // ─── Constants ───────────────────────────────────────────────────
 /** Meteora DLMM program ID (LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo) */
@@ -99,6 +107,7 @@ export function _injectPool(pool) {
 }
 
 export async function getPool(poolAddress, { invalidate = false, poolOverride } = {}) {
+  if (meteoraPool.isOpen()) throw new CircuitOpenError("meteoraPool");
   const key = poolAddress.toString();
   if (invalidate) {
     poolCache.delete(key);
@@ -117,10 +126,16 @@ export async function getPool(poolAddress, { invalidate = false, poolOverride } 
     return cached;
   }
 
-  const { DLMM } = await getDLMM();
-  const pool = await DLMM.create(getConnection(), new PublicKey(poolAddress));
-  poolCache.set(key, pool, POOL_CACHE_TTL_MS);
-  return pool;
+  try {
+    const { DLMM } = await getDLMM();
+    const pool = await DLMM.create(getConnection(), new PublicKey(poolAddress));
+    poolCache.set(key, pool, POOL_CACHE_TTL_MS);
+    meteoraPool.recordSuccess();
+    return pool;
+  } catch (err) {
+    meteoraPool.recordFailure();
+    throw err;
+  }
 }
 
 /**
@@ -130,10 +145,24 @@ export async function getPool(poolAddress, { invalidate = false, poolOverride } 
  * @returns {Promise<Object>} { binId, price, pricePerLamport }
  */
 export async function getActiveBin({ pool_address }) {
+  if (meteoraPool.isOpen()) throw new CircuitOpenError("meteoraPool");
   pool_address = normalizeMint(pool_address);
-  const pool = await getPool(pool_address);
-  const activeBin = await pool.getActiveBin();
-
+  let pool;
+  try {
+    pool = await getPool(pool_address);
+  } catch (err) {
+    if (err instanceof CircuitOpenError) throw err;
+    meteoraPool.recordFailure();
+    throw err;
+  }
+  let activeBin;
+  try {
+    activeBin = await pool.getActiveBin();
+  } catch (err) {
+    meteoraPool.recordFailure();
+    throw err;
+  }
+  meteoraPool.recordSuccess();
   return {
     binId: activeBin.binId,
     price: pool.fromPricePerLamport(Number(activeBin.price)),
@@ -149,9 +178,20 @@ export async function getActiveBin({ pool_address }) {
  * @returns {Promise<Object>} { query, total, pools: [{ pool, name, bin_step, fee_pct, tvl, volume_24h, token_x: { symbol, mint }, token_y: { symbol, mint } }, ...] }
  */
 export async function searchPools({ query, limit = 10 }) {
+  if (meteoraPool.isOpen()) throw new CircuitOpenError("meteoraPool");
   const url = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/pools?query=${encodeURIComponent(query)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Pool search API error: ${res.status} ${res.statusText}`);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    meteoraPool.recordFailure();
+    throw err;
+  }
+  if (!res.ok) {
+    meteoraPool.recordFailure();
+    throw new Error(`Pool search API error: ${res.status} ${res.statusText}`);
+  }
+  meteoraPool.recordSuccess();
   const data = await res.json();
   const pools = (Array.isArray(data) ? data : data.data || []).slice(0, limit);
   return {

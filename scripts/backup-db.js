@@ -5,6 +5,11 @@
  * Usage:
  *   node scripts/backup-db.js              — run manually
  *   node scripts/backup-db.js --dry-run   — show what would happen
+ *   node scripts/backup-db.js --verify    — verify most recent backup with PRAGMA integrity_check
+ *
+ * Environment:
+ *   BACKUP_DEST_DIR   — if set, copy backup there as well (offsite mount)
+ *   KAIROS_DB_PATH    — path to source DB (default: src/core/kairos.db)
  *
  * Cron example (daily at 03:00):
  *   0 3 * * * cd /path/to/kairos && node scripts/backup-db.js
@@ -22,10 +27,47 @@ const DB_PATH   = process.env.KAIROS_DB_PATH
 const BACKUP_DIR = path.join(__dirname, "../backups");
 const MAX_BACKUPS = 7;
 
-const DRY_RUN = process.argv.includes("--dry-run");
+const DRY_RUN   = process.argv.includes("--dry-run");
+const VERIFY    = process.argv.includes("--verify");
+const OFFSITE_DIR = process.env.BACKUP_DEST_DIR || null;
+
+// Telegram alert helper (lazy import to avoid circular deps)
+async function sendAlert(msg) {
+  try {
+    const { sendMessage, isEnabled } = await import("../src/notifications/telegram.js");
+    if (!isEnabled()) return;
+    await sendMessage(`[BACKUP FAILURE] ${msg}`);
+  } catch (_) {
+    // Telegram not available — log only
+    console.error(`[ALERT] ${msg}`);
+  }
+}
 
 /**
- * Verify that a backup file is a valid SQLite database.
+ * Run PRAGMA integrity_check on a backup file.
+ * @param {string} backupPath
+ * @returns {boolean} true if check passes
+ */
+function integrityCheck(backupPath) {
+  try {
+    const db = sqlite3(backupPath);
+    const result = db.prepare("PRAGMA integrity_check").get();
+    db.close();
+    const ok = result && result.integrity_check === "ok";
+    if (ok) {
+      console.log(`Integrity check OK: ${backupPath}`);
+    } else {
+      console.error(`Integrity check FAILED: ${backupPath} — ${JSON.stringify(result)}`);
+    }
+    return ok;
+  } catch (err) {
+    console.error(`Integrity check ERROR: ${backupPath} — ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Verify that a backup file is a valid SQLite database (basic check).
  * @param {string} backupPath
  * @returns {boolean} true if verification succeeded
  */
@@ -44,6 +86,18 @@ function verify(backupPath) {
     console.error(`Verification FAILED: ${backupPath} — ${err.message}`);
     return false;
   }
+}
+
+/**
+ * Find the most recent backup file in BACKUP_DIR.
+ * @returns {string|null}
+ */
+function findMostRecentBackup() {
+  const entries = fs.readdirSync(BACKUP_DIR)
+    .filter(f => f.startsWith("kairos-") && f.endsWith(".db"))
+    .map(f => ({ file: f, path: path.join(BACKUP_DIR, f), mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtime }))
+    .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  return entries.length > 0 ? entries[0].path : null;
 }
 
 /**
@@ -76,6 +130,20 @@ export async function runBackup() {
     // Verify backup is a valid SQLite database
     if (!verify(snapshotFile)) {
       throw new Error(`Backup verification failed for ${snapshotFile}`);
+    }
+
+    // Copy to offsite destination if BACKUP_DEST_DIR is set
+    if (OFFSITE_DIR) {
+      try {
+        if (!fs.existsSync(OFFSITE_DIR)) {
+          fs.mkdirSync(OFFSITE_DIR, { recursive: true });
+        }
+        const offsitePath = path.join(OFFSITE_DIR, path.basename(snapshotFile));
+        fs.copyFileSync(snapshotFile, offsitePath);
+        console.log(`Offsite backup: ${offsitePath}`);
+      } catch (err) {
+        console.error(`Offsite backup FAILED (non-fatal): ${err.message}`);
+      }
     }
   }
 
@@ -118,4 +186,37 @@ if (isMain) {
       console.error("Backup failed:", err.message);
       process.exit(1);
     });
+}
+
+/**
+ * Verify most recent local backup with PRAGMA integrity_check.
+ * Sends Telegram alert on failure if Telegram is configured.
+ * Exits with code 1 on failure, 0 on success.
+ */
+async function runVerify() {
+  const latest = findMostRecentBackup();
+  if (!latest) {
+    const msg = "No backup found to verify.";
+    console.error(msg);
+    await sendAlert(msg);
+    process.exit(1);
+  }
+
+  if (!integrityCheck(latest)) {
+    const msg = `Integrity check FAILED for ${latest}`;
+    console.error(msg);
+    await sendAlert(msg);
+    process.exit(1);
+  }
+
+  console.log(`Verification successful: ${latest}`);
+  process.exit(0);
+}
+
+// Handle --verify mode
+if (isMain && VERIFY) {
+  runVerify().catch(err => {
+    console.error("Verify failed:", err.message);
+    process.exit(1);
+  });
 }
