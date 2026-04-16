@@ -55,9 +55,9 @@ function rotateLog(logFile) {
  */
 export function log(level, category, message, meta = {}) {
   if (LEVELS[level] === undefined) {
-    throw new Error(`Unknown log level: ${level}`);
-  }
-  if (LEVELS[level] < currentLevel) return;
+    // Unknown level — treat as debug (fallback, don't crash)
+    if (LEVELS.debug < currentLevel) return;
+  } else if (LEVELS[level] < currentLevel) return;
 
   const timestamp = new Date().toISOString();
   const corrId = meta.correlationId ? ` [${addrShort(meta.correlationId)}]` : "";

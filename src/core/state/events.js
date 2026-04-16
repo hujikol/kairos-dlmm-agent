@@ -18,7 +18,7 @@ export function pushEvent(event) {
     );
     db.prepare(`
       DELETE FROM recent_events WHERE id NOT IN (
-        SELECT id FROM recent_events ORDER BY id DESC LIMIT ?
+        SELECT id FROM (SELECT id FROM recent_events ORDER BY id DESC LIMIT ?)
       )
     `).run(MAX_RECENT_EVENTS);
   })();

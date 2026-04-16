@@ -1,7 +1,7 @@
 import { getMyPositions, closePosition } from "./integrations/meteora.js";
 import { getWalletBalances } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
-import { runScreeningCycle, escapeHTML } from "./core/orchestration.js";
+import { runScreeningCycle, escapeHTMLLocal as escapeHTML } from "./core/cycles.js";
 import { swapAllTokensToSol } from "./integrations/helius.js";
 import { generateBriefing } from "./notifications/briefing.js";
 import { getLearningStats, pinLesson, unpinLesson, rateLesson, listLessons } from "./core/lessons.js";

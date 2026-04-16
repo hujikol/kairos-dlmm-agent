@@ -466,20 +466,24 @@ function writeAutopsyToLessons(perfRecord, allPerformance) {
   const tags = ["postmortem", strategy, `vol_${Math.round(volatility)}`];
   if (volSimilar.length < 3) tags.push("limited_data");
 
-  db.prepare(`
-    INSERT INTO lessons (id, rule, tags, outcome, context, pnl_pct, range_efficiency, pool, created_at, pinned, role)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    crypto.randomUUID(),
-    rule,
-    JSON.stringify(tags),
-    "postmortem",
-    JSON.stringify({ close_reason, strategy, bin_step, volatility, confidence, similar_count: similarCount }),
-    safeNum(pnl_pct),
-    safeNum(perfRecord.range_efficiency) ?? 0,
-    perfRecord.pool,
-    new Date().toISOString(),
-    0,
-    null
-  );
+  try {
+    db.prepare(`
+      INSERT INTO lessons (id, rule, tags, outcome, context, pnl_pct, range_efficiency, pool, created_at, pinned, role)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      rule,
+      JSON.stringify(tags),
+      "postmortem",
+      JSON.stringify({ close_reason, strategy, bin_step, volatility, confidence, similar_count: similarCount }),
+      safeNum(pnl_pct),
+      safeNum(perfRecord.range_efficiency) ?? 0,
+      perfRecord.pool,
+      new Date().toISOString(),
+      0,
+      null
+    );
+  } catch (e) {
+    log("warn", "postmortem", `writeAutopsyToLessons: failed to insert lesson: ${e?.message}`);
+  }
 }

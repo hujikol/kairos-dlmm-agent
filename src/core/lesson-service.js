@@ -92,7 +92,7 @@ export async function recordPerformance(perf) {
 
   if (perf.pool) {
     const { recordPoolDeploy } = await import("../features/pool-memory.js");
-    recordPoolDeploy(perf.pool, {
+    await recordPoolDeploy(perf.pool, {
       pool_name: perf.pool_name,
       base_mint: perf.base_mint,
       deployed_at: perf.deployed_at,
@@ -127,7 +127,7 @@ export async function recordPerformance(perf) {
     await recalculateDarwinWeights(allPerformance, config);
   }
 
-  import("../features/hive-mind.js").then(m => m.syncToHive()).catch(() => {});
+  import("../features/hive-mind.js").then(m => m.syncToHive()).catch(e => log("warn", "hive-mind", `syncToHive failed: ${e?.message}`));
 
   // Auto-prune performance data and near-misses
   try {

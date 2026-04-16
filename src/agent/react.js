@@ -190,7 +190,8 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         continue;
       }
 
-      throw error;
+      log("error", "agent", `Non-retryable agent error: ${error.message}`);
+      return { content: `Agent error: ${error.message}`, userMessage: goal };
     }
   }
 

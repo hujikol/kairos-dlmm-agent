@@ -9,6 +9,7 @@ import {
 } from "./constants.js";
 
 export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
+  if (!pool) throw new Error("simulatePoolDeploy: pool is required");
   const { volume_24h, fee_pct, active_tvl, volatility, age_hours } = pool;
 
   // Expected daily fees: volume x fee_tier x your_liquidity_share

@@ -9,13 +9,26 @@ import { pushNotification } from './notifications/queue.js';
 import { markOutOfRange } from "./core/state/oor.js";
 import { syncOpenPositions } from "./core/state/sync.js";
 import { log } from './core/logger.js';
+import { captureAlert } from './instrument.js';
 import { runManagementCycle } from './core/cycles.js';
 import { WATCHDOG_POLL_INTERVAL_MS } from './core/constants.js';
 
 // Track healer cycle state to prevent overlapping unscheduled runs
 let _healerRunning = false;
+let _watchdogInterval = null;
 
 export function setHealerRunning(v) { _healerRunning = v; }
+
+/**
+ * Stop the watchdog polling loop.
+ */
+export function stopWatchdog() {
+  if (_watchdogInterval) {
+    clearInterval(_watchdogInterval);
+    _watchdogInterval = null;
+    log("info", "watchdog", "Watchdog stopped");
+  }
+}
 
 /**
  * Start the watchdog polling loop.
@@ -24,7 +37,7 @@ export function setHealerRunning(v) { _healerRunning = v; }
 export async function startWatchdog(config) {
   log("info", "watchdog", "Watchdog started — polling every 60s");
 
-  setInterval(async () => {
+  _watchdogInterval = setInterval(async () => {
     // Sync local DB with on-chain reality — marks stale positions as closed
     try {
       const { positions: livePositions } = await getMyPositions().catch(() => ({ positions: [] }));
@@ -48,6 +61,7 @@ export async function startWatchdog(config) {
         // Emergency close — no LLM, close immediately
         if (live.pnl_pct != null && live.pnl_pct <= config.management.stopLossPct) {
           log("warn", "watchdog", `EMERGENCY CLOSE: ${pos.pool_name} PnL=${live.pnl_pct}%`);
+          captureAlert(`EMERGENCY CLOSE triggered: ${pos.pool_name} at PnL=${live.pnl_pct}%`);
           const result = await closePosition({ position_address: pos.position, reason: 'emergency_loss' });
           pushNotification({
             type: 'close',
@@ -63,12 +77,17 @@ export async function startWatchdog(config) {
         }
 
         // Soft warning — trigger unscheduled healer/management cycle
-        if (live.pnl_pct != null && live.pnl_pct <= -4 && !_healerRunning) {
-          log("info", "watchdog", `Soft loss detected (${live.pnl_pct}%) for ${pos.pool_name} — triggering unscheduled management cycle`);
-          _healerRunning = true;
-          runManagementCycle({ silent: true })
-            .catch((e) => log("error", "watchdog", `Unscheduled management cycle failed: ${e.message}`))
-            .finally(() => { _healerRunning = false; });
+        // Atomic check-and-set to avoid TOCTOU race between concurrent iterations
+        if (live.pnl_pct != null && live.pnl_pct <= -4) {
+          if (_healerRunning) {
+            log("debug", "watchdog", `Soft loss detected but healer already running — skipping for ${pos.pool_name}`);
+          } else {
+            _healerRunning = true;
+            log("info", "watchdog", `Soft loss detected (${live.pnl_pct}%) for ${pos.pool_name} — triggering unscheduled management cycle`);
+            runManagementCycle({ silent: true })
+              .catch((e) => log("error", "watchdog", `Unscheduled management cycle failed: ${e.message}`))
+              .finally(() => { _healerRunning = false; });
+          }
         }
 
         // Out-of-range tracking — update oor timestamp if needed

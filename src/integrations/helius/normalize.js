@@ -7,6 +7,7 @@ import { SOL_MINT } from "../../constants.js";
  * @returns {string} Normalized mint address
  */
 export function normalizeMint(mint) {
+  if (typeof mint !== "string") return mint;
   if (!mint) return mint;
   if (
     mint === "SOL" ||

@@ -23,7 +23,9 @@ function loadChatId() {
       const cfg = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
       if (cfg.telegramChatId) chatId = cfg.telegramChatId;
     }
-  } catch { /**/ }
+  } catch (e) {
+    log("warn", "telegram", `loadChatId: failed to load — telegram disabled: ${e?.message}`);
+  }
 }
 
 async function saveChatId(id) {

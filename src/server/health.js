@@ -1,21 +1,19 @@
 import http from "http";
 import { log } from "../core/logger.js";
 import { timers } from "../core/scheduler.js";
-import { getMyPositions } from "../integrations/meteora.js";
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || "3030", 10);
 
 export function createHealthServer() {
   return http.createServer(async (req, res) => {
     if (req.url === "/health") {
-      const { positions } = await getMyPositions({ force: false, silent: true });
+      // Lightweight — no external RPC calls, just process metrics + cycle state
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         ok: true,
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         lastCycle: timers.managementLastRun || null,
-        positionCount: positions.length,
       }));
     } else {
       res.writeHead(404);

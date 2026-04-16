@@ -13,6 +13,7 @@ import {
 } from "./scheduler.js";
 import { flushNotifications, hasPendingNotifications, pushNotification } from "../notifications/queue.js";
 import { sendHTML, isEnabled as telegramEnabled } from "../notifications/telegram.js";
+import { captureAlert } from "../instrument.js";
 import { getTrackedPosition } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
 import { getActiveStrategy } from "./strategy-library.js";
@@ -22,7 +23,7 @@ import { getTokenNarrative, getTokenInfo } from "../integrations/jupiter.js";
 import { detectMarketPhase, PHASE_CONFIG } from "./phases.js";
 import { computeTokenScore } from "./token-score.js";
 import { findStrategiesForPhase } from "./lparmy-strategies.js";
-import { checkDailyCircuitBreaker } from "./daily-tracker.js";
+import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
 import { simulatePoolDeploy } from "./simulator.js";
 import { checkTokenCorrelation } from "./correlation.js";
 import { stripThink } from "../tools/caveman.js";
@@ -413,10 +414,12 @@ export async function runManagementCycle({ silent = false } = {}) {
 
   try {
     // Daily PnL circuit breaker
+    const pnl = getDailyPnL();
     const circuit = checkDailyCircuitBreaker();
-    log("info", "daily-pnl", `Circuit breaker: ${circuit.action} (realized: ${circuit.pnl?.toFixed(2) ?? "N/A"} USD, reason: ${circuit.reason || "normal"})`);
+    log("info", "daily-pnl", `Circuit breaker: ${circuit.action} (realized: ${pnl.realized?.toFixed(2) ?? "N/A"} USD, reason: ${circuit.reason || "normal"})`);
     if (circuit.action === "halt") {
       log("warn", "daily-pnl", `CIRCUIT BREAKER: daily loss limit hit — skipping new deployments this cycle`);
+      captureAlert(`CIRCUIT BREAKER HALT: daily loss limit hit (realized PnL: ${pnl.realized?.toFixed(2) ?? "N/A"} USD)`);
       // Still manage existing positions (close/claim) in halt mode
     }
 
@@ -428,7 +431,7 @@ export async function runManagementCycle({ silent = false } = {}) {
 
     if (positions.length === 0) {
       log("info", "cron", "No open positions — triggering screening cycle");
-      runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
+      runScreeningCycle().catch((e) => { try { log("error", "cron", `Triggered screening failed: ${e.message}`); } catch {} });
       return null;
     }
 
@@ -510,9 +513,15 @@ After executing, write a brief one-line result per position.
     // Skip if circuit breaker is in halt mode
     const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
     const afterCount = Math.max(0, positions.length - closesAttempted);
-    if (afterCount < config.risk.maxPositions && Date.now() - _screeningLastTriggered > SCREENING_COOLDOWN_MS && circuit.action !== "halt") {
-      log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
-      runScreeningCycle().catch((e) => log("error", "cron", `Triggered screening failed: ${e.message}`));
+    const lastTriggeredAt = _screeningLastTriggered;
+    if (afterCount < config.risk.maxPositions && Date.now() - lastTriggeredAt > SCREENING_COOLDOWN_MS && circuit.action !== "halt") {
+      // Re-check to avoid race: if another call set _screeningLastTriggered while we were running
+      if (_screeningLastTriggered !== lastTriggeredAt) {
+        log("info", "cron", `Post-management screening skipped — already triggered by concurrent call`);
+      } else {
+        log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
+        runScreeningCycle().catch((e) => { try { log("error", "cron", `Triggered screening failed: ${e.message}`); } catch {} });
+      }
     }
   } catch (error) {
     log("error", "cron", `Management cycle failed: ${error.message}`);
@@ -587,10 +596,12 @@ export async function runScreeningCycle({ silent = false } = {}) {
   let screeningMode = "normal";
 
   // Daily PnL circuit breaker
+  const pnl = getDailyPnL();
   const circuit = checkDailyCircuitBreaker();
-  log("info", "daily-pnl", `Screening circuit: ${circuit.action} (realized: $${(circuit.pnl || 0).toFixed(2)}, reason: ${circuit.reason || "normal"})`);
+  log("info", "daily-pnl", `Screening circuit: ${circuit.action} (realized: $${(pnl.realized || 0).toFixed(2)}, reason: ${circuit.reason || "normal"})`);
   if (circuit.action === "halt") {
     log("warn", "daily-pnl", `CIRCUIT BREAKER (screening): daily loss limit hit — skipping screening entirely`);
+    captureAlert(`CIRCUIT BREAKER HALT (screening): daily loss limit hit — screening skipped`);
     _busyState._screeningBusy = false;
     return null;
   }
@@ -665,7 +676,7 @@ CONVICTION SIZING MATRIX (enforced by safety check):
 - high: Good fundamentals, LPers match → 0.53 SOL
 - normal: Standard pass → 0.35 SOL
 Declare conviction in deploy_position. The safety layer computes the exact amount from this matrix — if you specify a different amount_y, it will be overridden.
-Daily PnL today: $${circuit.pnl?.toFixed(2) ?? "0"}.00 (profit target: $${circuit.threshold}, loss limit: $${circuit.lossLimit})
+Daily PnL today: $${(pnl.realized || 0).toFixed(2)} (profit target: $${pnl.threshold}, loss limit: $${pnl.lossLimit})
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}

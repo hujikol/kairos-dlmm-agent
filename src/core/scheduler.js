@@ -164,7 +164,7 @@ export async function startCronJobs() {
           if (sinceLastTrigger >= cooldownMs) {
             _pollTriggeredAt = Date.now();
             log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
-            runManagementCycle({ silent: true }).catch((e) => log("error", "cron", `Poll-triggered management failed: ${e.message}`));
+            runManagementCycle({ silent: true }).catch((e) => { try { log("error", "cron", `Poll-triggered management failed: ${e.message}`); } catch {} });
           } else {
             log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
           }

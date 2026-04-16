@@ -298,7 +298,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
   // Test injection check — setForTesting uses Infinity expiry so always takes precedence
   const testOverride = positionsCache.get("positions");
   if (testOverride !== undefined) {
-    return testOverride;
+    return Promise.resolve(testOverride);
   }
 
   // Cache check (skip if force=true)

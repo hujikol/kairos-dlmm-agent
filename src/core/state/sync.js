@@ -5,6 +5,7 @@
 
 import { getDB } from "../db.js";
 import { log } from "../logger.js";
+import { updatePosition, appendNote } from "./registry.js";
 
 // ─── Sync ───────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,11 @@ const SYNC_GRACE_MS = 5 * 60_000;
  * Reconcile local state with actual on-chain positions.
  * Marks any local open positions as closed if they are not in the on-chain list.
  * Positions deployed within the last 5 minutes are excluded (grace period).
+ *
+ * NOTE: active_addresses is snapshotted at call time. A position deployed
+ * on-chain while this function runs may be incorrectly auto-closed if it hasn't
+ * propagated into active_addresses yet. This is a known design limitation.
+ *
  * @param {string[]} active_addresses - List of currently active on-chain position addresses
  * @returns {void}
  */
@@ -40,27 +46,3 @@ export function syncOpenPositions(active_addresses) {
   })();
 }
 
-// ─── Internal helpers (duplicated from registry to avoid circular deps) ───────
-
-function updatePosition(position_address, updates) {
-  const db = getDB();
-  const keys = Object.keys(updates);
-  if (keys.length === 0) return;
-  const setCols = keys.map((k) => `${k} = ?`).join(", ");
-  const values = keys.map((k) => updates[k]);
-  values.push(position_address);
-  db.prepare(`UPDATE positions SET ${setCols} WHERE position = ?`).run(...values);
-}
-
-function appendNote(position_address, note) {
-  const db = getDB();
-  const pos = db.prepare("SELECT notes FROM positions WHERE position = ?").get(position_address);
-  if (!pos) return;
-  let notes = [];
-  try { notes = JSON.parse(pos.notes || "[]"); } catch (e) {
-    log("warn", "state", `Failed to parse position notes: ${e?.message}`);
-    notes = [];
-  }
-  notes.push(note);
-  updatePosition(position_address, { notes: JSON.stringify(notes) });
-}

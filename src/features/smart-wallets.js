@@ -31,7 +31,7 @@ export function removeSmartWallet({ address }) {
 export function listSmartWallets() {
   const db = getDB();
   const wallets = db.prepare('SELECT * FROM smart_wallets ORDER BY added_at').all();
-  return { total: allWallets.length, wallets };
+  return { total: wallets.length, wallets };
 }
 
 // Cache wallet positions for 5 minutes to avoid hammering RPC

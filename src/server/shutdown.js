@@ -1,5 +1,6 @@
 import { stopCronJobs } from "../core/scheduler.js";
 import { stopPolling } from "../notifications/telegram.js";
+import { stopWatchdog } from "../watchdog.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { log } from "../core/logger.js";
 
@@ -11,6 +12,7 @@ async function shutdown(signal) {
   clearInterval(_promptRefreshInterval);
   stopCronJobs();
   stopPolling();
+  stopWatchdog();
   if (_healthServer) _healthServer.close();
   const positions = await getMyPositions();
   log("info", "shutdown", `Open positions at shutdown: ${positions.total_positions}`);

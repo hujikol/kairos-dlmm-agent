@@ -1,9 +1,14 @@
 /**
  * Unified tool-result cache with TTL support.
  * Reduces redundant LLM tool calls and API pings.
+ *
+ * Uses pending-promise deduplication: concurrent calls with the same cache key
+ * share a single in-flight computation rather than each triggering their own fetch.
  */
 
-const CACHE = new Map();
+const CACHE = new Map(); // cacheKey → { exp, value }
+const PENDING = new Map(); // cacheKey → pending Promise
+
 const TTL_MAP = {
   get_candidates:     5 * 60,
   pool_detail:        3 * 60,
@@ -27,12 +32,28 @@ const TTL_MAP = {
  */
 export async function cachedTool(name, key, fn, ttlOverride) {
   const cacheKey = `${name}:${key}`;
-  const entry = CACHE.get(cacheKey);
-  if (entry && entry.exp > Date.now()) return entry.value;
+  const now = Date.now();
 
-  const value = await fn();
-  CACHE.set(cacheKey, { value, exp: Date.now() + (ttlOverride ?? TTL_MAP[name] ?? 120) * 1000 });
-  return value;
+  // Return cached value if fresh
+  const entry = CACHE.get(cacheKey);
+  if (entry && entry.exp > now) return entry.value;
+
+  // Return pending promise if another call is already computing this key
+  const pending = PENDING.get(cacheKey);
+  if (pending) return pending;
+
+  // Compute and cache
+  const promise = fn().then((value) => {
+    CACHE.set(cacheKey, { value, exp: now + (ttlOverride ?? TTL_MAP[name] ?? 120) * 1000 });
+    PENDING.delete(cacheKey);
+    return value;
+  }).catch((err) => {
+    PENDING.delete(cacheKey);
+    throw err;
+  });
+
+  PENDING.set(cacheKey, promise);
+  return promise;
 }
 
 /**
@@ -40,17 +61,27 @@ export async function cachedTool(name, key, fn, ttlOverride) {
  */
 export function invalidateCache(name, key) {
   CACHE.delete(`${name}:${key}`);
+  PENDING.delete(`${name}:${key}`);
 }
 
 /**
- * Clear all cache entries.
+ * Clear all cache entries and cancel pending computations.
  */
 export function clearCache() {
   CACHE.clear();
+  for (const p of PENDING.values()) {
+    if (typeof p.cancel === "function") p.cancel();
+  }
+  PENDING.clear();
 }
 
 // Evict expired entries every 60s
-setInterval(() => {
+const _evictionTimer = setInterval(() => {
   const now = Date.now();
   for (const [k, v] of CACHE) if (v.exp < now) CACHE.delete(k);
 }, 60_000);
+
+// Allow callers to stop the eviction timer (e.g., during shutdown)
+export function stopCacheEviction() {
+  clearInterval(_evictionTimer);
+}

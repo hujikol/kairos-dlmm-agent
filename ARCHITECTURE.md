@@ -301,13 +301,12 @@ CREATE TABLE postmortem_rules (
 
 ## Cycle Functions — `cycles.js`
 
-The cycle runner functions (`runManagementCycle` and `runScreeningCycle`) have
-been extracted from `orchestration.js` into a new dedicated module:
+The cycle runner functions (`runManagementCycle` and `runScreeningCycle`) live in
+`cycles.js` (merged from `orchestration.js` on 2026-04-15):
 
 | File | Responsibility |
 |------|---------------|
-| `src/core/cycles.js` | `runManagementCycle` and `runScreeningCycle` — extracted here as the canonical home |
-| `src/core/orchestration.js` | Helper functions (`escapeHTML`, `computeManagementActions`, etc.) |
+| `src/core/cycles.js` | `runManagementCycle` and `runScreeningCycle` — canonical home for all cycle logic |
 | `src/core/scheduler.js` | Cron scheduling; imports cycle functions from `cycles.js` via dynamic import inside `startCronJobs()` |
 | `src/index.js` | Imports `runScreeningCycle` from `cycles.js` |
 
@@ -318,11 +317,7 @@ previously resolved with a lazy `getCycles()` workaround.
 ```
 scheduler.js  ──dynamic import in startCronJobs()──→  cycles.js
                                                         │
-index.js  ──import──→  cycles.js  ←──import──  orchestration.js
-                                                         │
-                                               (imports state from)
-                                                         │
-                                               scheduler.js
+index.js  ──import──→  cycles.js
 ```
 
 ## Lazy Imports (Pattern 2 — one-way, not a cycle)

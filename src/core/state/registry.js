@@ -6,6 +6,7 @@
 import { getDB } from "../db.js";
 import { log } from "../logger.js";
 import { addrShort } from "../../tools/addrShort.js";
+import { pushEvent } from "./events.js";
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
@@ -243,24 +244,6 @@ export function getTrackedPosition(position_address) {
   const db = getDB();
   const row = db.prepare("SELECT * FROM positions WHERE position = ?").get(position_address);
   return row ? rowToPos(row) : null;
-}
-
-// ─── Event log (used by trackPosition / recordClose / recordRebalance) ───────
-
-const MAX_RECENT_EVENTS = 20;
-
-function pushEvent(event) {
-  const db = getDB();
-  db.transaction(() => {
-    db.prepare("INSERT INTO recent_events (ts, action, position, pool_name, reason) VALUES (?, ?, ?, ?, ?)").run(
-      new Date().toISOString(), event.action, event.position, event.pool_name, event.reason || null,
-    );
-    db.prepare(`
-      DELETE FROM recent_events WHERE id NOT IN (
-        SELECT id FROM recent_events ORDER BY id DESC LIMIT ?
-      )
-    `).run(MAX_RECENT_EVENTS);
-  })();
 }
 
 // ─── Briefing KV helpers (re-exported from registry for backward compat) ─────

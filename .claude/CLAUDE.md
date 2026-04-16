@@ -19,7 +19,7 @@ src/
 └── tools/          Tool definitions (36KB), executor, per-domain modules
 
 cycles.js          Canonical — scheduler/watchdog/index.js use this
-orchestration.js   Parallel to cycles.js — telegram-handlers.js imports from here
+orchestration.js   Deprecated — merged into cycles.js (2026-04-15)
 agent.js           Deprecated stub — re-exports from agent/index.js
 ```
 
@@ -40,11 +40,11 @@ agent.js           Deprecated stub — re-exports from agent/index.js
 
 ## Core Cycle System
 
-**`cycles.js`** is canonical. `orchestration.js` is a parallel file (identical signatures, minor differences: `escapeHTMLLocal` copy vs re-export, `IS_DRY_RUN` inline vs function). Everything runtime uses `cycles.js`:
+**`cycles.js`** is canonical — all runtime entry points import from here:
 - `scheduler.js` — cron triggers (`startCronJobs` / `stopCronJobs`)
 - `watchdog.js` — emergency polling
 - `index.js` — main entry
-- `telegram-handlers.js` — **uses `orchestration.js`** (inconsistency to fix)
+- `telegram-handlers.js` — imports from `cycles.js` (merged from `orchestration.js` 2026-04-15)
 
 **`_busyState` object** — Node.js v24.14.1 regressed exported `let` bindings (read-only when imported). All busy flags (`_managementBusy`, `_screeningBusy`) live in `scheduler._busyState` and are accessed as `._managementBusy` / `._screeningBusy`.
 
@@ -446,7 +446,5 @@ Node.js v24.14.1 regressed ES module live bindings — imported `let` exports ar
 
 ## Known Issues / Tech Debt
 
-- `telegram-handlers.js` imports from `orchestration.js` while everything else uses `cycles.js` — should be consolidated
 - `agent.js` is a deprecated stub — all actual code moved to `agent/index.js` + `agent/react.js`
 - `cli.js` completely undocumented in original CLAUDE.md despite being a full 40+ subcommand interface
-- `orchestration.js` and `cycles.js` are near-identical 34-35KB files — should be merged

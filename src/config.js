@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 
 // ─── v1 → v2 migration ─────────────────────────────────────────────────────
-const SECTION_KEYS = {
+const SECTION_MAP = {
   screening: [
     "minFeeActiveTvlRatio", "minOrganic", "minHolders", "minMcap", "maxMcap",
     "minTvl", "maxTvl", "minVolume", "minBinStep", "maxBinStep", "timeframe",
@@ -45,22 +45,26 @@ const SECTION_KEYS = {
 
 function migrateConfig() {
   if (!fs.existsSync(USER_CONFIG_PATH)) return;
-  const raw = fs.readFileSync(USER_CONFIG_PATH, "utf8");
-  const cfg = JSON.parse(raw);
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
+  } catch (err) {
+    log("warn", "config", `migrateConfig: failed to parse user-config.json — skipping migration: ${err?.message}`);
+    return;
+  }
 
   // Already v2 — all known keys are nested under their section, or file is empty
-  const hasAnySection = Object.keys(SECTION_KEYS).some((s) => cfg[s] !== undefined);
+  const hasAnySection = Object.keys(SECTION_MAP).some((s) => cfg[s] !== undefined);
   if (hasAnySection) return;
 
   // Detect flat v1 keys present at root level
   const v1KeysPresent = Object.keys(cfg).filter((k) =>
-    Object.values(SECTION_KEYS).flat().includes(k)
+    Object.values(SECTION_MAP).flat().includes(k)
   );
   if (v1KeysPresent.length === 0) return;
 
   // Wrap flat keys under their appropriate section
-  const migrated = { "# v2 format": true };
-  for (const [section, keys] of Object.entries(SECTION_KEYS)) {
+  for (const [section, keys] of Object.entries(SECTION_MAP)) {
     migrated[section] = {};
     for (const key of keys) {
       if (cfg[key] !== undefined) migrated[section][key] = cfg[key];
@@ -69,7 +73,7 @@ function migrateConfig() {
   }
 
   // Carry forward top-level keys that are not sectioned (rpcUrl, walletKey, etc.)
-  const SECTIONED_KEYS = new Set(Object.values(SECTION_KEYS).flat());
+  const SECTIONED_KEYS = new Set(Object.values(SECTION_MAP).flat());
   for (const [k, v] of Object.entries(cfg)) {
     if (!SECTIONED_KEYS.has(k)) migrated[k] = v;
   }
@@ -86,12 +90,12 @@ const u = fs.existsSync(USER_CONFIG_PATH)
   : {};
 
 // Apply wallet/RPC from user-config if not already in env
-if (u.rpcUrl)    process.env.RPC_URL            ||= u.rpcUrl;
-if (u.walletKey) process.env.WALLET_PRIVATE_KEY ||= u.walletKey;
-if (u.llmModel)  process.env.LLM_MODEL          ||= u.llmModel;
-if (u.llmBaseUrl) process.env.LLM_BASE_URL      ||= u.llmBaseUrl;
-if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
-if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
+if (u.rpcUrl)     process.env.RPC_URL            ??= u.rpcUrl;
+if (u.walletKey)  process.env.WALLET_PRIVATE_KEY ??= u.walletKey;
+if (u.llmModel)   process.env.LLM_MODEL          ??= u.llmModel;
+if (u.llmBaseUrl) process.env.LLM_BASE_URL       ??= u.llmBaseUrl;
+if (u.llmApiKey)  process.env.LLM_API_KEY        ??= u.llmApiKey;
+if (u.dryRun !== undefined) process.env.DRY_RUN  ??= String(u.dryRun);
 
 import { SOL_MINT, USDC_MINT, USDT_MINT } from "./constants.js";
 
@@ -255,44 +259,8 @@ export function reloadScreeningThresholds() {
   try {
     const fresh = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
 
-    // ── Section-to-key mapping: which user-config keys belong to which config section ──
-    const SECTION_MAP = {
-      screening: [
-        "minFeeActiveTvlRatio", "minOrganic", "minHolders", "minMcap", "maxMcap",
-        "minTvl", "maxTvl", "minVolume", "minBinStep", "maxBinStep", "timeframe",
-        "category", "minTokenFeesSol", "maxBundlePct", "maxBotHoldersPct",
-        "maxTop10Pct", "blockedLaunchpads", "minTokenAgeHours", "maxTokenAgeHours",
-        "athFilterPct", "slippageBps", "screeningCooldownMs", "balanceCacheTtlMs",
-      ],
-      management: [
-        "minClaimAmount", "autoSwapAfterClaim", "autoSwapAfterClose",
-        "outOfRangeBinsToClose", "outOfRangeWaitMinutes", "minVolumeToRebalance",
-        "stopLossPct", "takeProfitFeePct", "minFeePerTvl24h", "minAgeBeforeYieldCheck",
-        "minSolToOpen", "gasReserve", "baseDeployAmount", "maxDeployAmount",
-        "trailingTakeProfit", "trailingTriggerPct", "trailingDropPct", "solMode",
-        "deployAmountSol", "pnlSuspectThresholdPct", "pnlSuspectMinUsd",
-        "yieldCheckMinAgeMs", "minLlmOutputLen", "maxLlmOutputDisplay",
-        "telegramMaxMsgLen",
-      ],
-      risk: [
-        "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
-      ],
-      schedule: [
-        "managementIntervalMin", "screeningIntervalMin",
-      ],
-      llm: [
-        "temperature", "maxTokens", "maxSteps", "screenerMaxSteps", "managerMaxSteps",
-        "managementModel", "screeningModel", "generalModel",
-      ],
-      strategy: [
-        "strategy", "binsBelow",
-      ],
-      okx: [
-        "okxApiTimeoutMs",
-      ],
-    };
-
     for (const [section, keys] of Object.entries(SECTION_MAP)) {
+      if (!config[section]) continue;
       for (const key of keys) {
         // Prefer v2 nested path; fall back to flat v1 key for backward compatibility
         if (fresh[section]?.[key] !== undefined) {

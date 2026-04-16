@@ -16,7 +16,9 @@ import { fileURLToPath } from "url";
 import sqlite3 from "better-sqlite3";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH   = path.join(__dirname, "../src/core/kairos.db");
+const DB_PATH   = process.env.KAIROS_DB_PATH
+  ? path.resolve(process.env.KAIROS_DB_PATH)
+  : path.join(__dirname, "../src/core/kairos.db");
 const BACKUP_DIR = path.join(__dirname, "../backups");
 const MAX_BACKUPS = 7;
 

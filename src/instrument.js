@@ -19,3 +19,12 @@ export function captureError(err, context = {}) {
   if (!Sentry.isInitialized()) return;
   Sentry.captureException(err, { extra: context });
 }
+
+/**
+ * Send a Sentry alert for emergency conditions (no Error object needed).
+ * Use for: circuit breaker halts, emergency closes, panic events.
+ */
+export function captureAlert(message, context = {}) {
+  if (!Sentry.isInitialized()) return;
+  Sentry.captureMessage(message, { level: "error", extra: context });
+}

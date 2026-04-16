@@ -204,15 +204,15 @@ pm2 logs kairos --err --lines 50
 | Path | Purpose |
 |------|---------|
 | `src/index.js` | Main entry, cron orchestration, REPL |
-| `src/core/lessons.js` | Learning system |
+| `src/core/lessons.js` | Learning system (re-exports threshold-evolver) |
 | `src/core/threshold-evolver.js` | Threshold evolution algorithm |
-| `src/core/state.js` | SQLite position registry |
+| `src/core/state/index.js` | State barrel — registry, OOR, PnL, events, sync |
 | `src/core/db.js` | Database connection |
 | `src/core/logger.js` | Log rotation |
 | `src/integrations/meteora.js` | DLMM pool interactions |
 | `src/integrations/helius.js` | Wallet balances, swaps |
 | `src/screening/discovery.js` | Pool discovery |
-| `src/agent.js` | ReAct agent loop |
+| `src/agent/index.js` | ReAct agent loop |
 | `src/tools/executor.js` | Tool dispatch |
 | `src/watchdog.js` | Emergency close polling |
 | `src/notifications/telegram.js` | Telegram bot |

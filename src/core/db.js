@@ -5,7 +5,9 @@ import { log } from "./logger.js";
 import { MIGRATIONS } from "../../migrations/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, "kairos.db");
+const DB_PATH = process.env.KAIROS_DB_PATH
+  ? path.resolve(process.env.KAIROS_DB_PATH)
+  : path.join(__dirname, "kairos.db");
 
 let _db = null;
 
