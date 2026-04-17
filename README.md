@@ -2,15 +2,15 @@
 
 > **Autonomous DLMM LP agent** for Meteora pools on Solana. Screens, deploys, and manages liquidity positions automatically. Controlled via Telegram or CLI.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=for-the-badge)](https://github.com/meridian-agents/kairos-dllm-agent)
-[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](https://github.com/meridian-agents/kairos-dllm-agent)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.17.0-brightgreen?style=for-the-badge)](https://nodejs.org)
-[![Platform](https://img.shields.io/badge/platform-Solana-14f195?style=for-the-badge)](https://solana.com)
-[![DLMM](https://img.shields.io/badge/DLMM-Meteora-7c3aed?style=for-the-badge)](https://meteora.ag)
-[![RPC](https://img.shields.io/badge/RPC-Helius-orange?style=for-the-badge)](https://helius.xyz)
-[![LLM](https://img.shields.io/badge/LLM-OpenRouter-c0242f?style=for-the-badge)](https://openrouter.ai)
-[![Telegram](https://img.shields.io/badge/Telegram%20Bot-2CA5E0?style=for-the-badge)](https://core.telegram.org)
-[![Status](https://img.shields.io/badge/status-autonomous-brightgreen?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)](https://github.com/meridian-agents/kairos-dllm-agent)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](https://github.com/meridian-agents/kairos-dllm-agent)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.17.0-brightgreen?logo=node.js&logoColor=339933&style=flat-square)](https://nodejs.org)
+[![Solana](https://img.shields.io/badge/Solana-14f195?logo=solana&logoColor=14F195&style=flat-square)](https://solana.com)
+[![Meteora](https://img.shields.io/badge/Meteora-7c3aed?style=flat-square)](https://meteora.ag)
+[![Helius](https://img.shields.io/badge/Helius-orange?style=flat-square)](https://helius.xyz)
+[![OpenRouter](https://img.shields.io/badge/OpenRouter-c0242f?logo=openai&logoColor=00ACF7&style=flat-square)](https://openrouter.ai)
+[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?logo=telegram&logoColor=2CA5E0&style=flat-square)](https://core.telegram.org)
+[![Status](https://img.shields.io/badge/autonomous-brightgreen?style=flat-square)]()
 
 ## Feature Stack
 
@@ -23,13 +23,6 @@
 | **Persistence** | SQLite decision log, performance history, event log | — |
 | **Interfaces** | Telegram (10 commands), CLI (20+ subcommands), REPL, health endpoint | — |
 | **Reliability** | Busy-state guards, once-per-session blocks, rate-limit retry, JSON repair | — |
-
-## Powered By
-
-```
-Meteora DLMM  ·  Solana  ·  Helius RPC  ·  Jupiter API
-OpenRouter LLM  ·  Telegram Bot  ·  Agent Meridian (relay)  ·  Hive Mind (collective)
-```
 
 ---
 
