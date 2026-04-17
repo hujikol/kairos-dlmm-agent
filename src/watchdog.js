@@ -75,7 +75,7 @@ export async function startWatchdog(config) {
     // Sync local DB with on-chain reality — marks stale positions as closed
     try {
       const { positions: livePositions } = await getMyPositions().catch(() => ({ positions: [] }));
-      syncOpenPositions(livePositions.map(p => p.position));
+      await syncOpenPositions(livePositions.map(p => p.position));
     } catch (e) {
       log("warn", "watchdog", `Sync step failed: ${e.message}`);
     }

@@ -280,7 +280,12 @@ export async function deployPosition({
     };
   } catch (error) {
     log("error", "deploy", error.message);
-    return { success: false, error: error.message };
+    let logs = null;
+    if (error.logs) {
+        logs = typeof error.getLogs === 'function' ? error.getLogs() : error.logs;
+        log("error", "deploy", "Program logs", { logs });
+    }
+    return { success: false, error: error.message, logs };
   }
 }
 

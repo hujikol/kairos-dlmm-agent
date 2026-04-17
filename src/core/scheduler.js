@@ -36,7 +36,7 @@ export function formatCountdown(seconds) {
 // ═══════════════════════════════════════════
 //  CRON STATE (re-exported so index.js can use guards)
 // ═══════════════════════════════════════════
-export let _cronTasks = [];
+export const _cronState = { tasks: [], _pnlPollInterval: null };
 // NOTE: Node.js v24 regressed — exported `let` bindings are read-only when imported.
 // Use object wrapper so imported modules can modify properties (not bindings).
 export const _busyState = {
@@ -89,9 +89,9 @@ export async function maybeRunMissedBriefing() {
 //  START / STOP
 // ═══════════════════════════════════════════
 export function stopCronJobs() {
-  for (const task of _cronTasks) task.stop();
-  if (_cronTasks._pnlPollInterval) clearInterval(_cronTasks._pnlPollInterval);
-  _cronTasks = [];
+  for (const task of _cronState.tasks) task.stop();
+  if (_cronState._pnlPollInterval) clearInterval(_cronState._pnlPollInterval);
+  _cronState.tasks = [];
 }
 
 // ─── Cycle functions (imported from cycles.js to break circular dep) ───────────
@@ -187,7 +187,7 @@ export async function startCronJobs() {
     }
   }, config.schedule.pnlPollIntervalSec * 1000);
 
-  _cronTasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
-  _cronTasks._pnlPollInterval = pnlPollInterval;
+  _cronState.tasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
+  _cronState._pnlPollInterval = pnlPollInterval;
   log("info", "cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
 }
