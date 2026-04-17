@@ -3,7 +3,7 @@
 > **Autonomous DLMM LP agent** for Meteora pools on Solana. Screens, deploys, and manages liquidity positions automatically. Controlled via Telegram or CLI.
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)](https://github.com/meridian-agents/kairos-dllm-agent)
-[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](https://github.com/meridian-agents/kairos-dllm-agent)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](https://github.com/meridian-agents/kairos-dllm-agent/blob/main/LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20.17.0-brightgreen?logo=node.js&logoColor=339933&style=flat-square)](https://nodejs.org)
 [![Solana](https://img.shields.io/badge/Solana-14f195?logo=solana&logoColor=14F195&style=flat-square)](https://solana.com)
 [![Meteora](https://img.shields.io/badge/Meteora-7c3aed?style=flat-square)](https://meteora.ag)

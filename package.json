@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Autonomous DLMM LP agent for Meteora pools on Solana — Kairos fork of Meridian",
+  "license": "MIT",
   "main": "src/index.js",
   "bin": {
     "meridian": "src/cli.js"
