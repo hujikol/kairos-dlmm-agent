@@ -10,6 +10,7 @@ import { recallForPool, isTokenToxic } from "../features/pool-memory.js";
 import { detectMarketPhase } from "./phases.js";
 import { computeTokenScore } from "./token-score.js";
 import { checkTokenCorrelation } from "./correlation.js";
+import { fetchPoolIndicators } from "./pool-indicators.js";
 
 // ─── Candidate reconstitution ────────────────────────────────────────────────
 
@@ -21,16 +22,18 @@ export async function fetchAndReconCandidates(candidates) {
   return Promise.all(candidates.map(async (pool, idx) => {
     await new Promise(r => setTimeout(r, idx * 100)); // stagger to avoid 429s
     const mint = pool.base?.mint;
-    const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
+    const [smartWallets, narrative, tokenInfo, indicators] = await Promise.allSettled([
       checkSmartWalletsOnPool({ pool_address: pool.pool }),
       mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
       mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
+      fetchPoolIndicators({ pool_address: pool.pool, poolData: pool, mint }),
     ]);
     return {
       pool,
       sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
       n: narrative.status === "fulfilled" ? narrative.value : null,
       ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
+      indicators: indicators.status === "fulfilled" ? indicators.value : "",
       mem: recallForPool(pool.pool),
       phase: detectMarketPhase(pool),
       score: computeTokenScore(pool, tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null),
@@ -79,7 +82,7 @@ export function applyHardFilters(allCandidates, config, prePositions) {
  * Build compact text blocks for each candidate, for injection into the LLM prompt.
  */
 export function buildCandidateBlocks(passing, activeBinResults, simulations) {
-  return passing.map(({ pool, sw, n, ti, mem, phase, score }, i) => {
+  return passing.map(({ pool, sw, n, ti, mem, phase, score, indicators }, i) => {
     const botPct = ti?.audit?.bot_holders_pct ?? "?";
     const top10Pct = ti?.audit?.top_holders_pct ?? "?";
     const feesSol = ti?.global_fees_sol ?? "?";
@@ -121,6 +124,7 @@ export function buildCandidateBlocks(passing, activeBinResults, simulations) {
       priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
       n?.narrative ? `  narrative: ${n.narrative.slice(0, 500)}` : `  narrative: none`,
       mem ? `  memory: ${mem}` : null,
+      indicators ? `${indicators}` : null,
     ].filter(Boolean).join("\n");
 
     return block;
