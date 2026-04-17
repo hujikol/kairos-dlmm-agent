@@ -16,6 +16,7 @@ smart-wallets.json
 pool-memory.json
 token-blacklist.json
 strategy-library.json
+hivemind-cache.json
 
 # SQLite Database files
 *.db
