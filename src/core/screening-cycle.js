@@ -8,11 +8,11 @@ import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
 import { getTopCandidates } from "../screening/discovery.js";
 import { getActiveBin } from "../integrations/meteora.js";
-import { config, computeDeployAmount } from "../config.js";
+import { config, computeDeployAmount, isDryRun } from "../config.js";
 import {
   timers,
   _busyState,
-  _screeningLastTriggered,
+  _timersState,
 } from "./scheduler.js";
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
 import { captureAlert } from "../instrument.js";
@@ -28,8 +28,8 @@ import {
   buildCandidateBlocks,
 } from "./screening-helpers.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
-
-const IS_DRY_RUN = process.env.DRY_RUN === "true";
+import { getSharedLessonsForPrompt } from "../features/hive-mind.js";
+import { recordDecision } from "./decision-log.js";
 
 export async function runScreeningCycle({ silent = false, gateway = agentGateway } = {}) {
   if (_busyState._screeningBusy) {
@@ -37,7 +37,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     return null;
   }
   _busyState._screeningBusy = true; // set immediately — prevents TOCTOU race with concurrent callers
-  _screeningLastTriggered = Date.now();
+  _timersState.screeningLastTriggered = Date.now();
 
   // Hard guards — don't even run the agent if preconditions aren't met
   let prePositions, preBalance;
@@ -49,12 +49,12 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
-    if (preBalance.sol < minRequired && !IS_DRY_RUN) {
+    if (preBalance.sol < minRequired && !isDryRun()) {
       log("info", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
       _busyState._screeningBusy = false;
       return null;
     }
-    if (preBalance.sol < minRequired && IS_DRY_RUN) {
+    if (preBalance.sol < minRequired && isDryRun()) {
       log("info", "cron", `DRY RUN — bypassing SOL check (${preBalance.sol.toFixed(3)} SOL, would need ${minRequired})`);
     }
   } catch (e) {
@@ -69,8 +69,8 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
   let screeningMode = "normal";
 
   // Daily PnL circuit breaker
-  const pnl = getDailyPnL();
-  const circuit = checkDailyCircuitBreaker();
+  const pnl = await getDailyPnL();
+  const circuit = await checkDailyCircuitBreaker();
   log("info", "daily-pnl", `Screening circuit: ${circuit.action} (realized: $${(pnl.realized || 0).toFixed(2)}, reason: ${circuit.reason || "normal"})`);
   if (circuit.action === "halt") {
     log("warn", "daily-pnl", `CIRCUIT BREAKER (screening): daily loss limit hit — skipping screening entirely`);
@@ -92,7 +92,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     log("info", "cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL, positions: ${prePositions.total_positions || 0})`);
 
     // Load active strategy (phase info injected later after candidate recon)
-    const activeStrategy = getActiveStrategy();
+    const activeStrategy = await getActiveStrategy();
 
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
     const topCandidates = await getTopCandidates({ limit: 10 }).catch(e => { log("warn", "screening", `getTopCandidates failed: ${e?.message ?? e}`); return null; });
@@ -105,6 +105,15 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
 
     if (passing.length === 0) {
       screenReport = `No candidates available (all blocked by launchpad filter).`;
+      recordDecision({
+        type: "skip",
+        pool: null,
+        position: null,
+        amount: null,
+        pnl: null,
+        reasoning: "no candidates qualified",
+        metadata: { initiated_by: "rule" },
+      }).catch(e => log("warn", "decision-log", `Failed to record skip decision: ${e.message}`));
       return screenReport;
     }
 
@@ -133,6 +142,9 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     // Build compact candidate blocks
     const candidateBlocks = buildCandidateBlocks(passing, activeBinResults, simulations);
 
+    // ── Hive Mind lessons for prompt injection ─────────────────────────
+    const hiveLessonsBlock = getSharedLessonsForPrompt({ agentType: "SCREENER", maxLessons: 6 });
+
     // ── Call LLM via agentGateway ─────────────────────────────────────
     const { content } = await gateway.runScreeningCycle({
       candidateBlocks,
@@ -144,6 +156,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       deployAmount,
       pnl,
       canDeploy,
+      hiveLessonsBlock,
       screeningMode,
     });
     screenReport = content;

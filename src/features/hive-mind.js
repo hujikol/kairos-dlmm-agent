@@ -1,367 +1,406 @@
 /**
- * Hive Mind — opt-in collective intelligence for kairos agents.
+ * Hive Mind — collective intelligence for kairos agents.
  *
- * When enabled, agents share anonymized performance data (lessons, deploy
- * outcomes, screening thresholds) with a central server. In return, they
- * receive consensus wisdom from other agents — weighted by credibility
- * and freshness — to inform screening and management decisions.
+ * Pulls shared lessons and presets from the Hive Mind server, and pushes
+ * individual lessons and performance events back. Works in conjunction with
+ * the local lessons system.
  *
  * Setup:
- *   1. Run: node -e "import('./hive-mind.js').then(m => m.register('https://your-hive-url'))"
- *   2. Save the API key shown — it won't be shown again.
- *   3. Agent auto-syncs on each position close and queries during screening.
- *
- * Disable: clear hiveMindUrl and hiveMindApiKey in user-config.json.
+ *   1. Add to user-config.json:
+ *      { "hive": { "url": "https://api.agentmeridian.xyz/api", "apiKey": "your-key" }, "lpAgentRelayEnabled": true }
+ *   2. Or set env vars: AGENT_MERIDIAN_API_URL, HIVE_MIND_PUBLIC_API_KEY
+ *   3. On startup, call bootstrapHiveMind() — registers agent + pulls initial data
+ *   4. startHiveMindBackgroundSync() keeps heartbeat + data fresh every 15 min
  *
  * Privacy: NO wallet addresses or private keys are ever sent.
  *          Only pool addresses (public on-chain data), performance stats,
  *          and lessons are shared. Agent IDs are anonymous UUIDs.
- *
- * Zero dependencies — uses only Node.js stdlib + native fetch().
  */
 
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
-import { getDB } from "../core/db.js";
-import { USER_CONFIG_PATH } from "../config.js";
-import { addrShort } from "../tools/addrShort.js";
-import {
-  HIVE_MIND_SYNC_DEBOUNCE_MS,
-  HIVE_MIND_GET_TIMEOUT_MS,
-  HIVE_MIND_POST_TIMEOUT_MS,
-} from "../core/constants.js";
+import { log } from "../core/logger.js";
+import { config } from "../config.js";
 
-const MIN_AGENTS_FOR_CONSENSUS = 3;
-const MAX_CONSENSUS_CHARS = 500;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const USER_CONFIG_PATH = path.join(__dirname, "..", "user-config.json");
+const CACHE_PATH = path.join(__dirname, "hivemind-cache.json");
+const PACKAGE_JSON_PATH = path.join(__dirname, "..", "..", "package.json");
+const HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 
-let _lastSyncTime = 0;
+let _heartbeatTimer = null;
 
-// ─── Helpers ────────────────────────────────────────────────────
-
-function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
-  } catch (e) { log("warn", "hive-mind", `Failed to read config: ${e?.message}`); return {}; }
-}
-
-function writeConfig(patch) {
-  const current = readConfig();
-  const merged = { ...current, ...patch };
-  fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(merged, null, 2));
-}
-
-function readJsonFile(filePath) {
+function readJson(filePath, fallback) {
+  if (!fs.existsSync(filePath)) return fallback;
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch (e) { log("warn", "hive-mind", `Failed to read state file: ${e?.message}`); return null; }
+  } catch {
+    return fallback;
+  }
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = HIVE_MIND_GET_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+function writeJson(filePath, value) {
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function sanitizeText(text, maxLen = 400) {
+  if (text == null) return null;
+  const cleaned = String(text)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[<>`]/g, "")
+    .trim()
+    .slice(0, maxLen);
+  return cleaned || null;
+}
+
+function getVersion() {
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+    return JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, "utf8")).version || "1.0.0";
+  } catch {
+    return "1.0.0";
   }
 }
 
-// ─── Public API ─────────────────────────────────────────────────
+const AGENT_VERSION = getVersion();
 
-/**
- * Check whether Hive Mind is configured and enabled.
- * @returns {boolean}
- */
-function getHiveCredentials() {
-  const cfg = readConfig();
-  const url = process.env.HIVE_MIND_URL || cfg.hiveMindUrl;
-  const key = process.env.HIVE_MIND_API_KEY || cfg.hiveMindApiKey;
-  return { url, key };
+function readUserConfig() {
+  return readJson(USER_CONFIG_PATH, {});
 }
 
-export function isEnabled() {
-  const { url, key } = getHiveCredentials();
-  return Boolean(url && key);
+function writeUserConfig(nextConfig) {
+  writeJson(USER_CONFIG_PATH, nextConfig);
 }
 
-/**
- * One-time registration with a Hive Mind server.
- * Stores hiveMindUrl and hiveMindApiKey in user-config.json.
- * @param {string} url - Base URL of the hive server (e.g. "https://hive.example.com")
- * @param {string} registrationToken - Token provided by the hive operator
- * @returns {Promise<string>} The raw API key (shown once, save it!)
- */
-export async function register(url, registrationToken) {
-  if (!registrationToken) {
-    throw new Error("Registration token required. Get it from the hive operator.");
+function readCache() {
+  return readJson(CACHE_PATH, {
+    sharedLessons: [],
+    presets: [],
+    pulledAt: null,
+  });
+}
+
+function writeCache(nextCache) {
+  writeJson(CACHE_PATH, nextCache);
+}
+
+function getBaseUrl() {
+  // Support both nested hive.* keys and flat keys for backward compat
+  const url = config.hiveMind?.url
+    || process.env.AGENT_MERIDIAN_API_URL
+    || process.env.HIVE_MIND_URL
+    || "";
+  return sanitizeText(url, 500) || "";
+}
+
+function getApiKey() {
+  const key = config.hiveMind?.apiKey
+    || process.env.HIVE_MIND_PUBLIC_API_KEY
+    || process.env.HIVE_MIND_API_KEY
+    || "";
+  return sanitizeText(key, 300) || "";
+}
+
+function getPullMode() {
+  const mode = config.hiveMind?.pullMode || "auto";
+  return mode === "manual" ? "manual" : "auto";
+}
+
+export function getHiveMindPullMode() {
+  return getPullMode();
+}
+
+export function isHiveMindEnabled() {
+  return !!(getBaseUrl() && getApiKey());
+}
+
+export function ensureAgentId() {
+  const userConfig = readUserConfig();
+  if (userConfig.hive?.agentId) {
+    config.hiveMind = config.hiveMind || {};
+    config.hiveMind.agentId = userConfig.hive.agentId;
+    return userConfig.hive.agentId;
+  }
+  if (config.hiveMind?.agentId) {
+    return config.hiveMind.agentId;
   }
 
-  const baseUrl = url.replace(/\/+$/, "");
-  const cfg = readConfig();
-  const displayName = cfg.displayName || `agent-${Date.now().toString(36)}`;
+  const agentId = `agt_${crypto.randomBytes(12).toString("hex")}`;
+  const existing = readUserConfig();
+  existing.hive = existing.hive || {};
+  existing.hive.agentId = agentId;
+  writeUserConfig(existing);
+  config.hiveMind = config.hiveMind || {};
+  config.hiveMind.agentId = agentId;
+  log("hivemind", `Generated agentId ${agentId}`);
+  return agentId;
+}
 
-  console.log("[hive]", `Registering with ${baseUrl} as "${displayName}"...`);
+function getAgentId() {
+  return config.hiveMind?.agentId || ensureAgentId();
+}
 
-  const res = await fetchWithTimeout(
-    `${baseUrl}/api/register`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ display_name: displayName, registration_token: registrationToken }),
+function buildUrl(pathname, query = {}) {
+  const url = new URL(pathname, getBaseUrl());
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url.toString();
+}
+
+async function requestJson(pathname, { method = "GET", body = null, query = {} } = {}) {
+  if (!isHiveMindEnabled()) return null;
+  const response = await fetch(buildUrl(pathname, query), {
+    method,
+    headers: {
+      accept: "application/json",
+      "x-api-key": getApiKey(),
+      ...(body != null ? { "content-type": "application/json" } : {}),
     },
-    HIVE_MIND_POST_TIMEOUT_MS,
-  );
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Registration failed (${res.status}): ${text}`);
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.error || `HiveMind ${response.status}`);
   }
+  return payload;
+}
 
-  const { agent_id, api_key } = await res.json();
-  writeConfig({ hiveMindAgentId: agent_id });
-  console.log("[hive]", `Registered! agent_id=${agent_id}`);
-  console.log("[hive]", `IMPORTANT: Please update your .env with the following:`);
-  console.log("[hive]", `HIVE_MIND_URL=${baseUrl}`);
-  console.log("[hive]", `HIVE_MIND_API_KEY=${api_key}`);
-  console.log("[hive]", `Save this key — it will NOT be shown again.`);
-
-  return api_key;
+function normalizeSharedLesson(lesson) {
+  const rule = sanitizeText(lesson?.rule, 400);
+  if (!rule) return null;
+  return {
+    id: lesson.id || lesson.lessonId || `shared_${Date.now()}`,
+    rule,
+    tags: Array.isArray(lesson.tags) ? lesson.tags.map((tag) => sanitizeText(tag, 48)).filter(Boolean) : [],
+    role: sanitizeText(lesson.role || "", 20) || null,
+    outcome: sanitizeText(lesson.outcome || "shared", 20) || "shared",
+    sourceType: sanitizeText(lesson.sourceType || lesson.source || "shared", 24) || "shared",
+    score: Number.isFinite(Number(lesson.score)) ? Number(lesson.score) : null,
+    created_at: lesson.created_at || lesson.createdAt || new Date().toISOString(),
+  };
 }
 
 /**
- * Batch-upload local data to the hive mind server.
- * Debounced (5 min), fire-and-forget, never throws.
+ * Get formatted Hive Mind lessons for LLM prompt injection.
+ * Returns a ready-to-inject string block, or null if no lessons cached.
+ * @param {object} opts
+ * @param {"SCREENER"|"MANAGER"|"GENERAL"} [opts.agentType]
+ * @param {number} [opts.maxLessons]
+ * @returns {string|null}
  */
-export async function syncToHive() {
+export function getSharedLessonsForPrompt({ agentType = "GENERAL", maxLessons = 6 } = {}) {
+  const role = String(agentType || "GENERAL").toUpperCase();
+  const shared = (readCache().sharedLessons || [])
+    .map(normalizeSharedLesson)
+    .filter(Boolean)
+    .filter((lesson) => !lesson.role || lesson.role === role || role === "GENERAL")
+    .sort((left, right) => (Number(right.score) || 0) - (Number(left.score) || 0))
+    .slice(0, maxLessons);
+
+  if (!shared.length) return null;
+  return shared
+    .map((lesson) => `[HIVEMIND${lesson.score != null ? ` score=${lesson.score}` : ""}] ${lesson.rule}`)
+    .join("\n");
+}
+
+export async function registerHiveMindAgent({ reason = "heartbeat" } = {}) {
+  if (!isHiveMindEnabled()) return null;
   try {
-    const cfg = readConfig();
-    const { url, key } = getHiveCredentials();
-    if (!url || !key) return;
-
-    // Debounce
-    const now = Date.now();
-    if (now - _lastSyncTime < HIVE_MIND_SYNC_DEBOUNCE_MS) return;
-    _lastSyncTime = now;
-
-    // ── Collect local data from SQLite ──────────────────────────
-    const db = getDB();
-
-    // Lessons
-    const lessons = db.prepare('SELECT id, rule, tags, outcome, context, pnl_pct, range_efficiency, pool, created_at, pinned, role FROM lessons').all();
-    lessons.forEach(l => l.tags = JSON.parse(l.tags || '[]'));
-
-    // Pool deploys — join pool_deploys with pool_memory to get pool names/mints
-    const deploys = db.prepare(`
-      SELECT d.*, m.name as pool_name, m.base_mint
-      FROM pool_deploys d
-      JOIN pool_memory m ON m.pool_address = d.pool_address
-    `).all();
-
-    // Screening thresholds from config
-    const thresholds = {
-      minFeeActiveTvlRatio: cfg.minFeeActiveTvlRatio,
-      minTvl: cfg.minTvl,
-      maxTvl: cfg.maxTvl,
-      minOrganic: cfg.minOrganic,
-      minHolders: cfg.minHolders,
-      minBinStep: cfg.minBinStep,
-      maxBinStep: cfg.maxBinStep,
-      minVolume: cfg.minVolume,
-      minMcap: cfg.minMcap,
-      stopLossPct: cfg.stopLossPct ?? cfg.emergencyPriceDropPct,
-      takeProfitFeePct: cfg.takeProfitFeePct,
-    };
-
-    // Agent stats via dynamic import (avoids circular deps)
-    let agentStats = null;
-    try {
-      const { getPerformanceSummary } = await import("../core/lessons.js");
-      agentStats = getPerformanceSummary();
-    } catch (e) {
-      console.log("[hive]", `Could not load agent stats: ${e.message}`);
-    }
-
-    // ── POST to /api/sync ───────────────────────────
-
-    const payload = { lessons, deploys, thresholds, agentStats };
-
-    console.log("[hive]", `Syncing ${lessons.length} lessons, ${deploys.length} deploys...`);
-
-    const res = await fetchWithTimeout(
-      `${url}/api/sync`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
+    return await requestJson("/api/hivemind/agents/register", {
+      method: "POST",
+      body: {
+        agentId: getAgentId(),
+        version: AGENT_VERSION,
+        timestamp: new Date().toISOString(),
+        reason,
+        capabilities: {
+          telegram: !!process.env.TELEGRAM_BOT_TOKEN,
+          lpagent: !!process.env.LPAGENT_API_KEY,
+          lpAgentRelay: config.lpAgentRelayEnabled || false,
+          dryRun: process.env.DRY_RUN === "true",
         },
-        body: JSON.stringify(payload),
       },
-      HIVE_MIND_POST_TIMEOUT_MS,
-    );
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.log("[hive]", `Sync failed (${res.status}): ${text}`);
-      return;
-    }
-
-    const result = await res.json();
-    console.log("[hive]", `Sync complete — ${result.lessons_upserted} lessons, ${result.deploys_upserted} deploys`);
-  } catch (e) {
-    console.log("[hive]", `Sync error: ${e.message}`);
+    });
+  } catch (error) {
+    log("hivemind_warn", `Agent register failed: ${error.message}`);
+    return null;
   }
 }
 
-/**
- * Query pool consensus from the hive.
- * @param {string} poolAddress
- * @returns {Promise<object|null>}
- */
-export async function queryPoolConsensus(poolAddress) {
+export async function pullHiveMindLessons(limit = 12) {
+  if (!isHiveMindEnabled()) return null;
   try {
-    const { url, key } = getHiveCredentials();
-    if (!url || !key) return null;
-
-    const res = await fetchWithTimeout(
-      `${url}/api/consensus/pool/${encodeURIComponent(poolAddress)}`,
-      { headers: { Authorization: `Bearer ${key}` } },
-    );
-
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
-}
-
-/**
- * Query lesson consensus by tags.
- * @param {string[]} [tags]
- * @returns {Promise<Array|null>}
- */
-export async function queryLessonConsensus(tags) {
-  try {
-    const { url, key } = getHiveCredentials();
-    if (!url || !key) return null;
-
-    const qs = Array.isArray(tags) && tags.length > 0
-      ? `?tags=${encodeURIComponent(tags.join(","))}`
-      : "";
-    const res = await fetchWithTimeout(
-      `${url}/api/consensus/lessons${qs}`,
-      { headers: { Authorization: `Bearer ${key}` } },
-    );
-
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
-}
-
-/**
- * Query pattern consensus for a given volatility level.
- * @param {number} [volatility]
- * @returns {Promise<Array|null>}
- */
-export async function queryPatternConsensus(volatility) {
-  try {
-    const { url, key } = getHiveCredentials();
-    if (!url || !key) return null;
-
-    const qs = volatility != null ? `?volatility=${encodeURIComponent(volatility)}` : "";
-    const res = await fetchWithTimeout(
-      `${url}/api/consensus/patterns${qs}`,
-      { headers: { Authorization: `Bearer ${key}` } },
-    );
-
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
-}
-
-/**
- * Query median threshold consensus across all agents.
- * @returns {Promise<object|null>}
- */
-export async function queryThresholdConsensus() {
-  try {
-    const { url, key } = getHiveCredentials();
-    if (!url || !key) return null;
-
-    const res = await fetchWithTimeout(
-      `${url}/api/consensus/thresholds`,
-      { headers: { Authorization: `Bearer ${key}` } },
-    );
-
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
-}
-
-/**
- * Get global hive pulse stats.
- * @returns {Promise<object|null>}
- */
-export async function getHivePulse() {
-  try {
-    const { url, key } = getHiveCredentials();
-    if (!url || !key) return null;
-
-    const res = await fetchWithTimeout(
-      `${url}/api/pulse`,
-      { headers: { Authorization: `Bearer ${key}` } },
-    );
-
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) { log("warn", "hive-mind", `Failed to parse response: ${e?.message}`); return null; }
-}
-
-/**
- * Query multiple pools in parallel and format for LLM prompt injection.
- * Only shows pools with >= 3 agents reporting (filters noise).
- * @param {string[]} poolAddresses
- * @returns {Promise<string>} Formatted consensus block or empty string
- */
-export async function formatPoolConsensusForPrompt(poolAddresses) {
-  if (!isEnabled() || !Array.isArray(poolAddresses) || poolAddresses.length === 0) {
-    return "";
+    const payload = await requestJson("/api/hivemind/lessons/pull", {
+      query: { agentId: getAgentId(), limit },
+    });
+    const cache = readCache();
+    cache.sharedLessons = Array.isArray(payload?.lessons)
+      ? payload.lessons.map(normalizeSharedLesson).filter(Boolean)
+      : [];
+    cache.pulledAt = new Date().toISOString();
+    writeCache(cache);
+    log("hivemind", `Pulled ${cache.sharedLessons.length} shared lessons`);
+    return cache.sharedLessons;
+  } catch (error) {
+    log("hivemind_warn", `Lesson pull failed: ${error.message}`);
+    return null;
   }
+}
 
+export async function pullHiveMindPresets() {
+  if (!isHiveMindEnabled()) return null;
   try {
-    const results = await Promise.all(
-      poolAddresses.map(async (addr) => {
-        const data = await queryPoolConsensus(addr);
-        return { addr, data };
-      }),
-    );
+    const payload = await requestJson("/api/hivemind/presets/pull", {
+      query: { agentId: getAgentId() },
+    });
+    const cache = readCache();
+    cache.presets = Array.isArray(payload?.presets) ? payload.presets : [];
+    cache.pulledAt = new Date().toISOString();
+    writeCache(cache);
+    log("hivemind", `Pulled ${cache.presets.length} presets`);
+    return cache.presets;
+  } catch (error) {
+    log("hivemind_warn", `Preset pull failed: ${error.message}`);
+    return null;
+  }
+}
 
-    const lines = [];
-    let poolsWithData = 0;
+export async function bootstrapHiveMind() {
+  if (!isHiveMindEnabled()) {
+    log("hivemind", "Hive Mind not enabled (url or apiKey missing)");
+    return null;
+  }
+  ensureAgentId();
+  const tasks = [registerHiveMindAgent({ reason: "startup" })];
+  if (getPullMode() === "auto") {
+    tasks.push(pullHiveMindLessons(), pullHiveMindPresets());
+  }
+  const results = await Promise.allSettled(tasks);
+  const enabled = isHiveMindEnabled();
+  log("hivemind", `Bootstrap complete — enabled=${enabled}, agentId=${getAgentId()}, pullMode=${getPullMode()}`);
+  return { enabled, agentId: getAgentId(), pullMode: getPullMode() };
+}
 
-    for (const { addr, data } of results) {
-      if (data && data.unique_agents >= MIN_AGENTS_FOR_CONSENSUS) {
-        poolsWithData++;
-        const name = data.pool_name || addrShort(addr);
-        const winPct = data.weighted_win_rate ?? 0;
-        const avgPnl = data.weighted_avg_pnl != null
-          ? (data.weighted_avg_pnl >= 0 ? "+" : "") + data.weighted_avg_pnl.toFixed(1) + "%"
-          : "N/A";
-        lines.push(`[HIVE] ${name}: ${data.unique_agents} agents, ${winPct}% win, ${avgPnl} avg PnL`);
-      }
+export function startHiveMindBackgroundSync() {
+  if (!isHiveMindEnabled() || _heartbeatTimer) return null;
+  _heartbeatTimer = setInterval(() => {
+    const tasks = [registerHiveMindAgent({ reason: "heartbeat" })];
+    if (getPullMode() === "auto") {
+      tasks.push(pullHiveMindLessons(), pullHiveMindPresets());
     }
+    Promise.allSettled(tasks).catch(() => null);
+  }, HEARTBEAT_INTERVAL_MS);
+  log("hivemind", `Background sync started — interval ${HEARTBEAT_INTERVAL_MS / 60_000}min`);
+  return _heartbeatTimer;
+}
 
-    if (lines.length === 0) return "";
+function buildLessonEvent(lesson) {
+  const rule = sanitizeText(lesson?.rule, 400);
+  if (!rule) return null;
+  const sourceType = sanitizeText(lesson.sourceType || inferLessonSourceType(lesson), 24) || "manual";
+  return {
+    eventId: `lesson:${getAgentId()}:${lesson.id || crypto.randomUUID()}`,
+    agentId: getAgentId(),
+    version: AGENT_VERSION,
+    timestamp: lesson.created_at || new Date().toISOString(),
+    lesson: {
+      id: lesson.id || null,
+      rule,
+      tags: Array.isArray(lesson.tags) ? lesson.tags.map((tag) => sanitizeText(tag, 48)).filter(Boolean) : [],
+      role: sanitizeText(lesson.role || "", 20) || null,
+      outcome: sanitizeText(lesson.outcome || "manual", 20) || "manual",
+      sourceType,
+      confidence: Number.isFinite(Number(lesson.confidence)) ? Number(lesson.confidence) : null,
+      pool: sanitizeText(lesson.pool || "", 64) || null,
+      pinned: !!lesson.pinned,
+      metrics: {
+        pnlPct: Number.isFinite(Number(lesson.pnl_pct)) ? Number(lesson.pnl_pct) : null,
+        feesUsd: Number.isFinite(Number(lesson.fees_earned_usd)) ? Number(lesson.fees_earned_usd) : null,
+        initialValueUsd: Number.isFinite(Number(lesson.initial_value_usd)) ? Number(lesson.initial_value_usd) : null,
+        rangeEfficiency: Number.isFinite(Number(lesson.range_efficiency)) ? Number(lesson.range_efficiency) : null,
+        closeReason: sanitizeText(lesson.close_reason || "", 160) || null,
+      },
+    },
+  };
+}
 
-    const header = `HIVE MIND CONSENSUS (supplementary — your own analysis takes priority):`;
-    let output = [header, ...lines].join("\n");
+function inferLessonSourceType(lesson) {
+  const tags = Array.isArray(lesson?.tags) ? lesson.tags.map((tag) => String(tag).toLowerCase()) : [];
+  const rule = String(lesson?.rule || "").toLowerCase();
+  if (tags.includes("self_tune") || tags.includes("config_change") || rule.startsWith("[self-tuned]")) {
+    return "config_change";
+  }
+  if (lesson?.outcome === "manual") {
+    return "manual";
+  }
+  return "performance";
+}
 
-    if (output.length > MAX_CONSENSUS_CHARS) {
-      output = output.slice(0, MAX_CONSENSUS_CHARS - 3) + "...";
-    }
+/**
+ * Push a single lesson to the Hive Mind server.
+ * @param {object} lesson - local lesson object
+ */
+export async function pushHiveLesson(lesson) {
+  if (!isHiveMindEnabled()) return null;
+  const body = buildLessonEvent(lesson);
+  if (!body) return null;
+  try {
+    return await requestJson("/api/hivemind/lessons/push", {
+      method: "POST",
+      body,
+    });
+  } catch (error) {
+    log("hivemind_warn", `Lesson push failed: ${error.message}`);
+    return null;
+  }
+}
 
-    return output;
-  } catch (e) {
-    console.log("[hive]", `formatPoolConsensusForPrompt error: ${e.message}`);
-    return "";
+export function shouldCountInAdjustedWinRate(closeReason) {
+  const text = String(closeReason || "").toLowerCase();
+  return !(
+    text.includes("out of range") ||
+    text.includes("pumped far above range") ||
+    text === "oor" ||
+    text.includes("oor")
+  );
+}
+
+/**
+ * Push a performance/close event to the Hive Mind server.
+ * @param {object} perf - performance entry from recordPerformance
+ */
+export async function pushHivePerformanceEvent(perf) {
+  if (!isHiveMindEnabled()) return null;
+  try {
+    return await requestJson("/api/hivemind/performance/push", {
+      method: "POST",
+      body: {
+        eventId: sanitizeText(perf.eventId, 200) || `close:${getAgentId()}:${perf.position || perf.pool}:${perf.recorded_at || Date.now()}`,
+        agentId: getAgentId(),
+        version: AGENT_VERSION,
+        timestamp: perf.recorded_at || new Date().toISOString(),
+        event: {
+          pool: sanitizeText(perf.pool, 64) || null,
+          poolName: sanitizeText(perf.pool_name, 80) || null,
+          baseMint: sanitizeText(perf.base_mint, 64) || null,
+          strategy: sanitizeText(perf.strategy, 32) || null,
+          closeReason: sanitizeText(perf.close_reason, 200) || "unknown",
+          pnlUsd: Number(perf.pnl_usd || 0),
+          pnlPct: Number(perf.pnl_pct || 0),
+          feesUsd: Number(perf.fees_earned_usd || 0),
+          feesSol: Number(perf.fees_earned_sol || 0),
+          minutesHeld: Number(perf.minutes_held || 0),
+          countInAdjustedWinRate: shouldCountInAdjustedWinRate(perf.close_reason),
+        },
+      },
+    });
+  } catch (error) {
+    log("hivemind_warn", `Performance push failed: ${error.message}`);
+    return null;
   }
 }

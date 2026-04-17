@@ -6,12 +6,13 @@
 
 import crypto from "crypto";
 import fs from "fs";
-import { getDB } from "./db.js";
+import { getDB, runTransaction } from "./db.js";
 import { log } from "./logger.js";
 import { USER_CONFIG_PATH } from "../config.js";
 import { MIN_EVOLVE_POSITIONS } from "./threshold-evolver.js";
 import { evolveThresholds } from "./threshold-evolver.js";
 import { recalculateDarwinWeights } from "./darwin-weights.js";
+import { recordDecision } from "./decision-log.js";
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ export const NEAR_MISS_MAX_DAYS = 90;
  * @returns {Promise<void>}
  */
 export async function recordPerformance(perf) {
-  const db = getDB();
+  const db = await getDB();
 
   const isDataCorrupt =
     (Number.isFinite(perf.final_value_usd) && perf.final_value_usd <= 0) ||
@@ -58,7 +59,7 @@ export async function recordPerformance(perf) {
     recorded_at: new Date().toISOString(),
   };
 
-  db.transaction(() => {
+  runTransaction(() => {
     db.prepare(`
       INSERT INTO performance (
         position, pool, pool_name, strategy, bin_range, bin_step, volatility,
@@ -88,7 +89,7 @@ export async function recordPerformance(perf) {
       );
       log("info", "lessons", `New lesson: ${lesson.rule}`);
     }
-  })();
+  });
 
   if (perf.pool) {
     const { recordPoolDeploy } = await import("../features/pool-memory.js");
@@ -127,7 +128,33 @@ export async function recordPerformance(perf) {
     await recalculateDarwinWeights(allPerformance, config);
   }
 
-  import("../features/hive-mind.js").then(m => m.syncToHive()).catch(e => log("warn", "hive-mind", `syncToHive failed: ${e?.message}`));
+  // Push to Hive Mind — individual lesson + performance event
+  import("../features/hive-mind.js").then(m => {
+    if (lesson) m.pushHiveLesson(lesson).catch(e => log("warn", "hivemind", `pushHiveLesson failed: ${e?.message}`));
+    m.pushHivePerformanceEvent(entry).catch(e => log("warn", "hivemind", `pushHivePerformanceEvent failed: ${e?.message}`));
+  }).catch(e => log("warn", "hivemind", `Hive Mind push failed: ${e?.message}`));
+
+  // Record decision log entry for the close (fires async, doesn't block pruning)
+  recordDecision({
+    type: "close",
+    pool: perf.pool,
+    position: perf.position,
+    amount: perf.amount_sol,
+    pnl: { usd: entry.pnl_usd, pct: entry.pnl_pct },
+    reasoning: `Closed: ${perf.close_reason || "agent decision"}`,
+    metadata: {
+      initiated_by: "llm",
+      pool_name: perf.pool_name,
+      strategy: perf.strategy,
+      bin_step: perf.bin_step,
+      volatility: perf.volatility,
+      fee_tvl_ratio: perf.fee_tvl_ratio,
+      organic_score: perf.organic_score,
+      range_efficiency: entry.range_efficiency,
+      minutes_held: perf.minutes_held,
+      fees_earned_usd: perf.fees_earned_usd,
+    },
+  }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e.message}`));
 
   // Auto-prune performance data and near-misses
   try {
@@ -241,12 +268,12 @@ export function prunePerformance() {
   `);
   const deleteStmt = db.prepare('DELETE FROM performance WHERE id = ?');
 
-  db.transaction(() => {
+  runTransaction(() => {
     for (const id of oldest) {
       archiveStmt.run(archivedAt, id);
       deleteStmt.run(id);
     }
-  })();
+  });
 
   log("info", "lessons", `Archived ${oldest.length} performance records to performance_archive`);
   return { archived: oldest.length };

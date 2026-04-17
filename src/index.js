@@ -1,6 +1,16 @@
 import "dotenv/config";
 import readline from "readline";
 
+// ─── Hive Mind bootstrap ───────────────────────────────────────────────────────
+import { bootstrapHiveMind, startHiveMindBackgroundSync, isHiveMindEnabled } from "./features/hive-mind.js";
+if (isHiveMindEnabled()) {
+  bootstrapHiveMind()
+    .then(() => startHiveMindBackgroundSync())
+    .catch(e => log("warn", "hivemind", `Bootstrap failed: ${e?.message ?? e}`));
+} else {
+  log("hivemind", "Hive Mind not configured (hive.url / hive.apiKey missing)");
+}
+
 import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
 import { config, isDryRun } from "./config.js";
@@ -21,7 +31,7 @@ import { createHealthServer, startHealthServer } from "./server/health.js";
 import { setHealthServer, setPromptRefreshInterval, shutdown } from "./server/shutdown.js";
 
 // Imports from extracted files
-import { telegramHandler, startPolling, drainTelegramQueue, busy } from "./telegram-handlers.js";
+import { telegramHandler, startPolling, drainTelegramQueue, _telegramBusy } from "./telegram-handlers.js";
 import { runStartupFetch, setupReplLineHandler, launchCron, cronStarted } from "./repl.js";
 import { swapAllTokensToSol } from "./integrations/helius.js";
 import { setRl, buildPrompt } from "./rl-shared.js";
@@ -56,7 +66,7 @@ if (isTTY) {
 
   // Update prompt countdown every 10 seconds
   const _promptRefreshInterval = setInterval(() => {
-    if (!busy) {
+    if (!_telegramBusy._busy) {
       rl.setPrompt(buildPrompt());
       rl.prompt(true);
     }
@@ -93,10 +103,10 @@ Commands:
 } else {
   // Non-TTY: start immediately
   log("info", "startup", "Non-TTY mode — starting cron cycles immediately.");
-  startCronJobs();
   maybeRunMissedBriefing().catch(() => { });
   (async () => {
     try {
+      await startCronJobs(); // ensure DB is ready before any DB calls
       await agentLoop(`
 STARTUP CHECK
 1. get_wallet_balance. 2. get_my_positions. 3. If SOL >= ${config.management.minSolToOpen}: get_top_candidates then deploy ${config.management.deployAmountSol} SOL. 4. Report.

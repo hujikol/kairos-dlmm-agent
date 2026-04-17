@@ -101,6 +101,7 @@ After executing, write a brief one-line result per position.
     pnl,
     canDeploy,
     screeningMode,
+    hiveLessonsBlock = null,
     maxSteps = null,
     model = null,
   }) {
@@ -112,9 +113,13 @@ After executing, write a brief one-line result per position.
         ? `\nNOTE: Daily profit target has been met. This is a REDUCED screening cycle — review candidates but do NOT deploy new positions today.`
         : "";
 
+    const hiveBlock = hiveLessonsBlock
+      ? `\nHIVEMIND LESSONS (from collective agents — use as supplementary signal, your own analysis takes priority):\n${hiveLessonsBlock}\n`
+      : "";
+
     const goal = `
 SCREENING CYCLE${modeNote}
-${strategyBlock}
+${strategyBlock}${hiveBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
 
 CONVICTION SIZING MATRIX (enforced by safety check):
