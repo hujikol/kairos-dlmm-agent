@@ -7,7 +7,7 @@
  * Backed by SQLite (kairos.db).
  */
 
-import { getDB } from "../core/db.js";
+import { getDB, runTransaction } from "../core/db.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
 
@@ -21,7 +21,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
   if (!poolAddress) return;
   const db = getDB();
 
-  db.transaction(() => {
+  runTransaction(() => {
     // 1. Ensure pool_memory exists
     const existing = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
     if (!existing) {
@@ -55,7 +55,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
     const deploys = db.prepare('SELECT pnl_pct FROM pool_deploys WHERE pool_address = ?').all(poolAddress);
     const totalDeploys = deploys.length;
     const withPnl = deploys.filter(d => d.pnl_pct != null);
-    
+
     let avgPnl = 0;
     let winRate = 0;
     if (withPnl.length > 0) {
@@ -64,7 +64,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
     }
 
     const lastOutcome = (pnl_pct ?? 0) >= 0 ? "profit" : "loss";
-    
+
     // Fetch latest pool state
     const poolState = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
     let notes = [];
@@ -101,7 +101,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
 
     let baseMint = poolState.base_mint;
     if (deployData.base_mint && !baseMint) baseMint = deployData.base_mint;
-    
+
     db.prepare(`
       UPDATE pool_memory SET
         base_mint = ?, total_deploys = ?, avg_pnl_pct = ?, win_rate = ?,
@@ -113,7 +113,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
     );
 
     log("info", "pool-memory", `Recorded deploy for ${poolState.name || addrShort(poolAddress)}: PnL ${pnl_pct}%`);
-  })();
+  });
 }
 
 export function isPoolOnCooldown(poolAddress) {
@@ -194,7 +194,7 @@ export function recordPositionSnapshot(poolAddress, snapshot) {
   if (!poolAddress) return;
   const db = getDB();
 
-  db.transaction(() => {
+  runTransaction(() => {
     // 1. Ensure pool_memory exists
     const existing = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
     if (!existing) {
@@ -223,13 +223,13 @@ export function recordPositionSnapshot(poolAddress, snapshot) {
 
     // Keep last 48 snapshots
     db.prepare(`
-      DELETE FROM pool_snapshots 
-      WHERE pool_address = ? 
+      DELETE FROM pool_snapshots
+      WHERE pool_address = ?
       AND id NOT IN (
         SELECT id FROM pool_snapshots WHERE pool_address = ? ORDER BY id DESC LIMIT 48
       )
     `).run(poolAddress, poolAddress);
-  })();
+  });
 }
 
 /**
@@ -279,7 +279,7 @@ export function addPoolNote({ pool_address, note }) {
 
   const db = getDB();
 
-  db.transaction(() => {
+  runTransaction(() => {
     let entry = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(pool_address);
     if (!entry) {
       db.prepare(`
@@ -297,9 +297,9 @@ export function addPoolNote({ pool_address, note }) {
     try { notes = JSON.parse(entry.notes || '[]'); } catch (e) { log("warn", "pool-memory", `Failed to parse entry notes: ${e?.message}`); notes = []; }
 
     notes.push({ note, added_at: new Date().toISOString() });
-    
+
     db.prepare('UPDATE pool_memory SET notes = ? WHERE pool_address = ?').run(JSON.stringify(notes), pool_address);
-  })();
+  });
 
   log("info", "pool-memory", `Note added to ${addrShort(pool_address)}: ${note}`);
   return { saved: true, pool_address, note };

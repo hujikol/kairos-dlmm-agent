@@ -12,7 +12,7 @@ import writeFileAtomic from "write-file-atomic";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const BASE  = TOKEN ? `https://api.telegram.org/bot${TOKEN}` : null;
 
-let chatId   = process.env.TELEGRAM_CHAT_ID || null;
+let chatId   = String(process.env.TELEGRAM_CHAT_ID || "") || null;
 let _offset  = 0;
 let _polling = false;
 
@@ -21,7 +21,7 @@ function loadChatId() {
   try {
     if (fs.existsSync(USER_CONFIG_PATH)) {
       const cfg = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
-      if (cfg.telegramChatId) chatId = cfg.telegramChatId;
+      if (cfg.telegramChatId) chatId = String(cfg.telegramChatId);
     }
   } catch (e) {
     log("warn", "telegram", `loadChatId: failed to load — telegram disabled: ${e?.message}`);
@@ -81,7 +81,7 @@ export function isEnabled() {
  * @returns {Promise<void>}
  */
 export async function sendMessage(text, parseMode = "Markdown") {
-  if (!TOKEN || !chatId) return;
+  if (!TOKEN || !chatId) { log("warn", "telegram", `sendMessage skipped: TOKEN=${!!TOKEN} chatId=${chatId}`); return; }
   if (isDryRun()) {
     log("debug", "telegram", "DRY_RUN: skipping send", { text: String(text).slice(0, 80) });
     return;
@@ -125,7 +125,7 @@ export async function sendMessage(text, parseMode = "Markdown") {
  * @returns {Promise<void>}
  */
 export async function sendHTML(html) {
-  if (!TOKEN || !chatId) return;
+  if (!TOKEN || !chatId) { log("warn", "telegram", `sendHTML skipped: TOKEN=${!!TOKEN} chatId=${chatId}`); return; }
   if (isDryRun()) {
     log("debug", "telegram", "DRY_RUN: skipping send", { html: String(html).slice(0, 80) });
     return;
@@ -187,8 +187,12 @@ async function poll(onMessage) {
         }
 
         // Only accept messages from the registered chat
-        if (incomingChatId !== chatId) continue;
+        if (incomingChatId !== chatId) {
+          log("warn", "telegram", `chatId mismatch: incoming=${incomingChatId} stored=${chatId}`);
+          continue;
+        }
 
+        log("info", "telegram", `Processing: "${msg.text}" from ${incomingChatId}`);
         await onMessage(msg.text);
       }
     } catch (e) {

@@ -19,8 +19,6 @@ src/
 └── tools/          Tool definitions (36KB), executor, per-domain modules
 
 cycles.js          Canonical — scheduler/watchdog/index.js use this
-orchestration.js   Deprecated — merged into cycles.js (2026-04-15)
-agent.js           Deprecated stub — re-exports from agent/index.js
 ```
 
 ---

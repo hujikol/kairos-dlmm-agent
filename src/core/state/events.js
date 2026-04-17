@@ -3,7 +3,7 @@
  * All functions share the same getDB() from ../db.js.
  */
 
-import { getDB } from "../db.js";
+import { getDB, runTransaction } from "../db.js";
 
 const MAX_RECENT_EVENTS = 20;
 
@@ -12,7 +12,7 @@ const MAX_RECENT_EVENTS = 20;
  */
 export function pushEvent(event) {
   const db = getDB();
-  db.transaction(() => {
+  runTransaction(() => {
     db.prepare("INSERT INTO recent_events (ts, action, position, pool_name, reason) VALUES (?, ?, ?, ?, ?)").run(
       new Date().toISOString(), event.action, event.position, event.pool_name, event.reason || null,
     );
@@ -21,7 +21,7 @@ export function pushEvent(event) {
         SELECT id FROM (SELECT id FROM recent_events ORDER BY id DESC LIMIT ?)
       )
     `).run(MAX_RECENT_EVENTS);
-  })();
+  });
 }
 
 /**

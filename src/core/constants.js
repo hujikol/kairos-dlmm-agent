@@ -43,9 +43,6 @@ export const PNL_TIMEOUT_MS               = 8_000;
 export const METEORA_CLOSE_SYNC_WAIT_MS    = 5_000;
 export const METEORA_CLOSE_RETRY_DELAY_MS  = 3_000;
 export const METEORA_POSITIONS_CACHE_TTL_MS = 300_000;
-export const LPAGENT_RATE_LIMIT_BUFFER_MS = 1_000;
-
-// ─── PnL Sanity Check ────────────────────────────────────────────
 export const PNL_SUSPECT_PCT  = 100;   // flag PnL > 100% as suspect (API bad data)
 export const PNL_SUSPECT_USD  = 1;     // minimum USD value for inner suspect check
 

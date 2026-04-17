@@ -10,7 +10,7 @@ import { generateBriefing } from "./notifications/briefing.js";
 import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { getDB } from "./core/db.js";
 import { rl } from "./rl-shared.js";
-import { busy } from "./telegram-handlers.js";
+import { _telegramBusy } from "./telegram-handlers.js";
 
 // ─── Module-level state ─────────────────────────────────────────────────────────
 const sessionHistory = [];
@@ -30,11 +30,11 @@ export function launchCron() {
 
 // ─── REPL busy guard ───────────────────────────────────────────────────────────
 export async function runBusy(fn) {
-  if (busy) { console.log("Agent is busy, please wait..."); return; }
-  busy = true;
+  if (_telegramBusy._busy) { console.log("Agent is busy, please wait..."); return; }
+  _telegramBusy._busy = true;
   try { await fn(); }
   catch (e) { log("warn", "repl", `REPL error: ${e.message}`); }
-  finally { busy = false; }
+  finally { _telegramBusy._busy = false; }
 }
 
 // ─── Session history ────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ export async function runStartupFetch() {
   console.log(`\n╔═══════════════════════════════════════════╗\n║         DLMM LP Agent — Ready             ║\n╚═══════════════════════════════════════════╝\n`);
   console.log("Fetching wallet and top pool candidates...\n");
 
-  busy = true;
+  _telegramBusy._busy = true;
   try {
     const [wallet, positions, { candidates, total_eligible, total_screened }] = await Promise.all([
       getWalletBalances(),
@@ -93,7 +93,7 @@ export async function runStartupFetch() {
     try { (await import("./instrument.js")).captureError(e, { phase: "startup" }).catch(err => log("warn", "startup", `Sentry capture failed: ${err?.message || err}`)); } catch (_) {}
     console.error(`Startup fetch failed: ${e.message}`);
   } finally {
-    busy = false;
+    _telegramBusy._busy = false;
   }
   return startupCandidates;
 }

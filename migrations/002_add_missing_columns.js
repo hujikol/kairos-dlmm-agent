@@ -65,7 +65,8 @@ export function migrate(db) {
 
   // Apply all alterations, wrapped in a single transaction
   if (alterations.length > 0) {
-    db.transaction(() => {
+    db.exec("BEGIN");
+    try {
       for (const sql of alterations) {
         try {
           db.exec(sql);
@@ -77,6 +78,10 @@ export function migrate(db) {
           }
         }
       }
-    })();
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
   }
 }

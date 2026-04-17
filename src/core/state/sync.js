@@ -3,7 +3,7 @@
  * All functions share the same getDB() from ../db.js.
  */
 
-import { getDB } from "../db.js";
+import { getDB, runTransaction } from "../db.js";
 import { log } from "../logger.js";
 import { updatePosition, appendNote } from "./registry.js";
 
@@ -23,12 +23,12 @@ const SYNC_GRACE_MS = 5 * 60_000;
  * @param {string[]} active_addresses - List of currently active on-chain position addresses
  * @returns {void}
  */
-export function syncOpenPositions(active_addresses) {
-  const db = getDB();
+export async function syncOpenPositions(active_addresses) {
+  const db = await getDB();
   const activeSet = new Set(active_addresses);
   const openPos = db.prepare("SELECT position, deployed_at FROM positions WHERE closed = 0").all();
 
-  db.transaction(() => {
+  runTransaction(() => {
     for (const pos of openPos) {
       if (activeSet.has(pos.position)) continue;
 
@@ -43,6 +43,6 @@ export function syncOpenPositions(active_addresses) {
       appendNote(pos.position, `Auto-closed during state sync (not found on-chain)`);
       log("info", "state", `Position ${pos.position} auto-closed (missing from on-chain data)`);
     }
-  })();
+  });
 }
 

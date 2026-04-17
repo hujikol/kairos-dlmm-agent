@@ -3,7 +3,7 @@
  * All functions share the same getDB() from ../db.js.
  */
 
-import { getDB } from "../db.js";
+import { getDB, runTransaction } from "../db.js";
 import { log } from "../logger.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { pushEvent } from "./events.js";
@@ -110,7 +110,7 @@ export function trackPosition({
 }) {
   const db = getDB();
 
-  db.transaction(() => {
+  runTransaction(() => {
     db.prepare(`
       INSERT OR REPLACE INTO positions (
         position, pool, pool_name, strategy, bin_range, amount_sol, amount_x,
@@ -131,7 +131,7 @@ export function trackPosition({
 
     pushEvent({ action: "deploy", position, pool_name: pool_name || pool });
     touchLastUpdated();
-  })();
+  });
 
   log("info", "state", `Tracked new position: ${position} in pool ${pool}`);
 }
@@ -155,11 +155,11 @@ export function recordClose(position_address, reason) {
 
   const closed_at = new Date().toISOString();
 
-  db.transaction(() => {
+  runTransaction(() => {
     updatePosition(position_address, { closed: 1, closed_at });
     appendNote(position_address, `Closed at ${closed_at}: ${reason}`);
     pushEvent({ action: "close", position: position_address, pool_name: pos.pool_name || pos.pool, reason });
-  })();
+  });
   log("info", "state", `Position ${position_address} marked closed: ${reason}`);
 }
 
@@ -168,7 +168,7 @@ export function recordClose(position_address, reason) {
  */
 export function recordRebalance(old_position, new_position) {
   const db = getDB();
-  db.transaction(() => {
+  runTransaction(() => {
     const old = db.prepare("SELECT rebalance_count FROM positions WHERE position = ?").get(old_position);
     if (old) {
       const closed_at = new Date().toISOString();
@@ -181,7 +181,7 @@ export function recordRebalance(old_position, new_position) {
       updatePosition(new_position, { rebalance_count: (old?.rebalance_count || 0) + 1 });
       appendNote(new_position, `Rebalanced from ${old_position}`);
     }
-  })();
+  });
 }
 
 /**
@@ -195,10 +195,10 @@ export function recordClaim(position_address, fees_usd) {
   const last_claim_at = new Date().toISOString();
   const total = (pos.total_fees_claimed_usd || 0) + (fees_usd || 0);
 
-  db.transaction(() => {
+  runTransaction(() => {
     updatePosition(position_address, { last_claim_at, total_fees_claimed_usd: total });
     appendNote(position_address, `Claimed ~$${fees_usd?.toFixed(2) || "?"} fees at ${last_claim_at}`);
-  })();
+  });
 }
 
 /**

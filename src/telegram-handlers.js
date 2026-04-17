@@ -1,3 +1,4 @@
+import { log } from "./core/logger.js";
 import { getMyPositions, closePosition } from "./integrations/meteora.js";
 import { getWalletBalances } from "./integrations/helius.js";
 import { getTopCandidates } from "./screening/discovery.js";
@@ -12,17 +13,18 @@ import { startPolling, sendHTML, sendMessage } from "./notifications/telegram.js
 import { _busyState } from "./core/scheduler.js";
 import { rl, buildPrompt } from "./rl-shared.js";
 
-// Module-level queue and busy flag (not shared with index.js)
+// Module-level queue and busy flag (shared via _telegramBusyState so importers can modify without reassigning the binding)
+const _telegramBusyState = { _busy: false };
 const _telegramQueue = [];
-let busy = false;
+
+export const _telegramBusy = _telegramBusyState;
 
 const MAX_TELEGRAM_QUEUE = 5;
 const TOKEN_SWAP_MIN_BALANCE = 0.01;
 
 export { MAX_TELEGRAM_QUEUE, TOKEN_SWAP_MIN_BALANCE };
-export { busy };
 export async function drainTelegramQueue() {
-  while (_telegramQueue.length > 0 && !_busyState._managementBusy && !_busyState._screeningBusy && !busy) {
+  while (_telegramQueue.length > 0 && !_busyState._managementBusy && !_busyState._screeningBusy && !_telegramBusyState._busy) {
     const queued = _telegramQueue.shift();
     await telegramHandler(queued);
   }
@@ -108,7 +110,8 @@ async function handleTeachCommand(sub, { sendHTML, escapeHTML }) {
 
 // ─── Main Telegram handler ─────────────────────────────────────────────────────
 export async function telegramHandler(text) {
-  if (_busyState._managementBusy || _busyState._screeningBusy || busy) {
+  log("info", "telegram-handler", `telegramHandler called with: "${text}"`);
+  if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._busy) {
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(text);
       sendHTML(`⏳ <b>Queued</b> (${_telegramQueue.length} in queue): "<i>${escapeHTML(text.slice(0, 60))}</i>"`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message }));
@@ -349,7 +352,7 @@ export async function telegramHandler(text) {
   }
 
   // Free-form LLM chat
-  busy = true;
+  _telegramBusyState._busy = true;
   try {
     const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
     const isDeployRequest = !hasCloseIntent && /\bdeploy\b|\bopen position\b|\blp into\b|\badd liquidity\b/i.test(text);
@@ -361,7 +364,7 @@ export async function telegramHandler(text) {
     log("warn", "telegram", `Agent chat failed: ${e.message}`);
     await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message }));
   } finally {
-    busy = false;
+    _telegramBusyState._busy = false;
     drainTelegramQueue().catch(err => log("warn", "telegram", `drainTelegramQueue failed: ${err?.message || err}`));
   }
 }

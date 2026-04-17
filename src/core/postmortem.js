@@ -17,7 +17,7 @@
 import fs from "fs";
 import crypto from "crypto";
 import { log } from "./logger.js";
-import { getDB } from "./db.js";
+import { getDB, runTransaction } from "./db.js";
 
 /** Coerce a value to a safe SQLite REAL (null when NaN or Infinity). */
 function safeNum(v) {
@@ -132,7 +132,7 @@ function saveRules(rules) {
        @hours_utc, @win_rate, @sample_size, @evidence, @severity, @description, @suggestion, @created_at, @updated_at)
   `);
 
-  const tx = db.transaction(() => {
+  runTransaction(() => {
     for (const rule of trimmed) {
       upsert.run({
         key: rule.key,

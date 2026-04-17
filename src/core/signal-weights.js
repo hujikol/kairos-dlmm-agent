@@ -9,7 +9,7 @@
  * LLM prompt so the agent can prioritize the right screening criteria.
  */
 
-import { getDB } from "./db.js";
+import { getDB, runTransaction } from "./db.js";
 import { log } from "./logger.js";
 
 // ─── Signal Definitions ─────────────────────────────────────────
@@ -81,7 +81,7 @@ export function loadWeights() {
 
 export function saveWeights(data) {
   const db = getDB();
-  db.transaction(() => {
+  runTransaction(() => {
     db.prepare(`
       INSERT OR REPLACE INTO signal_weights (id, weights, last_recalc, recalc_count)
       VALUES (1, ?, ?, ?)
@@ -89,7 +89,7 @@ export function saveWeights(data) {
 
     // If there's new history not yet in the DB, we might want to add it.
     // However, the recalculateWeights function below manages history addition now.
-  })();
+  });
 }
 
 // ─── Core Algorithm ──────────────────────────────────────────────
@@ -186,7 +186,7 @@ export function recalculateWeights(perfData, cfg = {}) {
 
   // Persist
   const db = getDB();
-  db.transaction(() => {
+  runTransaction(() => {
     db.prepare(`
       INSERT OR REPLACE INTO signal_weights (id, weights, last_recalc, recalc_count)
       VALUES (1, ?, ?, ?)
@@ -197,7 +197,7 @@ export function recalculateWeights(perfData, cfg = {}) {
         INSERT INTO signal_weights_history (timestamp, changes, window_size, win_count, loss_count)
         VALUES (?, ?, ?, ?, ?)
       `).run(new Date().toISOString(), JSON.stringify(changes), recent.length, wins.length, losses.length);
-      
+
       // Cleanup old history (keep last 50)
       db.prepare(`
         DELETE FROM signal_weights_history WHERE id NOT IN (
@@ -205,7 +205,7 @@ export function recalculateWeights(perfData, cfg = {}) {
         )
       `).run();
     }
-  })();
+  });
 
   log("info", "signal_weights", `${changes.length > 0 ? "Recalculated" : "Evaluated"}: ${changes.length} weight(s) adjusted from ${recent.length} records`);
 

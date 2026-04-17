@@ -6,7 +6,7 @@
  * During screening, the active strategy's criteria guide token selection and position config.
  */
 
-import { getDB } from "./db.js";
+import { getDB, runTransaction } from "./db.js";
 import { log } from "./logger.js";
 
 // ─── Default Strategies ─────────────────────────────────────────
@@ -76,11 +76,12 @@ const DEFAULT_STRATEGIES = {
   },
 };
 
-function ensureDefaultStrategies() {
-  const db = getDB();
+async function ensureDefaultStrategies() {
+  let db;
+  try { db = await getDB(); } catch (e) { return; } // db not ready, skip
   const count = db.prepare('SELECT COUNT(*) as c FROM strategies').get().c;
   if (count === 0) {
-    db.transaction(() => {
+    runTransaction(() => {
       for (const [id, s] of Object.entries(DEFAULT_STRATEGIES)) {
         db.prepare(`
           INSERT INTO strategies (
@@ -94,12 +95,17 @@ function ensureDefaultStrategies() {
         );
       }
       db.prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)').run('active_strategy', 'custom_ratio_spot');
-    })();
+    });
     log("info", "strategy", "Preloaded default strategies into SQLite");
   }
 }
 
-ensureDefaultStrategies();
+// ─── Bootstrap: initialize default strategies after DB is ready ────────────
+// Run as fire-and-forget (errors logged, non-blocking). Database must be
+// initialized before any strategy CRUD operations run.
+ensureDefaultStrategies().catch(err => {
+  console.error("ensureDefaultStrategies failed:", err?.message ?? err);
+});
 
 // ─── Tool Handlers ─────────────────────────────────────────────
 
@@ -118,7 +124,7 @@ function rowToStrategy(row) {
  * Add or update a strategy.
  * The agent parses the raw tweet/text and fills in the structured fields.
  */
-export function addStrategy({
+export async function addStrategy({
   id,
   name,
   author = "unknown",
@@ -132,7 +138,7 @@ export function addStrategy({
 }) {
   if (!id || !name) return { error: "id and name are required" };
 
-  const db = getDB();
+  const db = await getDB();
   const slug = id.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
   const now = new Date().toISOString();
 
@@ -160,8 +166,8 @@ export function addStrategy({
 /**
  * List all strategies with a summary.
  */
-export function listStrategies() {
-  const db = getDB();
+export async function listStrategies() {
+  const db = await getDB();
   const active = db.prepare("SELECT value FROM kv_store WHERE key = 'active_strategy'").get()?.value;
   const rows = db.prepare('SELECT * FROM strategies').all();
   
@@ -180,9 +186,9 @@ export function listStrategies() {
 /**
  * Get full details of a strategy including raw text and all criteria.
  */
-export function getStrategy({ id }) {
+export async function getStrategy({ id }) {
   if (!id) return { error: "id required" };
-  const db = getDB();
+  const db = await getDB();
   const active = db.prepare("SELECT value FROM kv_store WHERE key = 'active_strategy'").get()?.value;
   const row = db.prepare('SELECT * FROM strategies WHERE id = ?').get(id);
   if (!row) {
@@ -195,9 +201,9 @@ export function getStrategy({ id }) {
 /**
  * Set the active strategy used during screening cycles.
  */
-export function setActiveStrategy({ id }) {
+export async function setActiveStrategy({ id }) {
   if (!id) return { error: "id required" };
-  const db = getDB();
+  const db = await getDB();
   const row = db.prepare('SELECT name FROM strategies WHERE id = ?').get(id);
   if (!row) {
     const available = db.prepare('SELECT id FROM strategies').all().map(r => r.id);
@@ -212,16 +218,16 @@ export function setActiveStrategy({ id }) {
 /**
  * Remove a strategy.
  */
-export function removeStrategy({ id }) {
+export async function removeStrategy({ id }) {
   if (!id) return { error: "id required" };
-  const db = getDB();
+  const db = await getDB();
   const row = db.prepare('SELECT name FROM strategies WHERE id = ?').get(id);
   if (!row) return { error: `Strategy "${id}" not found` };
   
   db.prepare('DELETE FROM strategies WHERE id = ?').run(id);
   
   const activeRow = db.prepare("SELECT value FROM kv_store WHERE key = 'active_strategy'").get();
-  let newActive = activeRow?.value;
+  const newActive = activeRow?.value;
   if (activeRow?.value === id) {
     newActive = db.prepare('SELECT id FROM strategies LIMIT 1').get()?.id || null;
     db.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)").run('active_strategy', newActive);
@@ -234,8 +240,8 @@ export function removeStrategy({ id }) {
 /**
  * Get the currently active strategy — used by screening cycle.
  */
-export function getActiveStrategy() {
-  const db = getDB();
+export async function getActiveStrategy() {
+  const db = await getDB();
   const activeId = db.prepare("SELECT value FROM kv_store WHERE key = 'active_strategy'").get()?.value;
   if (!activeId) return null;
   const row = db.prepare('SELECT * FROM strategies WHERE id = ?').get(activeId);

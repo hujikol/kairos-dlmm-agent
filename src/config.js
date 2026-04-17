@@ -96,6 +96,8 @@ if (u.llmModel)   process.env.LLM_MODEL          ??= u.llmModel;
 if (u.llmBaseUrl) process.env.LLM_BASE_URL       ??= u.llmBaseUrl;
 if (u.llmApiKey)  process.env.LLM_API_KEY        ??= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN  ??= String(u.dryRun);
+if (u.publicApiKey)          process.env.PUBLIC_API_KEY           ??= u.publicApiKey;
+if (u.agentMeridianApiUrl)   process.env.AGENT_MERIDIAN_API_URL ??= u.agentMeridianApiUrl;
 
 import { SOL_MINT, USDC_MINT, USDT_MINT } from "./constants.js";
 
@@ -178,6 +180,23 @@ export const config = {
     okxApiTimeoutMs: u.okx?.okxApiTimeoutMs ?? 12_000,
   },
 
+  // ─── Hive Mind ─────────────────────────
+  hiveMind: {
+    url:     u.hive?.url     || process.env.AGENT_MERIDIAN_API_URL || null,
+    apiKey:  u.hive?.apiKey  || process.env.HIVE_MIND_PUBLIC_API_KEY || null,
+    agentId: u.hive?.agentId || null,
+    pullMode: u.hive?.pullMode || "auto",
+  },
+
+  // ─── Agent Meridian API ─────────────────
+  api: {
+    url:          u.agentMeridianApiUrl || u.api?.url || process.env.AGENT_MERIDIAN_API_URL || "https://api.agentmeridian.xyz/api",
+    publicApiKey: u.publicApiKey      || u.api?.publicApiKey || process.env.PUBLIC_API_KEY || null,
+  },
+
+  // ─── LPAgent Relay ─────────────────────
+  lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
+
   // ─── Strategy Mapping ───────────────────
   strategy: {
     strategy:  u.strategy?.strategy  ?? u.strategy  ?? "bid_ask",
@@ -188,6 +207,7 @@ export const config = {
   schedule: {
     managementIntervalMin:  u.schedule?.managementIntervalMin  ?? (isDryRun() ? 1 : 10),
     screeningIntervalMin:   u.schedule?.screeningIntervalMin   ?? (isDryRun() ? 1 : 30),
+    pnlPollIntervalSec:     u.schedule?.pnlPollIntervalSec     ?? 30,
   },
 
   // ─── LLM Settings ──────────────────────
@@ -276,3 +296,19 @@ export function reloadScreeningThresholds() {
     log("warn", "config", `reloadScreeningThresholds: ignoring error (will retry next cycle): ${err?.message}`);
   }
 }
+
+/**
+ * Fail-fast validation of required environment variables.
+ * Throws a clear error if WALLET_PRIVATE_KEY or RPC_URL is missing.
+ */
+export function validateEnv() {
+  if (!process.env.WALLET_PRIVATE_KEY?.trim()) {
+    throw new Error("Missing required env var: WALLET_PRIVATE_KEY — set it in .env or user-config.json");
+  }
+  if (!process.env.RPC_URL?.trim()) {
+    throw new Error("Missing required env var: RPC_URL — set it in .env or user-config.json");
+  }
+}
+
+// Validate on module load (fail-fast at startup)
+validateEnv();
