@@ -80,6 +80,7 @@ let _initialized = false;
 function init() {
   if (_initialized) return;
   const db = getDB();
+  if (!db) return; // db not ready yet — will init on first recordDecision call
   ensureTable(db);
   pruneIfNeeded(db);
   _initialized = true;
@@ -111,6 +112,10 @@ export async function recordDecision({
   initiatedBy = "llm",
 }) {
   const db = await getDB();
+  if (!db) {
+    log("warn", "decision-log", "DB not ready — skipping decision record");
+    return;
+  }
 
   // Lazy init (handles case where module is imported before db is fully ready)
   init();
@@ -167,6 +172,7 @@ export async function recordDecision({
  */
 export async function getDecisions({ pool, limit = 100, type, hours = 24 } = {}) {
   const db = await getDB();
+  if (!db) return [];
   init();
 
   const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
