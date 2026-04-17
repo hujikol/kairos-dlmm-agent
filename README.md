@@ -1,6 +1,8 @@
 # KAIROS
 
 > **Autonomous DLMM LP agent** for Meteora pools on Solana. Screens, deploys, and manages liquidity positions automatically. Controlled via Telegram or CLI.
+>
+> Built from [Meridian](https://github.com/yunus-0x/meridian) · MIT Licensed
 
 [![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/meridian-agents/kairos-dllm-agent)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/meridian-agents/kairos-dllm-agent/blob/main/LICENSE)
