@@ -10,13 +10,16 @@ Autonomous DLMM LP agent for Meteora pools on Solana. Forked from Meridian.
 src/
 ├── agent/          ReAct loop (intent, fallback, rate-limit, JSON repair)
 ├── core/           Engine: cycles, scheduler, state, learning, strategies
-│   └── state/     Position registry, OOR tracking, PnL/trailing TP, events, sync
-├── features/       Pool memory, hive-mind, smart-wallets, blacklists
+│   ├── state/     Position registry, OOR tracking, PnL/trailing TP, events, sync
+│   └── pool-indicators.js  Jupiter price history → technical indicators
+├── features/       Pool memory, hive-mind (experimental: pull/push), smart-wallets, blacklists
 ├── integrations/   Helius, Jupiter, Meteora, OKX, LPAgent, Solana
 ├── notifications/  Telegram bot, briefing generator, notification queue
 ├── screening/      Pool discovery from Meteora API
 ├── server/         Health endpoint, graceful shutdown
-└── tools/          Tool definitions (36KB), executor, per-domain modules
+└── tools/          Tool definitions, executor, per-domain modules
+    ├── agent-meridian.js  Centralized relay client (PnL, Top-LP, positions)
+    └── chart-indicators.js  RSI, Bollinger Bands, Supertrend, Fibonacci
 
 cycles.js          Canonical — scheduler/watchdog/index.js use this
 ```
@@ -85,6 +88,16 @@ cycles.js          Canonical — scheduler/watchdog/index.js use this
 | `pnl.js` | `updatePnlAndCheckExits` — peak_pnl, volatility-adaptive trailing TP, 4 exit signals |
 | `events.js` | Event log: `pushEvent`, `getRecentEvents` |
 | `sync.js` | `syncOpenPositions` — on-chain state reconciliation |
+
+## Decision Log (`src/core/decision-log.js`)
+
+SQLite-backed decision recorder. Auto-prunes at 10k rows and 30 days.
+
+`recordDecision({ type, pool, position, amount, pnl, reasoning, metadata, initiatedBy })` — records deploy/close/skip/claim/learn.
+
+`getDecisions({ pool, limit, type, hours })` — query recent decisions.
+
+Decision types: `deploy` | `close` | `skip` | `claim` | `learn`.
 
 ---
 
@@ -158,8 +171,11 @@ cycles.js          Canonical — scheduler/watchdog/index.js use this
 | `managementModel` / `screeningModel` / `generalModel` | llm | minimax/minimax-01 |
 | `models.manager` / `screener` / `general` / `evolve` | llm | free-tier defaults |
 | `cavemanEnabled` | behavior | false |
+| `lpAgentRelayEnabled` | hiveMind | false |
 
 **`computeDeployAmount(walletSol, positionCount, conviction?)`** — scales position size: `clamp(deployable × deployAmountSol, floor=deployAmountSol, ceil=maxDeployAmount)`.
+
+**`validateAndCoerce(changes)`** (`src/core/config-validator.js`) — validates config keys before `update_config` applies them. Returns `{ valid, invalid }`. Invalid keys rejected before any apply.
 
 ---
 
@@ -217,6 +233,16 @@ Used by screener to filter candidates — prefers GOOD or EXCELLENT tokens.
 
 Risk increases: young (<12h), high volatility, high bundle %, low organic score.
 Confidence increases: older (>=48h), low volatility, high fee/TVL ratio.
+
+## Pool Indicators (`core/pool-indicators.js`)
+
+`fetchPoolIndicators({ pool_address, poolData, mint })` — fetches price history from Jupiter API, computes technical indicators:
+- RSI (14-period)
+- Bollinger Bands (20-period, 2σ)
+- Supertrend (10-period ATR)
+- Fibonacci retracement levels
+
+Used by screening to enrich pool analysis. Chart indicators available as `computeRSI`, `computeBollingerBands`, `computeSupertrend`, `computeFibonacciRetracement` in `tools/chart-indicators.js`.
 
 ---
 
@@ -343,8 +369,16 @@ Polls open positions every 60s — no LLM unless triggered:
 
 ## Hive Mind (`features/hive-mind.js`)
 
-Optional. Enable: `HIVE_MIND_URL` + `HIVE_MIND_API_KEY` in `.env`.
-Syncs lessons/deploys to shared server, queries consensus patterns.
+**Experimental** — pull + push model. Enable via `config.hiveMind.url` + `config.hiveMind.apiKey`.
+
+- `bootstrapHiveMind()` — runs on startup, generates `agentId`, pulls initial lessons
+- `startHiveMindBackgroundSync()` — 15-min heartbeat, auto-pulls new lessons
+- `pullHiveMindLessons()` / `pullHiveMindPresets()` — pull from collective
+- `pushHiveLesson()` / `pushHivePerformanceEvent()` — push individual events
+- `getSharedLessonsForPrompt({ agentType, maxLessons })` — formatted for LLM injection
+- `hivemind-cache.json` — cached pulled lessons on disk
+
+Config keys: `config.hiveMind.url`, `config.hiveMind.apiKey`, `config.hiveMind.agentId`, `config.hiveMind.pullMode`.
 
 ---
 
@@ -398,10 +432,13 @@ Standalone alternative to REPL — `kairos <subcommand>`:
 - `close.js` — Position closing with fee claiming
 - `pnl.js` — Per-position PnL calculation
 
+### Agent Meridian Relay (`tools/agent-meridian.js`)
+Centralized relay client. Routes PnL, Top-LP, and position queries through `https://api.agentmeridian.xyz/api` when `lpAgentRelayEnabled=true`. No local API key needed.
+
 ### Other
-- `jupiter.js` — Token info, holders, narrative, pool search
+- `jupiter.js` — Token info, holders, narrative, pool search + price history for indicators
 - `okx.js` — OKX exchange data for enriched pool info
-- `lpagent.js` — LPAgent API: study top LPers
+- `lpagent.js` — LPAgent API: study top LPers (relayed via Agent Meridian)
 - `solana.js` — Solana RPC helpers
 
 ---
@@ -428,8 +465,11 @@ Standalone alternative to REPL — `kairos <subcommand>`:
 | `LLM_BASE_URL` | No | Local LLM override |
 | `LLM_MODEL` | No | Override default model |
 | `DRY_RUN` | No | Skip on-chain transactions |
-| `HIVE_MIND_URL` | No | Collective intelligence server |
-| `HIVE_MIND_API_KEY` | No | Hive mind auth token |
+| `HIVE_MIND_URL` | No | Collective intelligence server (legacy) |
+| `HIVE_MIND_API_KEY` | No | Hive mind auth token (legacy) |
+| `AGENT_MERIDIAN_API_URL` | No | Agent Meridian relay endpoint |
+| `HIVE_MIND_PUBLIC_API_KEY` | No | Hive Mind public API key (experimental) |
+| `LPAGENT_API_KEY` | No | LPAgent API key |
 | `HELIUS_API_KEY` | No | Enhanced wallet balance data |
 | `JUPITER_DATAPI_BASE_URL` | No | Jupiter API base |
 | `POOL_DISCOVERY_API_BASE` | No | Meteora pool discovery API |
