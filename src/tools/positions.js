@@ -8,6 +8,7 @@ import { log, logAction } from "../core/logger.js";
 import { pushNotification } from "../notifications/queue.js";
 import { setPositionInstruction } from "../core/state/registry.js";
 import { addrShort } from "./addrShort.js";
+import { recordDecision } from "../core/decision-log.js";
 
 export const positionWriteTools = new Set([
   "deploy_position",
@@ -49,6 +50,20 @@ export function registerPositions(registerTool) {
         pnlPct: result.pnl_pct ?? 0,
         reason: args.reason,
       });
+
+      // Record decision log entry for the close
+      recordDecision({
+        type: "close",
+        pool: result.pool || args.pool_address,
+        position: args.position_address,
+        amount: null,
+        pnl: { usd: result.pnl_usd ?? 0, pct: result.pnl_pct ?? 0 },
+        reasoning: args.reason || "agent decision",
+        metadata: {
+          initiated_by: "llm",
+        },
+      }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e.message}`));
+
       if (args.reason && args.reason.toLowerCase().includes("yield")) {
         const poolAddr = result.pool || args.pool_address;
         if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0, 10)}` }).catch?.(() => {});
@@ -87,6 +102,27 @@ export function registerPositions(registerTool) {
         binStep: result.bin_step,
         baseFee: result.base_fee,
       });
+
+      // Record decision log entry for the deploy
+      recordDecision({
+        type: "deploy",
+        pool: args.pool_address,
+        position: result.position,
+        amount: args.amount_y ?? args.amount_sol ?? 0,
+        pnl: null,
+        reasoning: `Deployed to ${args.pool_name || addrShort(args.pool_address)}`,
+        metadata: {
+          initiated_by: "llm",
+          pool_name: args.pool_name,
+          bin_step: args.bin_step,
+          volatility: args.volatility,
+          fee_tvl_ratio: args.fee_tvl_ratio,
+          organic_score: args.organic_score,
+          strategy: args.strategy,
+          conviction: args.conviction,
+          initial_value_usd: args.initial_value_usd,
+        },
+      }).catch(e => log("warn", "decision-log", `Failed to record deploy decision: ${e.message}`));
     }
     return result;
   });
