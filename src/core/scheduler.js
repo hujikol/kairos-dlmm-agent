@@ -1,6 +1,7 @@
-import { Croner } from "croner";
+import { Cron } from "croner";
 import { config } from "../config.js";
 import { log } from "./logger.js";
+import { getDB } from "./db.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { setLastBriefingDate, getLastBriefingDate } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
@@ -9,7 +10,7 @@ import { generateBriefing } from "../notifications/briefing.js";
 import { captureError } from "../instrument.js";
 
 // ─── Cron-only constants ─────────────────────────────────────────────────────
-const PNL_POLL_INTERVAL_MS = 30_000; // 30s PnL polling interval
+// PnL polling interval driven by config (in seconds, converted to ms below)
 
 // ═══════════════════════════════════════════
 //  CYCLE TIMERS (shared with index.js for buildPrompt)
@@ -41,9 +42,13 @@ export let _cronTasks = [];
 export const _busyState = {
   _managementBusy: false,
   _screeningBusy: false,
+  _pnlPollBusy: false,
 };
-export let _screeningLastTriggered = 0;
-export let _pollTriggeredAt = 0;
+// Also use object wrapper for timestamps to avoid ESM live-binding reassignment issues
+export const _timersState = {
+  screeningLastTriggered: 0,
+  pollTriggeredAt: 0,
+};
 
 // ═══════════════════════════════════════════
 //  BRIEFING CRON FUNCTIONS
@@ -97,9 +102,14 @@ export function stopCronJobs() {
 export async function startCronJobs() {
   stopCronJobs();
 
+  // Ensure DB is initialized before any cron callback runs.
+  // This prevents sync getDB() callers in cycle functions from
+  // receiving a Promise when the database isn't ready yet.
+  await getDB();
+
   const { runManagementCycle, runScreeningCycle } = await import("./cycles.js");
 
-  const mgmtTask = new Croner(
+  const mgmtTask = new Cron(
     `*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`,
     { timezone: "Etc/UTC" },
     async () => {
@@ -114,7 +124,7 @@ export async function startCronJobs() {
     }
   );
 
-  const screenTask = new Croner(
+  const screenTask = new Cron(
     `*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`,
     { timezone: "Etc/UTC" },
     async () => {
@@ -128,7 +138,7 @@ export async function startCronJobs() {
   );
 
   // Morning Briefing at 8:00 AM UTC+7 (1:00 AM UTC)
-  const briefingTask = new Croner("0 1 * * *", { timezone: "Etc/UTC" }, async () => {
+  const briefingTask = new Cron("0 1 * * *", { timezone: "Etc/UTC" }, async () => {
     try {
       await runBriefing();
     } catch (e) {
@@ -138,7 +148,7 @@ export async function startCronJobs() {
   });
 
   // Every 6h — catch up if briefing was missed
-  const briefingWatchdog = new Croner("0 */6 * * *", { timezone: "Etc/UTC" }, async () => {
+  const briefingWatchdog = new Cron("0 */6 * * *", { timezone: "Etc/UTC" }, async () => {
     try {
       await maybeRunMissedBriefing();
     } catch (e) {
@@ -148,10 +158,9 @@ export async function startCronJobs() {
   });
 
   // Lightweight 30s PnL poller — updates trailing TP state between management cycles
-  let _pnlPollBusy = false;
   const pnlPollInterval = setInterval(async () => {
-    if (_busyState._managementBusy || _busyState._screeningBusy || _pnlPollBusy) return;
-    _pnlPollBusy = true;
+    if (_busyState._managementBusy || _busyState._screeningBusy || _busyState._pnlPollBusy) return;
+    _busyState._pnlPollBusy = true;
     try {
       const result = await getMyPositions({ force: true, silent: true }).catch(e => {
         log("warn", "pnl", `getMyPositions failed: ${e?.message ?? e}`);
@@ -162,11 +171,11 @@ export async function startCronJobs() {
         const exit = updatePnlAndCheckExits(p.position, p, config.management);
         if (exit) {
           const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
-          const sinceLastTrigger = Date.now() - _pollTriggeredAt;
+          const sinceLastTrigger = Date.now() - _timersState.pollTriggeredAt;
           if (sinceLastTrigger >= cooldownMs) {
-            _pollTriggeredAt = Date.now();
+            _timersState.pollTriggeredAt = Date.now();
             log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
-            runManagementCycle({ silent: true }).catch((e) => { try { log("error", "cron", `Poll-triggered management failed: ${e.message}`); } catch {} });
+            Promise.resolve(runManagementCycle({ silent: true })).catch((e) => { log("error", "cron", `Poll-triggered management failed: ${e?.message ?? e}`); });
           } else {
             log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
           }
@@ -174,9 +183,9 @@ export async function startCronJobs() {
         }
       }
     } finally {
-      _pnlPollBusy = false;
+      _busyState._pnlPollBusy = false;
     }
-  }, PNL_POLL_INTERVAL_MS);
+  }, config.schedule.pnlPollIntervalSec * 1000);
 
   _cronTasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
   _cronTasks._pnlPollInterval = pnlPollInterval;

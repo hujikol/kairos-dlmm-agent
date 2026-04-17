@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { execSync, spawn } from "child_process";
 import { studyTopLPers } from "../integrations/lpagent.js";
+import { validateAndCoerce } from "../core/config-validator.js";
 import {
   addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword,
   getPerformanceHistory, pinLesson, unpinLesson, listLessons,
@@ -135,10 +136,17 @@ export function registerAdmin(registerTool) {
       Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
     );
 
+    const { valid, invalid } = validateAndCoerce(changes);
+
+    if (invalid.length > 0) {
+      log("info", "config", `update_config rejected: ${JSON.stringify(invalid)}`);
+      return { success: false, invalid, reason };
+    }
+
     const applied = {};
     const unknown = [];
 
-    for (const [key, val] of Object.entries(changes)) {
+    for (const [key, val] of Object.entries(valid)) {
       const match = CONFIG_MAP[key] ? [key, CONFIG_MAP[key]] : CONFIG_MAP_LOWER[key.toLowerCase()];
       if (!match) { unknown.push(key); continue; }
       applied[match[0]] = val;

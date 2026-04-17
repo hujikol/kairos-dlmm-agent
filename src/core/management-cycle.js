@@ -6,11 +6,11 @@
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
-import { config, computeDeployAmount } from "../config.js";
+import { config, computeDeployAmount, isDryRun } from "../config.js";
 import {
   timers,
   _busyState,
-  _screeningLastTriggered,
+  _timersState,
 } from "./scheduler.js";
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
 import { captureAlert } from "../instrument.js";
@@ -28,8 +28,6 @@ import {
 import { SCREENING_COOLDOWN_MS } from "./constants.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
 
-const IS_DRY_RUN = process.env.DRY_RUN === "true";
-
 export async function runManagementCycle({ silent = false, gateway = agentGateway } = {}) {
   if (_busyState._managementBusy) return null;
   _busyState._managementBusy = true;
@@ -40,8 +38,8 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
   try {
     // Daily PnL circuit breaker
-    const pnl = getDailyPnL();
-    const circuit = checkDailyCircuitBreaker();
+    const pnl = await getDailyPnL();
+    const circuit = await checkDailyCircuitBreaker();
     log("info", "daily-pnl", `Circuit breaker: ${circuit.action} (realized: ${pnl.realized?.toFixed(2) ?? "N/A"} USD, reason: ${circuit.reason || "normal"})`);
     if (circuit.action === "halt") {
       log("warn", "daily-pnl", `CIRCUIT BREAKER: daily loss limit hit — skipping new deployments this cycle`);
@@ -58,8 +56,16 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     if (positions.length === 0) {
       log("info", "cron", "No open positions — triggering screening cycle");
       // Dynamic import to avoid circular dep with scheduler.js
-      const { runScreeningCycle } = await import("./screening-cycle.js");
-      runScreeningCycle().catch((e) => { try { log("error", "cron", `Triggered screening failed: ${e.message}`); } catch {} });
+      try {
+        const { runScreeningCycle } = await import("./screening-cycle.js");
+        if (runScreeningCycle) {
+          runScreeningCycle().catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+        } else {
+          log("error", "cron", "Screening cycle module missing runScreeningCycle export");
+        }
+      } catch (e) {
+        log("error", "cron", `Failed to load screening cycle: ${e?.message ?? e}`);
+      }
       return null;
     }
 
@@ -133,22 +139,25 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     // Skip if circuit breaker is in halt mode
     const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
     const afterCount = Math.max(0, positions.length - closesAttempted);
-    const lastTriggeredAt = _screeningLastTriggered;
+    const lastTriggeredAt = _timersState.screeningLastTriggered;
 
     // Dynamic import to avoid circular dep with scheduler.js
-    const { runScreeningCycle } = await import("./screening-cycle.js");
-
     if (afterCount < config.risk.maxPositions && Date.now() - lastTriggeredAt > SCREENING_COOLDOWN_MS && circuit.action !== "halt") {
       if (_busyState._screeningBusy) return;
       _busyState._screeningBusy = true;
       try {
-        // Re-check to avoid race: if another call set _screeningLastTriggered while we were waiting for the lock
-        if (_screeningLastTriggered !== lastTriggeredAt) {
+        const { runScreeningCycle } = await import("./screening-cycle.js");
+        // Re-check to avoid race: if another call set _timersState.screeningLastTriggered while we were waiting for the lock
+        if (_timersState.screeningLastTriggered !== lastTriggeredAt) {
           log("info", "cron", `Post-management screening skipped — already triggered by concurrent call`);
-        } else {
+        } else if (runScreeningCycle) {
           log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
-          runScreeningCycle().catch((e) => { try { log("error", "cron", `Triggered screening failed: ${e.message}`); } catch {} });
+          runScreeningCycle().catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+        } else {
+          log("error", "cron", "Screening cycle module missing runScreeningCycle export");
         }
+      } catch (e) {
+        log("error", "cron", `Failed to load screening cycle: ${e?.message ?? e}`);
       } finally {
         _busyState._screeningBusy = false;
       }
@@ -161,9 +170,10 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     if (!silent && telegramIsEnabled()) {
       // Batch OOR positions
       const oorPositions = positions.filter(
-        (p) => !p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes
+        (p) => p && !p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes
       );
       for (const p of oorPositions) {
+        if (!p) continue;
         pushNotification({
           type: "oor",
           pair: p.pair,
@@ -175,11 +185,11 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
       // Build consolidated message if there's anything to say
       const isAllHealthy = positions.length > 0 &&
-        oorPositions.length === 0 &&
+        oorPositions.filter(Boolean).length === 0 &&
         !hasPendingNotifications();
 
       if (!isAllHealthy || mgmtReport) {
-        buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions }).catch(() => {});
+        buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions });
       }
     }
   }

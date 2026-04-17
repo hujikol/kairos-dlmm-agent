@@ -13,6 +13,7 @@ const DB_PATH = process.env.KAIROS_DB_PATH
 // sql.js runs in-memory — persist to disk on close
 let _db = null;
 let _initPromise = null;
+let _transactionDepth = 0;
 
 async function _initDB() {
   const SQL = await initSqlJs();
@@ -32,16 +33,26 @@ async function _initDB() {
   initSchema(_db);
 }
 
+/**
+ * Get the database instance.
+ *
+ * After initialization: returns _db synchronously (safe for all callers).
+ * During initialization: starts init if not started, caller MUST await.
+ * Before initialization completes: returns undefined — caller MUST await.
+ */
 export function getDB() {
   if (_db) return _db;
   if (!_initPromise) _initPromise = _initDB();
-  return _db; // may be null until promise resolves — callers await getDB() before use
+  // Return unresolved promise — caller must await this specific call
+  return _initPromise.then(() => _db);
 }
 
 // ─── sql.js-compatible wrappers (operate on the cached _db) ──────────────────
 
 // Raw prepare function captured before db.prepare is overridden
 let _rawPrepare = null;
+// Raw Database.run method captured before _db.run is overridden
+let _rawRun = null;
 
 function _setRawPrepare() {
   _rawPrepare = _db.prepare.bind(_db);
@@ -68,8 +79,29 @@ function _get(sql, ...bindParams) {
 
 /** Run a statement (INSERT/UPDATE/DELETE) and return changes info */
 function _run(sql, ...bindParams) {
-  _db.run(sql, bindParams);
+  _rawRun(sql, bindParams);
   return { changes: _db.getRowsModified(), lastInsertRowid: 0 };
+}
+
+/**
+ * Execute a function inside a BEGIN/COMMIT transaction.
+ * sql.js does not implement db.transaction(), so we use manual SQL.
+ * Re-entrant: nested calls increment depth counter, only outermost
+ * call actually BEGINs/COMMITs. Avoids "cannot start a transaction
+ * within a transaction" on sql.js.
+ */
+export function runTransaction(fn) {
+  if (_transactionDepth === 0) _db.exec("BEGIN");
+  _transactionDepth++;
+  try {
+    fn();
+    if (_transactionDepth === 1) _db.exec("COMMIT");
+  } catch (e) {
+    if (_transactionDepth === 1) _db.exec("ROLLBACK");
+    throw e;
+  } finally {
+    _transactionDepth--;
+  }
 }
 
 /** Prepare a statement — returns an object with .all(), .get(), .run() */
@@ -101,6 +133,7 @@ function _makePreparedStatement(sql) {
 
 // Attach helpers to _db so callers can use db.all() / db.get() / db.prepare()
 function _extendDb() {
+  _rawRun = _db.run.bind(_db);
   _setRawPrepare();
   _db.all = _all;
   _db.get = _get;
@@ -114,7 +147,8 @@ function _extendDb() {
 export function _injectDB(db) {
   if (_db && _db !== db) _db.close();
   _db = db;
-  // Re-initialize raw prepare from the injected DB's underlying sql.js instance
+  // Re-initialize raw prepare/run from the injected DB's underlying sql.js instance
+  _rawRun = db._db.run.bind(db._db);
   _rawPrepare = db._db.prepare.bind(db._db);
   _extendDb();
 }
