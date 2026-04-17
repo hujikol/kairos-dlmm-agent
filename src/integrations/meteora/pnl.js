@@ -4,6 +4,7 @@ import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { getWallet } from "./pool.js";
 import { PNL_TIMEOUT_MS } from "../../core/constants.js";
+import { agentMeridianPnl } from "../../tools/agent-meridian.js";
 
 /**
  * Fetch raw PnL data from Meteora DLMM API for all positions in a pool for a wallet.
@@ -51,7 +52,35 @@ export async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
 export async function getPositionPnl({ pool_address, position_address }) {
   pool_address = normalizeMint(pool_address);
   position_address = normalizeMint(position_address);
-  const walletAddress = getWallet().publicKey.toString();
+
+  // 1. Try Agent Meridian relay first (LPAgent-backed data is richer)
+  const relayData = await agentMeridianPnl({ position_address, pool_address });
+  if (relayData && Object.keys(relayData).length > 0) {
+    const p = relayData;
+    const unclaimedUsd    = parseFloat(p.unclaimedFeeTokenX?.usd || 0) + parseFloat(p.unclaimedFeeTokenY?.usd || 0);
+    const currentValueUsd = parseFloat(p.currentValue?.usd || p.balances || 0);
+    return {
+      pnl_usd:           Math.round((p.pnlUsd ?? 0) * 100) / 100,
+      pnl_pct:           Math.round((p.pnlPct ?? p.pnlPctChange ?? 0) * 100) / 100,
+      current_value_usd: Math.round(currentValueUsd * 100) / 100,
+      unclaimed_fee_usd: Math.round(unclaimedUsd * 100) / 100,
+      all_time_fees_usd: Math.round(parseFloat(p.allTimeFees?.total?.usd || 0) * 100) / 100,
+      fee_per_tvl_24h:   Math.round(parseFloat(p.feePerTvl24h || 0) * 100) / 100,
+      in_range:    p.inRange != null ? p.inRange : (p.isOutOfRange != null ? !p.isOutOfRange : null),
+      lower_bin:   p.lowerBinId ?? null,
+      upper_bin:   p.upperBinId ?? null,
+      active_bin:  p.activeBinId ?? p.poolActiveBinId ?? null,
+      age_minutes: p.createdAt ? Math.floor((Date.now() - p.createdAt * 1000) / 60000) : null,
+    };
+  }
+
+  // 2. Fall back to Meteora DLMM API
+  let walletAddress;
+  try {
+    walletAddress = getWallet().publicKey.toString();
+  } catch {
+    return { error: "Wallet not configured" };
+  }
   try {
     const byAddress = await fetchDlmmPnlForPool(pool_address, walletAddress);
     const p = byAddress[position_address];

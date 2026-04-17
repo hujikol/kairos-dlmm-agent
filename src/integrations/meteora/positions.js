@@ -1,4 +1,5 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
+import { agentMeridianPositions } from "../../tools/agent-meridian.js";
 import BN from "bn.js";
 import {
   trackPosition,
@@ -322,14 +323,45 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
   if (inflight) return inflight;
 
   inflight = (async () => { try {
-    if (!silent) log("info", "positions", "Fetching portfolio via Meteora portfolio API...");
-    const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
-    const res = await fetch(portfolioUrl);
-    if (!res.ok) throw new Error(`Portfolio API ${res.status}: ${await res.text().catch(() => "")}`);
-    const portfolio = await res.json();
+    let pools = [];
 
-    const pools = portfolio.pools || [];
-    log("info", "positions", `Found ${pools.length} pool(s) with open positions`);
+    // 1. Try Agent Meridian relay first (LPAgent-backed data is richer)
+    if (!silent) log("info", "positions", "Trying Agent Meridian relay for open positions...");
+    try {
+      const relayPositions = await agentMeridianPositions(walletAddress);
+      if (relayPositions && relayPositions.length > 0) {
+        pools = relayPositions.map(p => ({
+          poolAddress: p.pool || p.poolAddress,
+          listPositions: [p.position || p.positionAddress],
+          outOfRange: p.isOutOfRange || false,
+        }));
+        log("info", "positions", `Relay returned ${pools.length} pool(s) with open positions`);
+      }
+    } catch (e) {
+      log("warn", "positions", `Relay fetch failed: ${e.message} — falling back to Meteora portfolio API`);
+    }
+
+    // 2. Fall back to Meteora portfolio API if relay returned nothing
+    if (pools.length === 0) {
+      if (!silent) log("info", "positions", "Fetching portfolio via Meteora portfolio API...");
+      try {
+        const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
+        const res = await fetch(portfolioUrl);
+        if (res.ok) {
+          const portfolio = await res.json();
+          pools = portfolio.pools || [];
+          log("info", "positions", `Found ${pools.length} pool(s) with open positions`);
+        } else {
+          log("warn", "positions", `Meteora portfolio API ${res.status}`);
+        }
+      } catch (e) {
+        log("warn", "positions", `Meteora portfolio fetch failed: ${e.message}`);
+      }
+    }
+
+    if (pools.length === 0) {
+      log("info", "positions", "No open positions found (relay + Meteora)");
+    }
 
     const binDataByPool = {};
     const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
@@ -396,7 +428,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     }
 
     const result = { wallet: walletAddress, total_positions: positions.length, positions };
-    syncOpenPositions(positions.map(p => p.position));
+    await syncOpenPositions(positions.map(p => p.position));
     positionsCache.set("positions", result, METEORA_POSITIONS_CACHE_TTL_MS);
     return result;
   } catch (error) {
