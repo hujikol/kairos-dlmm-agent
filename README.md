@@ -6,13 +6,11 @@
 
 [![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/meridian-agents/kairos-dllm-agent)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/meridian-agents/kairos-dllm-agent/blob/main/LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.17.0-brightgreen?logo=node.js&logoColor=339933&style=flat-square)](https://nodejs.org)
-[![Solana](https://img.shields.io/badge/Solana-14f195?logo=solana&logoColor=14F195&style=flat-square)](https://solana.com)
-[![Meteora](https://img.shields.io/badge/Meteora-7c3aed)](https://meteora.ag)
-[![Helius](https://img.shields.io/badge/Helius-orange)](https://helius.xyz)
-[![OpenRouter](https://img.shields.io/badge/OpenRouter-c0242f?logo=openai&logoColor=00ACF7&style=flat-square)](https://openrouter.ai)
-[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?logo=telegram&logoColor=2CA5E0&style=flat-square)](https://core.telegram.org)
-[![Status](https://img.shields.io/badge/autonomous-brightgreen)]()
+[![Node](https://img.shields.io/badge/node-%3E%3D20.17.0-brightgreen?logo=node.js&logoColor=339933)](https://nodejs.org)
+[![Solana](https://img.shields.io/badge/Solana-green?logo=solana&logoColor=blue-blue)](https://solana.com)
+[![Meteora](https://img.shields.io/badge/Meteora-red)](https://meteora.ag)
+[![Helius](https://img.shields.io/badge/Helius%20RPC-orange)](https://helius.xyz)
+[![Telegram](https://img.shields.io/badge/Telegram-white?logo=telegram&logoColor=blue)](https://core.telegram.org)
 
 ## Feature Stack
 
