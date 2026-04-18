@@ -357,6 +357,42 @@ async function closePositionFresh(position_address, wallet, reason) {
   }
 }
 
+// ─── Position verification ────────────────────────────────────────
+
+/**
+ * Check whether a position still exists on-chain by querying the authoritative
+ * open-positions list (getAllLbPairPositionsByUser).
+ * @param {string} position_address
+ * @param {object} wallet
+ * @returns {Promise<{exists: boolean, allPositions: Array|Map|null}>}
+ */
+async function verifyPositionStillExists(position_address, wallet) {
+  const { DLMM } = await getDLMM();
+  const rawResult = await DLMM.getAllLbPairPositionsByUser(getConnection(), wallet.publicKey);
+  log("info", "close", `getAllLbPairPositionsByUser returned ${typeof rawResult} (${rawResult?.constructor?.name})`);
+
+  let allPos = [];
+  if (Array.isArray(rawResult)) {
+    allPos = rawResult;
+  } else if (rawResult instanceof Map) {
+    allPos = [...rawResult.values()];
+  } else if (rawResult && typeof rawResult === "object") {
+    const arr = rawResult.positions || rawResult.data || rawResult.result || [];
+    allPos = Array.isArray(arr) ? arr : [arr];
+  }
+  log("info", "close", `Normalized to ${allPos.length} open position(s)`);
+
+  if (allPos.length === 0) {
+    return { exists: false, allPositions: allPos };
+  }
+
+  const stillExists = allPos.some((p) => {
+    const key = p.publicKey?.toString?.() || p.positionAddress || p.address || String(p);
+    return key === position_address;
+  });
+  return { exists: stillExists, allPositions: allPos };
+}
+
 // ─── closePosition ─────────────────────────────────────────────────
 
 /**
@@ -406,55 +442,29 @@ export async function closePosition({ position_address, reason }) {
     // it means the close tx itself failed because the position no longer exists on-chain.
     // HOWEVER: "not found" from pool.getPosition may be a stale cache / SDK lag issue.
     // Verify by calling getAllLbPairPositionsByUser — the authoritative open-positions list.
-    if (error.message.includes("not found") || error.message.includes("already closed")) {
-      log("warn", "close", `Position ${position_address} not found in SDK — verifying on-chain state...`);
-      let actuallyClosed = false;
-      try {
-        const { DLMM } = await getDLMM();
-        const rawResult = await DLMM.getAllLbPairPositionsByUser(getConnection(), wallet.publicKey);
-        log("info", "close", `getAllLbPairPositionsByUser returned ${typeof rawResult} (${rawResult?.constructor?.name})`);
+    if (!error.message.includes("not found") && !error.message.includes("already closed")) {
+      log("error", "close", error.message);
+      return { success: false, error: error.message };
+    }
 
-        // Normalize result — SDK returns either an Array or a Map keyed by position address
-        let allPos = [];
-        if (Array.isArray(rawResult)) {
-          allPos = rawResult;
-        } else if (rawResult instanceof Map) {
-          // Map format: key = position pubkey string, value = position object
-          allPos = [...rawResult.values()];
-        } else if (rawResult && typeof rawResult === "object") {
-          // Maybe an object with positions array
-          const arr = rawResult.positions || rawResult.data || rawResult.result || [];
-          allPos = Array.isArray(arr) ? arr : [arr];
-        }
+    log("warn", "close", `Position ${position_address} not found in SDK — verifying on-chain state...`);
 
-        log("info", "close", `Normalized to ${allPos.length} open position(s)`);
-
-        if (allPos.length === 0) {
-          // No positions returned — treat as closed
-          log("info", "close", `No open positions returned — position ${position_address} is closed on-chain`);
-          actuallyClosed = true;
-        } else {
-          const stillExists = allPos.some(p => {
-            const key = p.publicKey?.toString?.() || p.positionAddress || p.address || String(p);
-            return key === position_address;
-          });
-          if (!stillExists) {
-            log("info", "close", `Verification confirmed: position ${position_address} is closed on-chain`);
-            actuallyClosed = true;
-          } else {
-            log("warn", "close", `Verification FAILED: position ${position_address} still exists on-chain — re-attempting close`);
-            // Position still open — retry close from scratch with fresh SDK resolution
-            return await closePositionFresh(position_address, wallet, reason);
-          }
-        }
-      } catch (verifyErr) {
-        log("error", "close", `Verification call failed: ${verifyErr.message} — attempting fresh close`);
+    let actuallyClosed = false;
+    try {
+      const { exists } = await verifyPositionStillExists(position_address, wallet);
+      if (!exists) {
+        log("info", "close", `Verification confirmed: position ${position_address} is closed on-chain`);
+        actuallyClosed = true;
+      } else {
+        log("warn", "close", `Verification FAILED: position ${position_address} still exists on-chain — re-attempting close`);
         return await closePositionFresh(position_address, wallet, reason);
       }
-      recordClose(position_address, reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"));
-      return { success: actuallyClosed, already_closed: actuallyClosed };
+    } catch (verifyErr) {
+      log("error", "close", `Verification call failed: ${verifyErr.message} — attempting fresh close`);
+      return await closePositionFresh(position_address, wallet, reason);
     }
-    log("error", "close", error.message);
-    return { success: false, error: error.message };
+
+    recordClose(position_address, reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"));
+    return { success: actuallyClosed, already_closed: actuallyClosed };
   }
 }

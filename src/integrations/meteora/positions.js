@@ -26,6 +26,10 @@ import {
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { METEORA_POSITIONS_CACHE_TTL_MS } from "../../core/constants.js";
+
+// ─── Constants ───────────────────────────────────────────────────
+/** Default slippage in basis points (10 bps = 0.1%) */
+const DEFAULT_SLIPPAGE_BPS = 10;
 import { positionsCache } from "../../core/cache-manager.js";
 import { roundTo } from "../../utils/round.js";
 
@@ -210,7 +214,7 @@ export async function deployPosition({
         totalXAmount: totalXLamports,
         totalYAmount: totalYLamports,
         strategy: { minBinId, maxBinId, strategyType },
-        slippage: 10,
+        slippage: DEFAULT_SLIPPAGE_BPS,
       });
       const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
       for (let i = 0; i < addTxArray.length; i++) {
@@ -289,6 +293,151 @@ export async function deployPosition({
   }
 }
 
+// ─── getMyPositions helpers ───────────────────────────────────────
+
+/**
+ * _fetchPositionsFromMeteora — cache check, Meteora portfolio API call,
+ * and Agent Meridian relay fallback.
+ * @param {Object} ctx - Orchestrator context { force, silent }
+ * @param {string} ctx.walletAddress - Solana wallet address
+ * @param {boolean} ctx.force - Bypass cache
+ * @param {boolean} ctx.silent - Suppress logging
+ * @returns {Promise<{ pools: Array, walletAddress: string }>}
+ */
+async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
+  let pools = [];
+
+  // 1. Try Meteora portfolio API first (fastest, freshest on-chain data)
+  if (!silent) log("debug", "positions", "Fetching portfolio via Meteora portfolio API...");
+  try {
+    const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
+    const res = await fetch(portfolioUrl);
+    if (res.ok) {
+      const portfolio = await res.json();
+      pools = portfolio.pools || [];
+      log("debug", "positions", `Meteora returned ${pools.length} pool(s) with open positions`);
+    } else {
+      log("warn", "positions", `Meteora portfolio API ${res.status}`);
+    }
+  } catch (e) {
+    log("warn", "positions", `Meteora portfolio fetch failed: ${e.message}`);
+  }
+
+  // 2. Supplement with Agent Meridian relay if Meteora returned nothing
+  // (relay provides richer data like outOfRange flags but has additional lag)
+  if (pools.length === 0) {
+    if (!silent) log("info", "positions", "Trying Agent Meridian relay for open positions...");
+    try {
+      const relayPositions = await agentMeridianPositions(walletAddress);
+      if (relayPositions && relayPositions.length > 0) {
+        pools = relayPositions.map(p => ({
+          poolAddress: p.pool || p.poolAddress,
+          listPositions: [p.position || p.positionAddress],
+          outOfRange: p.isOutOfRange || false,
+        }));
+        log("info", "positions", `Relay returned ${pools.length} pool(s) with open positions`);
+      }
+    } catch (e) {
+      log("warn", "positions", `Relay fetch failed: ${e.message}`);
+    }
+  }
+
+  if (pools.length === 0) {
+    log("info", "positions", "No open positions found (Meteora + relay)");
+  }
+
+  return { pools, walletAddress };
+}
+
+/**
+ * _enrichPositionsWithPnL — fetches PnL data per pool and builds the enriched
+ * position records with all USD/PnL/bin fields.
+ * @param {Array} pools - Raw pool list from _fetchPositionsFromMeteora
+ * @param {Object} ctx - Orchestrator context { walletAddress, silent }
+ * @returns {Promise<Array>} positions - Enriched position objects
+ */
+async function _enrichPositionsWithPnL(pools, { walletAddress, silent }) {
+  const binDataByPool = {};
+  const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
+  pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });
+
+  const positions = [];
+  for (const pool of pools) {
+    for (const positionAddress of (pool.listPositions || [])) {
+      const tracked = getTrackedPosition(positionAddress);
+      const isOOR = pool.outOfRange || pool.positionsOutOfRange?.includes(positionAddress);
+
+      if (isOOR) markOutOfRange(positionAddress);
+      else markInRange(positionAddress);
+
+      const binData = binDataByPool[pool.poolAddress]?.[positionAddress];
+      const lowerBin  = binData?.lowerBinId      ?? tracked?.bin_range?.min ?? null;
+      const upperBin  = binData?.upperBinId        ?? tracked?.bin_range?.max ?? null;
+      const activeBin = binData?.poolActiveBinId  ?? tracked?.bin_range?.active ?? null;
+
+      const ageFromState = tracked?.deployed_at
+        ? Math.floor((Date.now() - new Date(tracked.deployed_at).getTime()) / 60000)
+        : null;
+
+      positions.push({
+        position:           positionAddress,
+        pool:                pool.poolAddress,
+        pair:                tracked?.pool_name || `${pool.tokenX}/${pool.tokenY}`,
+        base_mint:           pool.tokenXMint,
+        lower_bin:           lowerBin,
+        upper_bin:           upperBin,
+        active_bin:          activeBin,
+        in_range:            !isOOR,
+        unclaimed_fees_usd: roundTo(parseFloat(binData
+          ? config.management.solMode
+            ? parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.amountSol || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.amountSol || 0)
+            : parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)
+          : parseFloat(config.management.solMode ? (pool.unclaimedFeesSol || 0) : (pool.unclaimedFees || 0))), 4),
+        total_value_usd:    roundTo(parseFloat(binData
+          ? config.management.solMode
+            ? parseFloat(binData.unrealizedPnl?.balancesSol || 0)
+            : parseFloat(binData.unrealizedPnl?.balances || 0)
+          : parseFloat(config.management.solMode ? (pool.balancesSol || 0) : (pool.balances || 0))), 4),
+        total_value_true_usd: roundTo(parseFloat(binData
+          ? parseFloat(binData.unrealizedPnl?.balances || 0)
+          : parseFloat(pool.balances || 0)), 4),
+        collected_fees_usd: roundTo(parseFloat(config.management.solMode ? (binData?.allTimeFees?.total?.sol || 0) : (binData?.allTimeFees?.total?.usd || 0)), 4),
+        collected_fees_true_usd: roundTo(parseFloat(binData?.allTimeFees?.total?.usd || 0), 4),
+        pnl_usd:            roundTo(parseFloat(binData
+          ? config.management.solMode ? (binData.pnlSol || 0) : (binData.pnlUsd || 0)
+          : config.management.solMode ? (pool.pnlSol || 0) : (pool.pnl || 0)), 4),
+        pnl_true_usd:       roundTo(parseFloat(binData?.pnlUsd || 0), 4),
+        pnl_pct:            roundTo(parseFloat(binData
+          ? config.management.solMode ? (binData.pnlSolPctChange || 0) : (binData.pnlPctChange || 0)
+          : config.management.solMode ? (pool.pnlSolPctChange || 0) : (pool.pnlPctChange || 0)), 2),
+        unclaimed_fees_true_usd: roundTo(parseFloat(binData
+          ? parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)
+          : parseFloat(pool.unclaimedFees || 0)), 4),
+        fee_per_tvl_24h:    roundTo(parseFloat(binData?.feePerTvl24h || pool.feePerTvl24h || 0), 2),
+        age_minutes:        binData?.createdAt ? Math.floor((Date.now() - binData.createdAt * 1000) / 60000) : ageFromState,
+        minutes_out_of_range: minutesOutOfRange(positionAddress),
+        instruction:        tracked?.instruction ?? null,
+      });
+    }
+  }
+
+  return positions;
+}
+
+/**
+ * _syncPositionsWithState — reconciles open positions with local SQLite state
+ * (auto-closes missing positions after grace period) and writes to cache.
+ * @param {Array} positions - Enriched positions from _enrichPositionsWithPnL
+ * @param {Object} ctx - Orchestrator context { walletAddress }
+ * @returns {Promise<Object>} Final result object { wallet, total_positions, positions }
+ */
+async function _syncPositionsWithState(positions, { walletAddress }) {
+  await syncOpenPositions(positions.map(p => p.position));
+  const result = { wallet: walletAddress, total_positions: positions.length, positions };
+  positionsCache.set("positions", result, METEORA_POSITIONS_CACHE_TTL_MS);
+  return result;
+}
+
 // ─── getMyPositions ─────────────────────────────────────────────────
 
 /**
@@ -327,116 +476,17 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
 
   if (inflight) return inflight;
 
+  const ctx = { walletAddress, force, silent };
+
   inflight = (async () => { try {
-    let pools = [];
+    // Step 1: fetch raw pools from Meteora API / relay fallback
+    const { pools } = await _fetchPositionsFromMeteora(ctx);
 
-    // 1. Try Meteora portfolio API first (fastest, freshest on-chain data)
-    if (!silent) log("debug", "positions", "Fetching portfolio via Meteora portfolio API...");
-    try {
-      const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
-      const res = await fetch(portfolioUrl);
-      if (res.ok) {
-        const portfolio = await res.json();
-        pools = portfolio.pools || [];
-        log("debug", "positions", `Meteora returned ${pools.length} pool(s) with open positions`);
-      } else {
-        log("warn", "positions", `Meteora portfolio API ${res.status}`);
-      }
-    } catch (e) {
-      log("warn", "positions", `Meteora portfolio fetch failed: ${e.message}`);
-    }
+    // Step 2: enrich with PnL data and build position records
+    const positions = await _enrichPositionsWithPnL(pools, ctx);
 
-    // 2. Supplement with Agent Meridian relay if Meteora returned nothing
-    // (relay provides richer data like outOfRange flags but has additional lag)
-    if (pools.length === 0) {
-      if (!silent) log("info", "positions", "Trying Agent Meridian relay for open positions...");
-      try {
-        const relayPositions = await agentMeridianPositions(walletAddress);
-        if (relayPositions && relayPositions.length > 0) {
-          pools = relayPositions.map(p => ({
-            poolAddress: p.pool || p.poolAddress,
-            listPositions: [p.position || p.positionAddress],
-            outOfRange: p.isOutOfRange || false,
-          }));
-          log("info", "positions", `Relay returned ${pools.length} pool(s) with open positions`);
-        }
-      } catch (e) {
-        log("warn", "positions", `Relay fetch failed: ${e.message}`);
-      }
-    }
-
-    if (pools.length === 0) {
-      log("info", "positions", "No open positions found (Meteora + relay)");
-    }
-
-    const binDataByPool = {};
-    const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
-    pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });
-
-    const positions = [];
-    for (const pool of pools) {
-      for (const positionAddress of (pool.listPositions || [])) {
-        const tracked = getTrackedPosition(positionAddress);
-        const isOOR = pool.outOfRange || pool.positionsOutOfRange?.includes(positionAddress);
-
-        if (isOOR) markOutOfRange(positionAddress);
-        else markInRange(positionAddress);
-
-        const binData = binDataByPool[pool.poolAddress]?.[positionAddress];
-        const lowerBin  = binData?.lowerBinId      ?? tracked?.bin_range?.min ?? null;
-        const upperBin  = binData?.upperBinId        ?? tracked?.bin_range?.max ?? null;
-        const activeBin = binData?.poolActiveBinId  ?? tracked?.bin_range?.active ?? null;
-
-        const ageFromState = tracked?.deployed_at
-          ? Math.floor((Date.now() - new Date(tracked.deployed_at).getTime()) / 60000)
-          : null;
-
-        positions.push({
-          position:           positionAddress,
-          pool:                pool.poolAddress,
-          pair:                tracked?.pool_name || `${pool.tokenX}/${pool.tokenY}`,
-          base_mint:           pool.tokenXMint,
-          lower_bin:           lowerBin,
-          upper_bin:           upperBin,
-          active_bin:          activeBin,
-          in_range:            !isOOR,
-          unclaimed_fees_usd: roundTo(parseFloat(binData
-            ? config.management.solMode
-              ? parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.amountSol || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.amountSol || 0)
-              : parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)
-            : parseFloat(config.management.solMode ? (pool.unclaimedFeesSol || 0) : (pool.unclaimedFees || 0))), 4),
-          total_value_usd:    roundTo(parseFloat(binData
-            ? config.management.solMode
-              ? parseFloat(binData.unrealizedPnl?.balancesSol || 0)
-              : parseFloat(binData.unrealizedPnl?.balances || 0)
-            : parseFloat(config.management.solMode ? (pool.balancesSol || 0) : (pool.balances || 0))), 4),
-          total_value_true_usd: roundTo(parseFloat(binData
-            ? parseFloat(binData.unrealizedPnl?.balances || 0)
-            : parseFloat(pool.balances || 0)), 4),
-          collected_fees_usd: roundTo(parseFloat(config.management.solMode ? (binData?.allTimeFees?.total?.sol || 0) : (binData?.allTimeFees?.total?.usd || 0)), 4),
-          collected_fees_true_usd: roundTo(parseFloat(binData?.allTimeFees?.total?.usd || 0), 4),
-          pnl_usd:            roundTo(parseFloat(binData
-            ? config.management.solMode ? (binData.pnlSol || 0) : (binData.pnlUsd || 0)
-            : config.management.solMode ? (pool.pnlSol || 0) : (pool.pnl || 0)), 4),
-          pnl_true_usd:       roundTo(parseFloat(binData?.pnlUsd || 0), 4),
-          pnl_pct:            roundTo(parseFloat(binData
-            ? config.management.solMode ? (binData.pnlSolPctChange || 0) : (binData.pnlPctChange || 0)
-            : config.management.solMode ? (pool.pnlSolPctChange || 0) : (pool.pnlPctChange || 0)), 2),
-          unclaimed_fees_true_usd: roundTo(parseFloat(binData
-            ? parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)
-            : parseFloat(pool.unclaimedFees || 0)), 4),
-          fee_per_tvl_24h:    roundTo(parseFloat(binData?.feePerTvl24h || pool.feePerTvl24h || 0), 2),
-          age_minutes:        binData?.createdAt ? Math.floor((Date.now() - binData.createdAt * 1000) / 60000) : ageFromState,
-          minutes_out_of_range: minutesOutOfRange(positionAddress),
-          instruction:        tracked?.instruction ?? null,
-        });
-      }
-    }
-
-    const result = { wallet: walletAddress, total_positions: positions.length, positions };
-    await syncOpenPositions(positions.map(p => p.position));
-    positionsCache.set("positions", result, METEORA_POSITIONS_CACHE_TTL_MS);
-    return result;
+    // Step 3: sync with local SQLite state and cache result
+    return await _syncPositionsWithState(positions, ctx);
   } catch (error) {
     log("error", "positions", `Portfolio fetch failed: ${error.stack || error.message}`);
     return { wallet: walletAddress, total_positions: 0, positions: [], error: error.message };

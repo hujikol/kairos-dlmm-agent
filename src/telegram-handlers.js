@@ -23,6 +23,16 @@ const MAX_TELEGRAM_QUEUE = 5;
 const TOKEN_SWAP_MIN_BALANCE = 0.01;
 
 export { MAX_TELEGRAM_QUEUE, TOKEN_SWAP_MIN_BALANCE };
+
+// Safe error sender — sends HTML error message, logs any send failure silently
+async function safeSendError(ctx, error) {
+  try {
+    await ctx.sendHTML(`<b>Error:</b> <code>${escapeHTML(error?.message || String(error))}</code>`);
+  } catch (e) {
+    log("error", "telegram-handler", "Telegram send failed", { error: e?.message });
+  }
+}
+
 export async function drainTelegramQueue() {
   while (_telegramQueue.length > 0 && !_busyState._managementBusy && !_busyState._screeningBusy && !_telegramBusyState._busy) {
     const queued = _telegramQueue.shift();
@@ -114,9 +124,9 @@ export async function telegramHandler(text) {
   if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._busy) {
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(text);
-      sendHTML(`⏳ <b>Queued</b> (${_telegramQueue.length} in queue): "<i>${escapeHTML(text.slice(0, 60))}</i>"`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message }));
+      safeSendError(_telegramBusyState, text);
     } else {
-      sendHTML(`Queue is full (${MAX_TELEGRAM_QUEUE} messages). Wait for the agent to finish.`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message }));
+      safeSendError(_telegramBusyState, new Error(`Queue is full (${MAX_TELEGRAM_QUEUE} messages). Wait for the agent to finish.`));
     }
     return;
   }
@@ -127,7 +137,7 @@ export async function telegramHandler(text) {
       await sendHTML(briefing);
     } catch (e) {
       log("warn", "telegram", `Briefing generation failed: ${e.message}`);
-      await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message }));
+      safeSendError(_telegramBusyState, e);
     }
     return;
   }
@@ -228,7 +238,7 @@ export async function telegramHandler(text) {
       } else {
         await sendHTML(`❌ Sweep failed: <code>${escapeHTML(result.error)}</code>`);
       }
-    } catch (e) { log("warn", "telegram", `Swap-all failed: ${e.message}`); await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
+    } catch (e) { log("warn", "telegram", `Swap-all failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
     return;
   }
 
@@ -324,7 +334,7 @@ export async function telegramHandler(text) {
       } else {
         await sendHTML(`❌ Close failed: <code>${escapeHTML(JSON.stringify(result))}</code>`);
       }
-    } catch (e) { log("warn", "telegram", `Close command failed: ${e.message}`); await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
+    } catch (e) { log("warn", "telegram", `Close command failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
     return;
   }
 
@@ -339,7 +349,7 @@ export async function telegramHandler(text) {
       const { setPositionInstruction } = await import("./core/state/index.js");
       setPositionInstruction(pos.position, note);
       await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
-    } catch (e) { log("warn", "telegram", `Set instruction failed: ${e.message}`); await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
+    } catch (e) { log("warn", "telegram", `Set instruction failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
     return;
   }
 
@@ -347,7 +357,7 @@ export async function telegramHandler(text) {
   if (teachMatch) {
     try {
       await handleTeachCommand(teachMatch[1].trim(), { sendHTML, escapeHTML });
-    } catch (e) { log("warn", "telegram", `Teach command failed: ${e.message}`); await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
+    } catch (e) { log("warn", "telegram", `Teach command failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
     return;
   }
 
@@ -362,7 +372,7 @@ export async function telegramHandler(text) {
     await sendHTML(`<pre>${escapeHTML(stripThink(content))}</pre>`);
   } catch (e) {
     log("warn", "telegram", `Agent chat failed: ${e.message}`);
-    await sendHTML(`<b>Error:</b> <code>${escapeHTML(e.message)}</code>`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message }));
+    safeSendError(_telegramBusyState, e);
   } finally {
     _telegramBusyState._busy = false;
     drainTelegramQueue().catch(err => log("warn", "telegram", `drainTelegramQueue failed: ${err?.message || err}`));

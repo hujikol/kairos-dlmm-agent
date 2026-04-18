@@ -94,7 +94,8 @@ export async function sendTx(tx, signers) {
 }
 
 // ─── Pool Cache ────────────────────────────────────────────────
-const POOL_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// 10 minutes — no shared constant exists in core/constants.js for this TTL
+const POOL_CACHE_TTL_MS = 10 * 60 * 1000;
 
 // ─── Test injection hook ────────────────────────────────────────
 

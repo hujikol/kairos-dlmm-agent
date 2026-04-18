@@ -21,6 +21,16 @@ if (fs.existsSync(kairosEnv)) {
   loadDotenv({ path: kairosEnv, override: false });
 }
 
+// ─── Command defaults ───────────────────────────────────────────────
+const COMMAND_DEFAULTS = {
+  CANDIDATES_LIMIT:    5,
+  TOKEN_HOLDERS_LIMIT: 20,
+  SEARCH_POOLS_LIMIT:  10,
+  STUDY_LIMIT:          4,
+  LESSONS_LIMIT:       50,
+  PERFORMANCE_LIMIT:  200,
+};
+
 // ─── Output helpers ───────────────────────────────────────────────
 function out(data) {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
@@ -303,7 +313,7 @@ switch (subcommand) {
     const { checkSmartWalletsOnPool } = await import("./features/smart-wallets.js");
     const { recallForPool } = await import("./features/pool-memory.js");
 
-    const limit = parseInt(flags.limit || "5");
+    const limit = parseInt(flags.limit || String(COMMAND_DEFAULTS.CANDIDATES_LIMIT));
     const raw = await getTopCandidates({ limit });
     const pools = raw.candidates || raw.pools || [];
 
@@ -372,7 +382,7 @@ switch (subcommand) {
     const mint = flags.mint || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "token-holders");
     if (!mint) die("Usage: kairos token-holders --mint <addr>");
     const { getTokenHolders } = await import("./integrations/jupiter.js");
-    const limit = flags.limit ? parseInt(flags.limit) : 20;
+    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.TOKEN_HOLDERS_LIMIT;
     out(await getTokenHolders({ mint, limit }));
     break;
   }
@@ -399,7 +409,7 @@ switch (subcommand) {
     const query = flags.query || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "search-pools");
     if (!query) die("Usage: kairos search-pools --query <name_or_symbol>");
     const { searchPools } = await import("./integrations/meteora.js");
-    const limit = flags.limit ? parseInt(flags.limit) : 10;
+    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.SEARCH_POOLS_LIMIT;
     out(await searchPools({ query, limit }));
     break;
   }
@@ -511,7 +521,7 @@ switch (subcommand) {
   case "study": {
     if (!flags.pool) die("Usage: kairos study --pool <addr> [--limit 4]");
     const { studyTopLPers } = await import("./integrations/lpagent.js");
-    const limit = flags.limit ? parseInt(flags.limit) : 4;
+    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.STUDY_LIMIT;
     out(await studyTopLPers({ pool_address: flags.pool, limit }));
     break;
   }
@@ -534,7 +544,7 @@ switch (subcommand) {
       out({ saved: true, rule: text, outcome: "manual", role: null });
     } else {
       const { listLessons } = await import("./core/lessons.js");
-      const limit = flags.limit ? parseInt(flags.limit) : 50;
+      const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.LESSONS_LIMIT;
       out(listLessons({ limit }));
     }
     break;
@@ -586,7 +596,7 @@ switch (subcommand) {
   // ── performance ──────────────────────────────────────────────────
   case "performance": {
     const { getPerformanceHistory, getPerformanceSummary } = await import("./core/lessons.js");
-    const limit = flags.limit ? parseInt(flags.limit) : 200;
+    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.PERFORMANCE_LIMIT;
     const history = getPerformanceHistory({ hours: 999999, limit });
     const summary = getPerformanceSummary();
     out({ summary, ...history });
