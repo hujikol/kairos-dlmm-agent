@@ -24,6 +24,16 @@ export function getWallet() {
   return _wallet;
 }
 
+async function getDecimals(mint) {
+  const connection = getConnection();
+  const normalized = normalizeMint(mint);
+  if (normalized === normalizeMint(config.tokens.SOL)) return 9;
+  try {
+    const mintInfo = await connection.getParsedAccountInfo(new PublicKey(normalized));
+    return mintInfo.value?.data?.parsed?.info?.decimals ?? 9;
+  } catch { return 9; }
+}
+
 /**
  * Swap tokens via Jupiter Ultra API (order → sign → execute).
  * Falls back to the standard Jupiter quote API if Ultra is unavailable.
@@ -161,5 +171,14 @@ async function swapViaQuoteApi({ wallet, connection, input_mint, output_mint, am
   await connection.confirmTransaction(txHash, "confirmed");
 
   log("info", "swap", `SUCCESS (fallback) tx: ${txHash}`);
-  return { success: true, tx: txHash, input_mint, output_mint };
+  const inDecimals = await getDecimals(input_mint);
+  const outDecimals = await getDecimals(output_mint);
+  return {
+    success: true,
+    tx: txHash,
+    input_mint,
+    output_mint,
+    amount_in: parseFloat(quote.inAmount) / Math.pow(10, inDecimals),
+    amount_out: parseFloat(quote.outAmount) / Math.pow(10, outDecimals),
+  };
 }

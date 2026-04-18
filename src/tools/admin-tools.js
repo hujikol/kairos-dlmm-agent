@@ -41,6 +41,16 @@ Reason is optional but helpful — logged as a lesson when provided.`,
   {
     type: "function",
     function: {
+      name: "run_management_cycle",
+      description: `Run the management cycle immediately — check all open positions, apply rules (close/claim/stay), update PnL and trailing TP, handle OOR positions.
+Use when the user says "manage", "run management", "check positions", "update positions", "manage positions", or "run cycles".`,
+      parameters: { type: "object", properties: {} }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
       name: "self_update",
       description: `Pull the latest code from git and restart the agent.
 Use when the user says "update", "pull latest", "update yourself", etc.

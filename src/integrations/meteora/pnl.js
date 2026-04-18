@@ -2,9 +2,26 @@ import { config } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
-import { getWallet } from "./pool.js";
+import { getWallet, getConnection, DLMM_PROGRAM } from "./pool.js";
 import { PNL_TIMEOUT_MS } from "../../core/constants.js";
 import { agentMeridianPnl } from "../../tools/agent-meridian.js";
+import { PublicKey } from "@solana/web3.js";
+
+/**
+ * Check if a position account exists on-chain via program account scan.
+ * Used to distinguish "position closed on-chain" from "PnL API temporarily unavailable".
+ * @param {string} positionAddress
+ * @returns {Promise<boolean>}
+ */
+export async function positionExistsOnChain(positionAddress) {
+  try {
+    const connection = getConnection();
+    const accountInfo = await connection.getAccountInfo(new PublicKey(positionAddress));
+    return accountInfo !== null && accountInfo.owner.equals(DLMM_PROGRAM);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Fetch raw PnL data from Meteora DLMM API for all positions in a pool for a wallet.
@@ -81,28 +98,65 @@ export async function getPositionPnl({ pool_address, position_address }) {
   } catch {
     return { error: "Wallet not configured" };
   }
-  try {
-    const byAddress = await fetchDlmmPnlForPool(pool_address, walletAddress);
-    const p = byAddress[position_address];
-    if (!p) return { error: "Position not found in PnL API" };
 
-    const unclaimedUsd    = parseFloat(p.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(p.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0);
-    const currentValueUsd = parseFloat(p.unrealizedPnl?.balances || 0);
-    return {
-      pnl_usd:           Math.round((p.pnlUsd ?? 0) * 100) / 100,
-      pnl_pct:           Math.round((p.pnlPctChange ?? 0) * 100) / 100,
-      current_value_usd: Math.round(currentValueUsd * 100) / 100,
-      unclaimed_fee_usd: Math.round(unclaimedUsd * 100) / 100,
-      all_time_fees_usd: Math.round(parseFloat(p.allTimeFees?.total?.usd || 0) * 100) / 100,
-      fee_per_tvl_24h:   Math.round(parseFloat(p.feePerTvl24h || 0) * 100) / 100,
-      in_range:    !p.isOutOfRange,
-      lower_bin:   p.lowerBinId      ?? null,
-      upper_bin:   p.upperBinId      ?? null,
-      active_bin:  p.poolActiveBinId ?? null,
-      age_minutes: p.createdAt ? Math.floor((Date.now() - p.createdAt * 1000) / 60000) : null,
-    };
+  let byAddress;
+  try {
+    byAddress = await fetchDlmmPnlForPool(pool_address, walletAddress);
   } catch (error) {
-    log("error", "pnl", error.message);
-    return { error: error.message };
+    // Network error from fetch — verify position still exists on-chain before
+    // counting this as a failure. PnL API can be unavailable while position is fine.
+    log("warn", "pnl", `PnL API fetch failed for ${addrShort(position_address)}: ${error.message}`);
+    const onChain = await positionExistsOnChain(position_address);
+    if (onChain) {
+      log("info", "pnl", `PnL API unreachable but position ${addrShort(position_address)} confirmed on-chain — partial data returned`);
+      return {
+        pnl_usd: 0, pnl_pct: 0, current_value_usd: 0, unclaimed_fee_usd: 0,
+        all_time_fees_usd: 0, fee_per_tvl_24h: 0,
+        in_range: null, lower_bin: null, upper_bin: null, active_bin: null, age_minutes: null,
+        _apiGap: true,
+      };
+    }
+    return { error: `PnL API fetch failed: ${error.message}` };
   }
+
+  const p = byAddress[position_address];
+  if (!p) {
+    // Position not in PnL API response — verify on-chain before declaring stale.
+    // PnL API can have temporary gaps even for open positions.
+    const onChain = await positionExistsOnChain(position_address);
+    if (onChain) {
+      log("info", "pnl", `Position ${addrShort(position_address)} not in PnL API but confirmed on-chain — returning partial data`);
+      return {
+        pnl_usd: 0,
+        pnl_pct: 0,
+        current_value_usd: 0,
+        unclaimed_fee_usd: 0,
+        all_time_fees_usd: 0,
+        fee_per_tvl_24h: 0,
+        in_range: null,
+        lower_bin: null,
+        upper_bin: null,
+        active_bin: null,
+        age_minutes: null,
+        _apiGap: true,
+      };
+    }
+    return { error: "Position not found in PnL API" };
+  }
+
+  const unclaimedUsd    = parseFloat(p.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(p.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0);
+  const currentValueUsd = parseFloat(p.unrealizedPnl?.balances || 0);
+  return {
+    pnl_usd:           Math.round((p.pnlUsd ?? 0) * 100) / 100,
+    pnl_pct:           Math.round((p.pnlPctChange ?? 0) * 100) / 100,
+    current_value_usd: Math.round(currentValueUsd * 100) / 100,
+    unclaimed_fee_usd: Math.round(unclaimedUsd * 100) / 100,
+    all_time_fees_usd: Math.round(parseFloat(p.allTimeFees?.total?.usd || 0) * 100) / 100,
+    fee_per_tvl_24h:   Math.round(parseFloat(p.feePerTvl24h || 0) * 100) / 100,
+    in_range:    !p.isOutOfRange,
+    lower_bin:   p.lowerBinId      ?? null,
+    upper_bin:   p.upperBinId      ?? null,
+    active_bin:  p.poolActiveBinId ?? null,
+    age_minutes: p.createdAt ? Math.floor((Date.now() - p.createdAt * 1000) / 60000) : null,
+  };
 }

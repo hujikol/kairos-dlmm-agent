@@ -92,48 +92,104 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     const needsAction = [...actionMap.values()].filter(a => a.action !== "STAY");
     mgmtReport = buildManagementReport(positionData, actionMap, positions, config);
 
-    // ── Call LLM only if action needed ──────────────────────────────
-    const actionPositions = positionData.filter(p => {
+    // ── Execute deterministic CLOSE/CLAIM directly (no LLM) ─────────
+    const closeActions = positionData.filter(p => {
       const a = actionMap.get(p.position);
-      return a.action !== "STAY";
+      return a?.action === "CLOSE";
+    });
+    const claimActions = positionData.filter(p => {
+      const a = actionMap.get(p.position);
+      return a?.action === "CLAIM";
+    });
+    const instructionActions = positionData.filter(p => {
+      const a = actionMap.get(p.position);
+      return a?.action === "INSTRUCTION";
     });
 
-    if (actionPositions.length > 0) {
-      log("debug", "cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM`);
+    // Direct close execution — bypasses LLM entirely
+    const { closePosition } = await import("../integrations/meteora/close.js");
+    const { claimFees } = await import("../integrations/meteora/close.js");
+    const closeResults = [];
+    for (const p of closeActions) {
+      const act = actionMap.get(p.position);
+      const reason = act.reason || "agent decision";
+      log("info", "cron", `Direct CLOSE: ${p.pair} (${p.position}) — ${reason}`);
+      try {
+        const result = await closePosition({ position_address: p.position, reason });
+        closeResults.push({ position: p, result, reason });
+        if (result.success !== false) {
+          pushNotification({
+            type: "close",
+            pair: p.pair,
+            pnlUsd: result.pnl_usd ?? p.pnl_usd ?? 0,
+            pnlPct: result.pnl_pct ?? p.pnl_pct ?? 0,
+            reason,
+          });
+          mgmtReport += `\n✅ Closed ${p.pair}: ${reason} (PnL: ${result.pnl_pct ?? p.pnl_pct ?? "?"}%)`;
+        } else {
+          log("error", "cron", `Direct CLOSE failed for ${p.pair}: ${result.error}`);
+          mgmtReport += `\n❌ Close failed ${p.pair}: ${result.error}`;
+        }
+      } catch (e) {
+        log("error", "cron", `Direct CLOSE error for ${p.pair}: ${e.message}`);
+        mgmtReport += `\n❌ Close error ${p.pair}: ${e.message}`;
+      }
+    }
+
+    // Direct claim execution — bypasses LLM entirely
+    for (const p of claimActions) {
+      log("info", "cron", `Direct CLAIM: ${p.pair} (${p.position})`);
+      try {
+        const result = await claimFees({ position_address: p.position });
+        if (result.success !== false) {
+          pushNotification({
+            type: "claim",
+            pair: p.pair,
+            usd: p.unclaimed_fees_usd ?? 0,
+          });
+          mgmtReport += `\n💰 Claimed fees ${p.pair}: $${(p.unclaimed_fees_usd ?? 0).toFixed(2)}`;
+        } else {
+          log("warn", "cron", `Direct CLAIM failed for ${p.pair}: ${result.error}`);
+        }
+      } catch (e) {
+        log("error", "cron", `Direct CLAIM error for ${p.pair}: ${e.message}`);
+      }
+    }
+
+    // Only INSTRUCTION actions go to LLM (require interpretation)
+    if (instructionActions.length > 0) {
+      log("debug", "cron", `Management: ${instructionActions.length} INSTRUCTION action(s) — invoking LLM`);
 
       const cur = config.management.solMode ? "◎" : "$";
-      const actionBlocks = actionPositions.map((p) => {
+      const actionBlocks = instructionActions.map((p) => {
         const act = actionMap.get(p.position);
         return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,
-          `  action: ${act.action}${act.rule && act.rule !== "exit" ? ` — Rule ${act.rule}: ${act.reason}` : ""}${act.rule === "exit" ? ` — ⚡ Trailing TP: ${act.reason}` : ""}`,
+          `  action: INSTRUCTION`,
           `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd} | fee_per_tvl_24h: ${p.fee_per_tvl_24h ?? "?"}%`,
           `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
-          p.instruction ? `  instruction: "${p.instruction}"` : null,
+          `  instruction: "${p.instruction}"`,
         ].filter(Boolean).join("\n");
       }).join("\n\n");
 
       const { content } = await gateway.runManagementCycle({
         actionBlocks,
-        actionPositions,
+        actionPositions: instructionActions,
         currentBalance,
         livePositions,
       });
 
       mgmtReport += `\n\n${content}`;
-
-      // ═══════════════════════════════════════════
-      //  POST-TRADE: Auto-swap fee tokens to SOL
-      // ═══════════════════════════════════════════
-      const executedActions = actionPositions.filter(p => {
-        const a = actionMap.get(p.position);
-        return a?.action === "CLAIM" || a?.action === "CLOSE";
-      });
-      await autoSwapAndNotify(executedActions);
-    } else {
-      log("debug", "cron", "Management: all positions STAY — skipping LLM");
+    } else if (closeActions.length === 0 && claimActions.length === 0) {
+      log("debug", "cron", "Management: all positions STAY — skipping");
     }
+
+    // ═══════════════════════════════════════════
+    //  POST-TRADE: Auto-swap fee tokens to SOL
+    // ═══════════════════════════════════════════
+    const executedActions = [...closeActions, ...claimActions];
+    await autoSwapAndNotify(executedActions);
 
     // Trigger screening after management if we expect to be under max positions
     // Skip if circuit breaker is in halt mode

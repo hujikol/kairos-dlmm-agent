@@ -99,6 +99,14 @@ export async function startWatchdog(config) {
           continue;
         }
 
+        // PnL API had a gap but position confirmed on-chain — skip failure counting
+        // but do not update PnL state (leave previous reading intact)
+        if (live._apiGap) {
+          log("warn", "watchdog", `PnL API gap for ${pos.position} — position verified on-chain, skipping PnL update`);
+          clearFailure(pos.position);
+          continue;
+        }
+
         // Successful poll — clear any accumulated failure count
         clearFailure(pos.position);
 

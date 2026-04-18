@@ -23,21 +23,27 @@ export async function autoSwapRewardFees(mints = null) {
       t.usd >= 0.10
     );
 
-    // ─── Direct Fallback for provided mints (Helius lag) ───────
+    // ─── Direct Fallback for provided mints (Helius lag or stale balance) ─────
     if (mints && mints.length > 0) {
-      const foundMints = new Set(tokensToSwap.map(t => t.mint));
-      const missingMints = mints.filter(m => !foundMints.has(m) && m !== config.tokens.SOL);
-
-      if (missingMints.length > 0) {
-        log("info", "wallet", `Checking direct balance for ${missingMints.length} missing mint(s) due to Helius API lag...`);
-        for (const mint of missingMints) {
-          const bal = await getMintBalance(mint);
-          if (bal > 0) {
-            // usd=1.0 is a Helius placeholder — only set when balance > 0 (skip dust/zero-value tokens)
-            tokensToSwap.push({ mint, balance: bal, symbol: addrShort(mint), usd: bal > 0 ? 1.0 : 0 });
-          } else {
-            log("info", "wallet", `Skipped ${addrShort(mint)}: Direct balance is 0.`);
-          }
+      // Always check on-chain balance directly for provided mints — Helius may be stale
+      log("info", "wallet", `Checking direct on-chain balance for ${mints.length} mint(s) due to Helius lag or stale index...`);
+      for (const mint of mints) {
+        if (mint === normalizeMint(config.tokens.SOL)) continue;
+        const bal = await getMintBalance(mint);
+        const existing = tokensToSwap.find(t => normalizeMint(t.mint) === normalizeMint(mint));
+        if (bal > 0 && !existing) {
+          // On-chain has balance but Helius didn't show it (lag) — add it
+          tokensToSwap.push({ mint, balance: bal, symbol: addrShort(mint), usd: 1.0 });
+          log("info", "wallet", `Direct balance found for ${addrShort(mint)}: ${bal} (Helius was stale/missing)`);
+        } else if (bal > 0 && existing) {
+          // On-chain has balance AND Helius showed it — trust on-chain for actual balance
+          existing.balance = bal;
+          existing.usd = 1.0; // treat as >= $0.10 so filter passes
+          log("info", "wallet", `Updated balance for ${addrShort(mint)} from on-chain: ${bal} (replaced Helius stale)`);
+        } else if (existing && bal === 0) {
+          // Helius showed balance but on-chain is 0 — Helius is stale, remove it
+          tokensToSwap = tokensToSwap.filter(t => normalizeMint(t.mint) !== normalizeMint(mint));
+          log("info", "wallet", `Removed stale Helius entry for ${addrShort(mint)}: on-chain balance is 0`);
         }
       }
     }

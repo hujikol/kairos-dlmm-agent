@@ -22,6 +22,7 @@ export const INTENT_PATTERNS = [
   { intent: "smartwallet", re: /\b(smart wallet|kol|whale|watch.?list|add wallet|remove wallet|list wallet|tracked wallet|check pool|who.?s in|wallets in|add to (smart|watch|kol))\b/i },
   { intent: "study",       re: /\b(study top|top lpers?|best lpers?|who.?s lping|lp behavior|lpers?)\b/i },
   { intent: "performance", re: /\b(performance|history|how.?s the bot|how.?s it doing|stats|report)\b/i },
+  { intent: "manage",      re: /\b(manage|management.?cycle|run.?manage|check positions|update positions|manage positions|run cycles)\b/i },
   { intent: "lessons",     re: /\b(lesson|learned|teach|pin|unpin|clear lesson|what did you learn)\b/i },
 ];
 
@@ -42,6 +43,7 @@ export const INTENT_TOOLS = {
   smartwallet: new Set(["add_smart_wallet", "remove_smart_wallet", "list_smart_wallets", "check_smart_wallets_on_pool"]),
   study:       new Set(["study_top_lpers", "get_top_lpers", "get_pool_detail", "search_pools", "get_token_info", "discover_pools", "add_smart_wallet", "list_smart_wallets"]),
   performance: new Set(["get_performance_history", "get_my_positions", "get_position_pnl"]),
+  manage:      new Set(["run_management_cycle", "get_my_positions", "get_position_pnl", "close_position", "claim_fees"]),
   lessons:     new Set(["add_lesson", "pin_lesson", "unpin_lesson", "list_lessons", "clear_lessons"]),
 };
 

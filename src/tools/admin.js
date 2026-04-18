@@ -14,6 +14,7 @@ import {
 } from "../core/strategy-library.js";
 import { config, USER_CONFIG_PATH } from "../config.js";
 import { log, logAction } from "../core/logger.js";
+import { runManagementCycle } from "../core/cycles.js";
 
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }
@@ -66,6 +67,15 @@ const CONFIG_MAP = {
 };
 
 export function registerAdmin(registerTool) {
+  registerTool("run_management_cycle", async () => {
+    try {
+      const report = await runManagementCycle({ silent: false });
+      return { success: true, report: report || "No action taken" };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   registerTool("self_update", async () => {
     try {
       const result = execSync("git pull", { cwd: process.cwd(), encoding: "utf8" }).trim();

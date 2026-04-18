@@ -89,8 +89,23 @@ export function _injectSendTx(fn) {
 
 export async function sendTx(tx, signers) {
   if (_sendTxOverride) return _sendTxOverride(tx, signers);
-  tx = applyPriorityFee(tx);
-  return await sendAndConfirmTransaction(getConnection(), tx, signers);
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const txCopy = applyPriorityFee(tx);
+      return await sendAndConfirmTransaction(getConnection(), txCopy, signers);
+    } catch (err) {
+      const isRetryable = err.name === "SendTransactionError"
+        || err.message?.includes("Blockhash not found")
+        || err.message?.includes("block height exceeded")
+        || err.message?.includes("timeout")
+        || err.message?.includes("429");
+      if (!isRetryable || attempt === maxRetries) throw err;
+      const delayMs = 1000 * Math.pow(2, attempt - 1); // 1s, 2s
+      log("warn", "tx", `sendTx attempt ${attempt}/${maxRetries} failed: ${err.message} — retrying in ${delayMs}ms`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
 }
 
 // ─── Pool Cache ────────────────────────────────────────────────
@@ -234,11 +249,36 @@ export async function lookupPoolForPosition(position_address, walletAddress, pos
     new PublicKey(walletAddress)
   );
 
-  // Fallback: if tracked has the pool, return it even if SDK scan missed it
-  // (SDK can miss positions due to RPC lag or async state)
-  if (tracked?.pool) {
-    log("warn", "pool", `lookupPoolForPosition: SDK missed ${position_address}, using tracked pool ${tracked.pool}`);
-    return tracked.pool;
+  // Search the SDK scan result for the position's pool address.
+  // getAllLbPairPositionsByUser returns Map<string, {lbPair, positionData[]}> or Array.
+  const entries = allPositions instanceof Map
+    ? [...allPositions.entries()]
+    : Array.isArray(allPositions)
+      ? allPositions.map(e => [e.lbPair?.toString?.() || e.poolAddress, e])
+      : [];
+
+  for (const [poolKey, entry] of entries) {
+    // Check positionData array (Map-based SDK response)
+    const posDataArr = entry?.positionData ?? entry?.positions ?? [];
+    for (const pos of (Array.isArray(posDataArr) ? posDataArr : [])) {
+      const pk = pos.publicKey?.toString?.() || pos.positionAddress || pos.address;
+      if (pk === position_address) {
+        const resolvedPool = poolKey?.toString?.() || entry?.lbPair?.toString?.();
+        if (resolvedPool) {
+          log("info", "pool", `lookupPoolForPosition: found ${position_address} in pool ${resolvedPool} via SDK scan`);
+          return resolvedPool;
+        }
+      }
+    }
+    // Check top-level publicKey (Array-based SDK response)
+    const topKey = entry?.publicKey?.toString?.() || entry?.positionAddress;
+    if (topKey === position_address) {
+      const resolvedPool = poolKey?.toString?.() || entry?.lbPair?.toString?.();
+      if (resolvedPool) {
+        log("info", "pool", `lookupPoolForPosition: found ${position_address} in pool ${resolvedPool} via SDK scan`);
+        return resolvedPool;
+      }
+    }
   }
 
   throw new Error(`Position ${position_address} not found in open positions`);

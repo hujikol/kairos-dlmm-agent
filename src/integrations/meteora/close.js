@@ -233,6 +233,19 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   recordClose(position_address, reason || "agent decision");
 
   if (!tracked) {
+    await recordPerformance({
+      position: position_address, pool: poolAddress,
+      pool_name: null,
+      strategy: null, bin_range: null, bin_step: null, volatility: null,
+      fee_tvl_ratio: null, organic_score: null,
+      amount_sol: 0, fees_earned_usd: 0,
+      final_value_usd: 0, initial_value_usd: 0,
+      minutes_in_range: 0, minutes_held: 0,
+      close_reason: reason || "agent decision",
+      signal_snapshot: null,
+      base_mint: pool.lbPair.tokenXMint.toString(),
+      deployed_at: null,
+    });
     return {
       closedConfirmed: true,
       result: {
@@ -337,6 +350,24 @@ async function closePositionFresh(position_address, wallet, reason) {
     if (!myPos) {
       log("warn", "close", `Fresh scan: position ${position_address} not found — already closed on-chain`);
       recordClose(position_address, reason || "externally_closed");
+      // Record performance with zero values for externally closed positions
+      const fallbackPool = tracked?.pool || null;
+      await recordPerformance({
+        position: position_address, pool: fallbackPool,
+        pool_name: tracked?.pool_name || null,
+        strategy: tracked?.strategy || null, bin_range: tracked?.bin_range || null,
+        bin_step: tracked?.bin_step || null, volatility: tracked?.volatility || null,
+        fee_tvl_ratio: tracked?.fee_tvl_ratio || null, organic_score: tracked?.organic_score || null,
+        amount_sol: tracked?.amount_sol || 0, fees_earned_usd: tracked?.total_fees_claimed_usd || 0,
+        final_value_usd: 0, initial_value_usd: tracked?.initial_value_usd || 0,
+        minutes_in_range: 0,
+        minutes_held: tracked?.deployed_at
+          ? Math.floor((Date.now() - new Date(tracked.deployed_at).getTime()) / 60000) : 0,
+        close_reason: reason || "externally_closed",
+        signal_snapshot: tracked?.signal_snapshot || null,
+        base_mint: tracked?.base_mint || null,
+        deployed_at: tracked?.deployed_at || null,
+      });
       return { success: true, already_closed: true };
     }
 
@@ -465,6 +496,25 @@ export async function closePosition({ position_address, reason }) {
     }
 
     recordClose(position_address, reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"));
+    // Record performance for verified externally closed positions
+    const trackedVerify = getTrackedPosition(position_address);
+    if (trackedVerify) {
+      await recordPerformance({
+        position: position_address, pool: trackedVerify.pool || poolAddress,
+        pool_name: trackedVerify.pool_name || null,
+        strategy: trackedVerify.strategy, bin_range: trackedVerify.bin_range,
+        bin_step: trackedVerify.bin_step || null, volatility: trackedVerify.volatility || null,
+        fee_tvl_ratio: trackedVerify.fee_tvl_ratio || null, organic_score: trackedVerify.organic_score || null,
+        amount_sol: trackedVerify.amount_sol, fees_earned_usd: trackedVerify.total_fees_claimed_usd || 0,
+        final_value_usd: 0, initial_value_usd: trackedVerify.initial_value_usd || 0,
+        minutes_in_range: 0, minutes_held: trackedVerify.deployed_at
+          ? Math.floor((Date.now() - new Date(trackedVerify.deployed_at).getTime()) / 60000) : 0,
+        close_reason: reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"),
+        signal_snapshot: trackedVerify.signal_snapshot || null,
+        base_mint: trackedVerify.base_mint || null,
+        deployed_at: trackedVerify.deployed_at || null,
+      });
+    }
     return { success: actuallyClosed, already_closed: actuallyClosed };
   }
 }

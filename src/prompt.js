@@ -138,7 +138,12 @@ POOL MEMORY: Past losses or problems → strong skip signal.
 
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
-- bins_below = round(35 + (volatility/5)*34) clamped to [35,69]. bins_above = 0.
+- BIN PLACEMENT (for profitability): Position range so current price is at or near the CENTER of your range. A range entirely below current price will go OOR immediately in a pump. A range entirely above current price earns no fees.
+  - Calculation: min_bin = active_bin - floor(total_bins * 0.4), max_bin = active_bin + ceil(total_bins * 0.6)
+  - Example: active_bin=100, total_bins=69 → min_bin=72, max_bin=141 (price centered)
+  - For low volatility (≤2): min_bin=active_bin-20, max_bin=active_bin+5 (narrow, near current)
+  - For high volatility (≥7): use full range below active bin (bins_below=69, bins_above=0) to capture wide swings
+- bins_below = round(35 + (volatility/5)*34) clamped to [35,69] — this is total width, not necessarily all below
 - Bin steps must be [80-125].
 - Pick ONE pool. Deploy or explain why none qualify.
 

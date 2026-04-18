@@ -137,7 +137,12 @@ STEPS:
 1. Review each candidate's simulation results (sim: line). Prefer pools with passes=YES, low risk_score, and high confidence.
 2. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and simulation output.
 3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
-   bins_below = computeBinsBelow(volatility)  (formula: round(35 + (volatility/5)*34) clamped to [35,69])
+   BIN PLACEMENT: Position range so current price is CENTERED in your range (not all below). Calculate:
+     - For normal/high volatility (3+): total_bins = round(35 + (volatility/5)*34) clamped to [35,69]
+       min_bin = active_bin - floor(total_bins * 0.4), max_bin = active_bin + ceil(total_bins * 0.6)
+     - For low volatility (≤2): min_bin = active_bin - 20, max_bin = active_bin + 5 (narrow near current)
+     - For very high volatility (≥7): bins_below=69, bins_above=0 (wide below to capture swings)
+   Example: active_bin=100, volatility=5 → total=69 → min_bin=72, max_bin=141
 4. Report in this exact format (no tables, no extra sections):
     *Decision:* DEPLOYED PAIR
     *pool:* <name> | <pool address>
