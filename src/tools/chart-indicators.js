@@ -93,7 +93,7 @@ export function computeRSI(prices, period = 14) {
  * @param {number} [stdDev=2] - Standard deviation multiplier
  * @returns {{ upper: number, middle: number, lower: number }|null}
  */
-export function computeBollingerBands(prices, period = 20, stdDev = 2) {
+export function computeBollingerBands(prices, period = 20, mult = 2) {
   if (!prices || prices.length < period) return null;
 
   const middle = sma(prices, period);
@@ -103,9 +103,9 @@ export function computeBollingerBands(prices, period = 20, stdDev = 2) {
   if (sd === null) return null;
 
   return {
-    upper: middle + stdDev * sd,
+    upper: middle + mult * sd,
     middle,
-    lower: middle - stdDev * sd,
+    lower: middle - mult * sd,
   };
 }
 

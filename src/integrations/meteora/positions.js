@@ -103,7 +103,7 @@ export async function deployPosition({
   const activeBinsAbove = Number(bins_above ?? 0);
 
   if (isPoolOnCooldown(pool_address)) {
-    log("info", "deploy", `Pool ${addrShort(pool_address)} is on cooldown (closed for low yield) — skipping`);
+    log("debug", "deploy", `Pool ${addrShort(pool_address)} is on cooldown (closed for low yield) — skipping`);
     return { success: false, error: "Pool on cooldown — was recently closed for low yield. Try a different pool." };
   }
 
@@ -181,10 +181,10 @@ export async function deployPosition({
   const isWideRange = totalBins > 69;
   const newPosition = Keypair.generate();
 
-  log("info", "deploy", `Pool: ${pool_address}`);
-  log("info", "deploy", `Strategy: ${activeStrategy}, Bins: ${minBinId} to ${maxBinId} (${totalBins} bins${isWideRange ? " — WIDE RANGE" : ""})`);
-  log("info", "deploy", `Amount: ${finalAmountX} X, ${finalAmountY} Y`);
-  log("info", "deploy", `Position: ${newPosition.publicKey.toString()}`);
+  log("debug", "deploy", `Pool: ${pool_address}`);
+  log("debug", "deploy", `Strategy: ${activeStrategy}, Bins: ${minBinId} to ${maxBinId} (${totalBins} bins${isWideRange ? " — WIDE RANGE" : ""})`);
+  log("debug", "deploy", `Amount: ${finalAmountX} X, ${finalAmountY} Y`);
+  log("debug", "deploy", `Position: ${newPosition.publicKey.toString()}`);
 
   try {
     const txHashes = [];
@@ -330,42 +330,43 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
   inflight = (async () => { try {
     let pools = [];
 
-    // 1. Try Agent Meridian relay first (LPAgent-backed data is richer)
-    if (!silent) log("info", "positions", "Trying Agent Meridian relay for open positions...");
+    // 1. Try Meteora portfolio API first (fastest, freshest on-chain data)
+    if (!silent) log("debug", "positions", "Fetching portfolio via Meteora portfolio API...");
     try {
-      const relayPositions = await agentMeridianPositions(walletAddress);
-      if (relayPositions && relayPositions.length > 0) {
-        pools = relayPositions.map(p => ({
-          poolAddress: p.pool || p.poolAddress,
-          listPositions: [p.position || p.positionAddress],
-          outOfRange: p.isOutOfRange || false,
-        }));
-        log("info", "positions", `Relay returned ${pools.length} pool(s) with open positions`);
+      const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
+      const res = await fetch(portfolioUrl);
+      if (res.ok) {
+        const portfolio = await res.json();
+        pools = portfolio.pools || [];
+        log("debug", "positions", `Meteora returned ${pools.length} pool(s) with open positions`);
+      } else {
+        log("warn", "positions", `Meteora portfolio API ${res.status}`);
       }
     } catch (e) {
-      log("warn", "positions", `Relay fetch failed: ${e.message} — falling back to Meteora portfolio API`);
+      log("warn", "positions", `Meteora portfolio fetch failed: ${e.message}`);
     }
 
-    // 2. Fall back to Meteora portfolio API if relay returned nothing
+    // 2. Supplement with Agent Meridian relay if Meteora returned nothing
+    // (relay provides richer data like outOfRange flags but has additional lag)
     if (pools.length === 0) {
-      if (!silent) log("info", "positions", "Fetching portfolio via Meteora portfolio API...");
+      if (!silent) log("info", "positions", "Trying Agent Meridian relay for open positions...");
       try {
-        const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
-        const res = await fetch(portfolioUrl);
-        if (res.ok) {
-          const portfolio = await res.json();
-          pools = portfolio.pools || [];
-          log("info", "positions", `Found ${pools.length} pool(s) with open positions`);
-        } else {
-          log("warn", "positions", `Meteora portfolio API ${res.status}`);
+        const relayPositions = await agentMeridianPositions(walletAddress);
+        if (relayPositions && relayPositions.length > 0) {
+          pools = relayPositions.map(p => ({
+            poolAddress: p.pool || p.poolAddress,
+            listPositions: [p.position || p.positionAddress],
+            outOfRange: p.isOutOfRange || false,
+          }));
+          log("info", "positions", `Relay returned ${pools.length} pool(s) with open positions`);
         }
       } catch (e) {
-        log("warn", "positions", `Meteora portfolio fetch failed: ${e.message}`);
+        log("warn", "positions", `Relay fetch failed: ${e.message}`);
       }
     }
 
     if (pools.length === 0) {
-      log("info", "positions", "No open positions found (relay + Meteora)");
+      log("info", "positions", "No open positions found (Meteora + relay)");
     }
 
     const binDataByPool = {};

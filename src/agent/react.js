@@ -21,7 +21,7 @@ import { getLessonsForPrompt, getPerformanceSummary } from "../core/lessons.js";
 import { LOOP_TIMEOUT_MS } from "../core/constants.js";
 
 // ReAct safety guards
-const MAX_REACT_DEPTH = 6;
+const MAX_REACT_DEPTH = 10;
 const MAX_TOOL_CALLS_PER_STEP = 10;
 
 // Tools that should only fire once per session
@@ -66,6 +66,8 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
   let noToolRetryCount = 0;
   let rateLimitRetryCount = 0;
   const loopStartedAt = Date.now();
+  // Track meaningful on-chain results so we can return partial progress on MAX_REACT_DEPTH
+  let lastMeaningfulResult = null;
 
   for (let step = 0; step < effectiveMaxSteps; step++) {
     const elapsed = Date.now() - loopStartedAt;
@@ -77,7 +79,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
       log("warn", "agent", `MAX_REACT_DEPTH (${MAX_REACT_DEPTH}) reached — aborting`);
       break;
     }
-    log("info", "agent", `Step ${step + 1}/${effectiveMaxSteps}`);
+    log("debug", "agent", `Step ${step + 1}/${effectiveMaxSteps}`);
 
     try {
       const tools = getToolsForRole(agentType, goal);
@@ -90,7 +92,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
 
       const usage = response.usage;
       if (usage) {
-        log("info", "token_usage", JSON.stringify({
+        log("debug", "token_usage", JSON.stringify({
           role: agentType,
           steps: step,
           prompt_tokens: usage.prompt_tokens,
@@ -116,13 +118,13 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
         if (!msg.content) {
           messages.pop();
-          log("info", "agent", "Empty response, retrying...");
+          log("debug", "agent", "Empty response, retrying...");
           continue;
         }
         if (mustUseRealTool && !sawToolCall) {
           noToolRetryCount += 1;
           messages.pop();
-          log("info", "agent", `Rejected no-tool final answer (${noToolRetryCount}/2) for tool-required request`);
+          log("debug", "agent", `Rejected no-tool final answer (${noToolRetryCount}/2) for tool-required request`);
           if (noToolRetryCount >= 2) {
             return {
               content: "I couldn't complete that reliably because no tool call was made. Please retry after checking the logs.",
@@ -164,6 +166,15 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
 
         const result = await executeTool(functionName, args);
 
+        // Track meaningful on-chain results so MAX_REACT_DEPTH break still returns useful info.
+        // close_position returns { success, already_closed } — success=false with already_closed=true
+        // means position confirmed closed on-chain but returned false (catch block path).
+        // We treat this as meaningful since it means the position is actually closed.
+        const isMeaningfulClose = functionName === "close_position" && result?.already_closed === true;
+        if (result?.success === true || isMeaningfulClose) {
+          lastMeaningfulResult = { functionName, result };
+        }
+
         if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
         else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
 
@@ -197,10 +208,6 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         if (rateLimitRetryCount >= 3) {
           throw new Error("Rate limited 3 times consecutively — aborting agent loop");
         }
-        if (step >= MAX_REACT_DEPTH) {
-          log("error", "agent", "Max react depth exceeded, breaking");
-          break;
-        }
         await sleep(backoffMs);
         continue;
       }
@@ -211,5 +218,15 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
   }
 
   log("info", "agent", "Max steps reached without final answer");
+  // Prioritize meaningful on-chain results over generic timeout message
+  if (lastMeaningfulResult) {
+    const { functionName, result } = lastMeaningfulResult;
+    log("info", "agent", `Returning partial result: ${functionName} succeeded (${JSON.stringify(result).slice(0, 100)})`);
+    return {
+      content: `${functionName} completed successfully. Result: ${JSON.stringify(result, null, 2)}`,
+      userMessage: goal,
+      partialResult: lastMeaningfulResult,
+    };
+  }
   return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
 }

@@ -233,10 +233,11 @@ export async function lookupPoolForPosition(position_address, walletAddress, pos
     new PublicKey(walletAddress)
   );
 
-  for (const [lbPairKey, positionData] of Object.entries(allPositions)) {
-    for (const pos of positionData.lbPairPositionsData || []) {
-      if (pos.publicKey.toString() === position_address) return lbPairKey;
-    }
+  // Fallback: if tracked has the pool, return it even if SDK scan missed it
+  // (SDK can miss positions due to RPC lag or async state)
+  if (tracked?.pool) {
+    log("warn", "pool", `lookupPoolForPosition: SDK missed ${position_address}, using tracked pool ${tracked.pool}`);
+    return tracked.pool;
   }
 
   throw new Error(`Position ${position_address} not found in open positions`);

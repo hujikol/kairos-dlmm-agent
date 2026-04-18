@@ -32,7 +32,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
   if (_busyState._managementBusy) return null;
   _busyState._managementBusy = true;
   timers.managementLastRun = Date.now();
-  log("info", "cron", "Starting management cycle");
+  log("debug", "cron", "Starting management cycle");
   let mgmtReport = null;
   let positions = [];
 
@@ -54,7 +54,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
-      log("info", "cron", "No open positions — triggering screening cycle");
+      log("debug", "cron", "No open positions — triggering screening cycle");
       // Dynamic import to avoid circular dep with scheduler.js
       try {
         const { runScreeningCycle } = await import("./screening-cycle.js");
@@ -99,7 +99,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     });
 
     if (actionPositions.length > 0) {
-      log("info", "cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
+      log("debug", "cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM`);
 
       const cur = config.management.solMode ? "◎" : "$";
       const actionBlocks = actionPositions.map((p) => {
@@ -132,7 +132,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       });
       await autoSwapAndNotify(executedActions);
     } else {
-      log("info", "cron", "Management: all positions STAY — skipping LLM");
+      log("debug", "cron", "Management: all positions STAY — skipping LLM");
     }
 
     // Trigger screening after management if we expect to be under max positions
@@ -149,7 +149,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
         const { runScreeningCycle } = await import("./screening-cycle.js");
         // Re-check to avoid race: if another call set _timersState.screeningLastTriggered while we were waiting for the lock
         if (_timersState.screeningLastTriggered !== lastTriggeredAt) {
-          log("info", "cron", `Post-management screening skipped — already triggered by concurrent call`);
+          log("debug", "cron", `Post-management screening skipped — already triggered by concurrent call`);
         } else if (runScreeningCycle) {
           log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
           runScreeningCycle().catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });

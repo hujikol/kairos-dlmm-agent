@@ -154,7 +154,7 @@ export async function recordPerformance(perf) {
       minutes_held: perf.minutes_held,
       fees_earned_usd: perf.fees_earned_usd,
     },
-  }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e.message}`));
+  }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e?.message ?? String(e)}`));
 
   // Auto-prune performance data and near-misses
   try {

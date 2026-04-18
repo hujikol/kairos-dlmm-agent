@@ -44,13 +44,13 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
   try {
     [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
     if (prePositions.total_positions >= config.risk.maxPositions) {
-      log("info", "cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
+      log("debug", "cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
       _busyState._screeningBusy = false;
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
     if (preBalance.sol < minRequired && !isDryRun()) {
-      log("info", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
+      log("debug", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
       _busyState._screeningBusy = false;
       return null;
     }
@@ -63,7 +63,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     return null;
   }
   timers.screeningLastRun = Date.now();
-  log("info", "cron", `Starting screening cycle [model: ${config.llm.screeningModel}]`);
+  log("debug", "cron", `Starting screening cycle`);
   let screenReport = null;
   let canDeploy = true; // circuit breaker may block new deployments
   let screeningMode = "normal";
@@ -89,7 +89,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     const currentBalance = preBalance;
     const deployAmountResult = computeDeployAmount(currentBalance.sol, prePositions.total_positions || 0);
     const deployAmount = deployAmountResult.amount || 0;
-    log("info", "cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL, positions: ${prePositions.total_positions || 0})`);
+    log("debug", "cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL, positions: ${prePositions.total_positions || 0})`);
 
     // Load active strategy (phase info injected later after candidate recon)
     const activeStrategy = await getActiveStrategy();
@@ -105,15 +105,19 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
 
     if (passing.length === 0) {
       screenReport = `No candidates available (all blocked by launchpad filter).`;
-      recordDecision({
-        type: "skip",
-        pool: null,
-        position: null,
-        amount: null,
-        pnl: null,
-        reasoning: "no candidates qualified",
-        metadata: { initiated_by: "rule" },
-      }).catch(e => log("warn", "decision-log", `Failed to record skip decision: ${e.message}`));
+      try {
+        recordDecision({
+          type: "skip",
+          pool: null,
+          position: null,
+          amount: null,
+          pnl: null,
+          reasoning: "no candidates qualified",
+          metadata: { initiated_by: "rule" },
+        }).catch(e => log("warn", "decision-log", `Failed to record skip decision: ${e?.message ?? String(e)}`));
+      } catch (e) {
+        log("warn", "decision-log", `Failed to record skip decision: ${e?.message ?? String(e)}`);
+      }
       return screenReport;
     }
 

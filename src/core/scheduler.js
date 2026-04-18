@@ -115,12 +115,10 @@ export async function startCronJobs() {
     async () => {
       if (_busyState._managementBusy) return;
       timers.managementLastRun = Date.now();
-      try {
-        await runManagementCycle();
-      } catch (e) {
+      Promise.resolve().then(() => runManagementCycle()).catch((e) => {
         captureError(e, { phase: "management_cycle" });
         log("error", "scheduler", `Management cycle error: ${e.message}`);
-      }
+      });
     }
   );
 

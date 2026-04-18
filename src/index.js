@@ -76,7 +76,7 @@ if (isTTY) {
 
   // Start autonomous cycles immediately on launch
   launchCron();
-  runStartupFetch().catch(e => log("error", "startup", `Startup fetch failed: ${e.message}`));
+  runStartupFetch().catch(e => log("error", "startup", `Startup fetch failed: ${e?.message ?? String(e)}`));
 
   // Wire up REPL slash commands
   setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, swapAllTokensToSol);

@@ -200,6 +200,14 @@ export function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, posit
 
   // Closes + related swaps
   for (const c of closes) {
+    if (c.already_closed) {
+      parts.push(
+        `\n⚠️ <b>Close Failed</b> ${escapeHTMLLocal(c.pair)}\n` +
+        `  Position may already be closed or untracked.\n` +
+        `  Manual inspection recommended on Meteora.`
+      );
+      continue;
+    }
     const sign = c.pnlUsd >= 0 ? "+" : "";
     parts.push(
       `\n🔒 <b>Closed</b> ${escapeHTMLLocal(c.pair)}\n` +

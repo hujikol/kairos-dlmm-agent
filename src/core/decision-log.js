@@ -77,9 +77,9 @@ function pruneIfNeeded(db) {
 
 let _initialized = false;
 
-function init() {
+async function init() {
   if (_initialized) return;
-  const db = getDB();
+  const db = await getDB();
   if (!db) return; // db not ready yet — will init on first recordDecision call
   ensureTable(db);
   pruneIfNeeded(db);
@@ -118,14 +118,14 @@ export async function recordDecision({
   }
 
   // Lazy init (handles case where module is imported before db is fully ready)
-  init();
+  await init();
 
   const timestamp = new Date().toISOString();
-  const poolAddress = typeof pool === "object" ? pool.address : pool;
-  const poolName = typeof pool === "object" ? pool.name : metadata.pool_name;
+  const poolAddress = pool != null && typeof pool === "object" ? pool.address : pool;
+  const poolName = pool != null && typeof pool === "object" ? pool.name : metadata.pool_name;
 
-  const pnlUsd = typeof pnl === "object" ? pnl.usd : pnl;
-  const pnlPct = typeof pnl === "object" ? pnl.pct : null;
+  const pnlUsd = pnl != null && typeof pnl === "object" ? pnl.usd : pnl;
+  const pnlPct = pnl != null && typeof pnl === "object" ? pnl.pct : null;
 
   db.prepare(`
     INSERT INTO ${TABLE} (
@@ -173,7 +173,7 @@ export async function recordDecision({
 export async function getDecisions({ pool, limit = 100, type, hours = 24 } = {}) {
   const db = await getDB();
   if (!db) return [];
-  init();
+  await init();
 
   const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
 

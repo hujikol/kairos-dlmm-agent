@@ -25,9 +25,19 @@ export function getAgentMeridianBase() {
 export function getAgentMeridianHeaders({ json = false } = {}) {
   const headers = {};
   if (json) headers["Content-Type"] = "application/json";
-  // Support both flat publicApiKey and nested hive.apiKey (user-config.json uses hive.apiKey)
+  // Support both flat publicApiKey and nested hive.apiKey
   const key = config.api?.publicApiKey || config.hiveMind?.apiKey;
   if (key) headers["x-api-key"] = key;
+  // Pass discord signal preferences to relay
+  if (config.useDiscordSignals !== undefined) {
+    headers["x-discord-signals"] = String(config.useDiscordSignals);
+  }
+  if (config.discordSignalMode) {
+    headers["x-discord-mode"] = config.discordSignalMode;
+  }
+  if (process.env.LPAGENT_API_KEY) {
+    headers["x-lpagent-api-key"] = process.env.LPAGENT_API_KEY;
+  }
   return headers;
 }
 

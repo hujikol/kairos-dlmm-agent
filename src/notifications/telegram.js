@@ -259,7 +259,15 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
  * @param {number} opts.pnlPct - Realized PnL percentage
  * @returns {Promise<void>}
  */
-export async function notifyClose({ pair, pnlUsd, pnlPct }) {
+export async function notifyClose({ pair, pnlUsd, pnlPct, already_closed }) {
+  if (already_closed) {
+    await sendHTML(
+      `⚠️ <b>Close Failed</b> ${pair}\n` +
+      `Position may already be closed or untracked.\n` +
+      `Manual inspection recommended on Meteora.`
+    );
+    return;
+  }
   const sign = pnlUsd >= 0 ? "+" : "";
   await sendHTML(
     `🔒 <b>Closed</b> ${pair}\n` +

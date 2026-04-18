@@ -49,6 +49,7 @@ export function registerPositions(registerTool) {
         pnlUsd: result.pnl_usd ?? 0,
         pnlPct: result.pnl_pct ?? 0,
         reason: args.reason,
+        already_closed: result.already_closed ?? false,
       });
 
       // Record decision log entry for the close
@@ -62,7 +63,7 @@ export function registerPositions(registerTool) {
         metadata: {
           initiated_by: "llm",
         },
-      }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e.message}`));
+      }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e?.message ?? String(e)}`));
 
       if (args.reason && args.reason.toLowerCase().includes("yield")) {
         const poolAddr = result.pool || args.pool_address;
@@ -122,7 +123,7 @@ export function registerPositions(registerTool) {
           conviction: args.conviction,
           initial_value_usd: args.initial_value_usd,
         },
-      }).catch(e => log("warn", "decision-log", `Failed to record deploy decision: ${e.message}`));
+      }).catch(e => log("warn", "decision-log", `Failed to record deploy decision: ${e?.message ?? String(e)}`));
     }
     return result;
   });

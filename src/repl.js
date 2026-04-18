@@ -23,7 +23,7 @@ export function launchCron() {
   if (!cronStarted) {
     cronStarted = true;
     startCronJobs();
-    startWatchdog(config).catch(e => log("error", "startup", `Watchdog failed to start: ${e.message}`));
+    startWatchdog(config).catch(e => log("error", "startup", `Watchdog failed to start: ${e?.message ?? String(e)}`));
     console.log("Autonomous cycles are now running.\n");
   }
 }
@@ -134,7 +134,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
     }
 
     if (input.toLowerCase() === "screen" || input.toLowerCase() === "/screen") {
-      runScreeningCycle().catch(e => log("error", "cron", `Manual screening failed: ${e.message}`));
+      runScreeningCycle().catch(e => log("error", "cron", `Manual screening failed: ${e?.message ?? String(e)}`));
       console.log("\nManual screening cycle started.\n");
       rl.prompt();
       return;

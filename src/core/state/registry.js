@@ -148,8 +148,8 @@ export function updatePositionStatus(position_address, status) {
 /**
  * Mark a position as closed.
  */
-export function recordClose(position_address, reason) {
-  const db = getDB();
+export async function recordClose(position_address, reason) {
+  const db = await getDB();
   const pos = db.prepare("SELECT pool, pool_name FROM positions WHERE position = ?").get(position_address);
   if (!pos) return;
 
@@ -166,8 +166,8 @@ export function recordClose(position_address, reason) {
 /**
  * Record a rebalance (close + redeploy).
  */
-export function recordRebalance(old_position, new_position) {
-  const db = getDB();
+export async function recordRebalance(old_position, new_position) {
+  const db = await getDB();
   runTransaction(() => {
     const old = db.prepare("SELECT rebalance_count FROM positions WHERE position = ?").get(old_position);
     if (old) {

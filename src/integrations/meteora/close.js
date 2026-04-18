@@ -7,7 +7,7 @@ import { config, isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
-import { getPool, getWallet, sendTx, lookupPoolForPosition } from "./pool.js";
+import { getPool, getWallet, getDLMM, getConnection, sendTx, lookupPoolForPosition } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { getMyPositions, invalidatePositionsCache } from "./positions.js";
 import { positionsCache, poolCache } from "../../core/cache-manager.js";
@@ -92,9 +92,9 @@ async function closeClaimFees(ctx) {
 
   try {
     if (recentlyClaimed) {
-      log("info", "close", `Step 1: Skipping claim — fees already claimed ${Math.round((Date.now() - new Date(tracked.last_claim_at).getTime()) / 1000)}s ago`);
+      log("debug", "close", `Step 1: Skipping claim — fees already claimed ${Math.round((Date.now() - new Date(tracked.last_claim_at).getTime()) / 1000)}s ago`);
     } else {
-      log("info", "close", `Step 1: Claiming fees for ${position_address}`);
+      log("debug", "close", `Step 1: Claiming fees for ${position_address}`);
       const positionData = await pool.getPosition(positionPubKey);
       const claimTxs = await pool.claimSwapFee({ owner: wallet.publicKey, position: positionData });
       if (claimTxs && claimTxs.length > 0) {
@@ -102,7 +102,7 @@ async function closeClaimFees(ctx) {
           const claimHash = await sendTx(tx, [wallet]);
           claimTxHashes.push(claimHash);
         }
-        log("info", "close", `Step 1 OK (claim only): ${claimTxHashes.join(", ")}`);
+        log("debug", "close", `Step 1 OK (claim only): ${claimTxHashes.join(", ")}`);
         try {
           const walletAddr = wallet.publicKey.toString();
           const pnlData = await fetchDlmmPnlForPool(poolAddress.toString(), walletAddr);
@@ -156,7 +156,7 @@ async function closeRemoveLiquidity(ctx) {
   }
 
   if (hasLiquidity) {
-    log("info", "close", `Step 2: Removing liquidity and closing account`);
+    log("debug", "close", `Step 2: Removing liquidity and closing account`);
     const closeTx = await pool.removeLiquidity({
       user: wallet.publicKey,
       position: positionPubKey,
@@ -170,7 +170,7 @@ async function closeRemoveLiquidity(ctx) {
       closeTxHashes.push(txHash);
     }
   } else {
-    log("info", "close", `Step 2: No position liquidity detected, closing account`);
+    log("debug", "close", `Step 2: No position liquidity detected, closing account`);
     const closeTx = await pool.closePosition({ owner: wallet.publicKey, position: { publicKey: positionPubKey } });
     const txHash = await sendTx(closeTx, [wallet]);
     closeTxHashes.push(txHash);
@@ -190,23 +190,32 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   const { claimTxHashes, closeTxHashes } = phaseResults;
   const txHashes = [...claimTxHashes, ...closeTxHashes];
 
-  log("info", "close", `Step 2 OK (close only): ${closeTxHashes.join(", ") || "none"}`);
   log("info", "close", `SUCCESS txs: ${txHashes.join(", ")}`);
 
   await new Promise(r => setTimeout(r, METEORA_CLOSE_SYNC_WAIT_MS));
   invalidatePositionsCache();
 
   let closedConfirmed = false;
+  let lastError = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const refreshed = await getMyPositions({ force: true, silent: true });
-      const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
+      // Use getAllLbPairPositionsByUser directly — do NOT trust getMyPositions (relay/Meteora API has stale data)
+      const { DLMM } = await getDLMM();
+      const allPositions = await DLMM.getAllLbPairPositionsByUser(getConnection(), wallet.publicKey);
+      let allPos = [];
+      if (Array.isArray(allPositions)) allPos = allPositions;
+      else if (allPositions instanceof Map) allPos = [...allPositions.values()];
+      const stillOpen = allPos.some(p => {
+        const key = p.publicKey?.toString?.() || p.positionAddress || p.address || String(p);
+        return key === position_address;
+      });
+      log("debug", "close", `Close verification attempt ${attempt + 1}/3: ${stillOpen ? "still open" : "confirmed closed"} (${allPos.length} on-chain positions)`);
       if (!stillOpen) { closedConfirmed = true; break; }
-      log("warn", "close", `Position ${position_address} still appears open after close txs (attempt ${attempt + 1}/4)`);
     } catch (e) {
-      log("warn", "close", `Close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
+      lastError = e;
+      log("warn", "close", `Close verification failed (attempt ${attempt + 1}/3): ${e.message}`);
     }
-    if (attempt < 3) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
+    if (attempt < 2) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
   }
 
   if (!closedConfirmed) {
@@ -312,6 +321,42 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   };
 }
 
+// ─── Fresh close retry — bypasses pool cache and SDK position cache ──────────
+/**
+ * Retry a close that the SDK failed to find.
+ * Uses getAllLbPairPositionsByUser to find the pool, then closes directly.
+ */
+async function closePositionFresh(position_address, wallet, reason) {
+  log("debug", "close", `Fresh close attempt for ${position_address}`);
+  const tracked = getTrackedPosition(position_address);
+  try {
+    const { DLMM } = await getDLMM();
+    const connection = getConnection();
+    const allPositions = await DLMM.getAllLbPairPositionsByUser(connection, wallet.publicKey);
+    const myPos = allPositions.find(p => p.publicKey.toString() === position_address);
+    if (!myPos) {
+      log("warn", "close", `Fresh scan: position ${position_address} not found — already closed on-chain`);
+      recordClose(position_address, reason || "externally_closed");
+      return { success: true, already_closed: true };
+    }
+
+    const poolAddress = myPos.lbPair.toString();
+    log("debug", "close", `Found position in pool ${poolAddress} — closing`);
+    poolCache.delete(poolAddress);
+    const pool = await getPool(poolAddress);
+    const positionPubKey = new PublicKey(position_address);
+    const ctx = { position_address, poolAddress, tracked: getTrackedPosition(position_address), wallet, pool, positionPubKey };
+
+    const { claimTxHashes } = await closeClaimFees(ctx);
+    const { closeTxHashes } = await closeRemoveLiquidity(ctx);
+    const { result } = await closeVerifyAndRecord(ctx, { claimTxHashes, closeTxHashes }, reason);
+    return result;
+  } catch (err) {
+    log("error", "close", `Fresh close attempt failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
 // ─── closePosition ─────────────────────────────────────────────────
 
 /**
@@ -331,9 +376,11 @@ export async function closePosition({ position_address, reason }) {
     return { dry_run: true, would_close: position_address, message: "DRY RUN — no transaction sent" };
   }
 
+  // Get wallet BEFORE try block so it's always in scope for catch verification
+  const wallet = getWallet();
+
   try {
-    log("info", "close", `Closing position: ${position_address}`);
-    const wallet = getWallet();
+    log("debug", "close", `Closing position: ${position_address}`);
     const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
@@ -354,6 +401,59 @@ export async function closePosition({ position_address, reason }) {
 
     return result;
   } catch (error) {
+    // Position not found during the ACTUAL close tx (removeLiquidity/closePosition failed).
+    // lookupPoolForPosition errors are handled upstream — if we get here with "not found",
+    // it means the close tx itself failed because the position no longer exists on-chain.
+    // HOWEVER: "not found" from pool.getPosition may be a stale cache / SDK lag issue.
+    // Verify by calling getAllLbPairPositionsByUser — the authoritative open-positions list.
+    if (error.message.includes("not found") || error.message.includes("already closed")) {
+      log("warn", "close", `Position ${position_address} not found in SDK — verifying on-chain state...`);
+      let actuallyClosed = false;
+      try {
+        const { DLMM } = await getDLMM();
+        const rawResult = await DLMM.getAllLbPairPositionsByUser(getConnection(), wallet.publicKey);
+        log("info", "close", `getAllLbPairPositionsByUser returned ${typeof rawResult} (${rawResult?.constructor?.name})`);
+
+        // Normalize result — SDK returns either an Array or a Map keyed by position address
+        let allPos = [];
+        if (Array.isArray(rawResult)) {
+          allPos = rawResult;
+        } else if (rawResult instanceof Map) {
+          // Map format: key = position pubkey string, value = position object
+          allPos = [...rawResult.values()];
+        } else if (rawResult && typeof rawResult === "object") {
+          // Maybe an object with positions array
+          const arr = rawResult.positions || rawResult.data || rawResult.result || [];
+          allPos = Array.isArray(arr) ? arr : [arr];
+        }
+
+        log("info", "close", `Normalized to ${allPos.length} open position(s)`);
+
+        if (allPos.length === 0) {
+          // No positions returned — treat as closed
+          log("info", "close", `No open positions returned — position ${position_address} is closed on-chain`);
+          actuallyClosed = true;
+        } else {
+          const stillExists = allPos.some(p => {
+            const key = p.publicKey?.toString?.() || p.positionAddress || p.address || String(p);
+            return key === position_address;
+          });
+          if (!stillExists) {
+            log("info", "close", `Verification confirmed: position ${position_address} is closed on-chain`);
+            actuallyClosed = true;
+          } else {
+            log("warn", "close", `Verification FAILED: position ${position_address} still exists on-chain — re-attempting close`);
+            // Position still open — retry close from scratch with fresh SDK resolution
+            return await closePositionFresh(position_address, wallet, reason);
+          }
+        }
+      } catch (verifyErr) {
+        log("error", "close", `Verification call failed: ${verifyErr.message} — attempting fresh close`);
+        return await closePositionFresh(position_address, wallet, reason);
+      }
+      recordClose(position_address, reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"));
+      return { success: actuallyClosed, already_closed: actuallyClosed };
+    }
     log("error", "close", error.message);
     return { success: false, error: error.message };
   }
