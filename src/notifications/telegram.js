@@ -36,7 +36,7 @@ async function saveChatId(id) {
     cfg.telegramChatId = id;
     await writeFileAtomic(USER_CONFIG_PATH, JSON.stringify(cfg, null, 2));
   } catch (e) {
-    log("error", "telegram", `Failed to persist chatId: ${e.message}`);
+    log("error", "telegram", `Failed to persist chatId: ${e?.message ?? e}`);
   }
 }
 
@@ -55,7 +55,7 @@ async function processQueue() {
     try {
       await task();
     } catch (e) {
-      log("error", "telegram", `Queue task failed: ${e.message}`);
+      log("error", "telegram", `Queue task failed: ${e?.message ?? e}`);
     }
     await sleep(TELEGRAM_MSG_DELAY_MS); // 1.5s delay between messages to respect Telegram limits
   }
@@ -111,7 +111,7 @@ export async function sendMessage(text, parseMode = "Markdown") {
           }
         }
       } catch (e) {
-        log("error", "telegram", `sendMessage failed: ${e.message}`);
+        log("error", "telegram", `sendMessage failed: ${e?.message ?? e}`);
       }
       resolve();
     });
@@ -153,7 +153,7 @@ export async function sendHTML(html) {
           }
         }
       } catch (e) {
-        log("error", "telegram", `sendHTML failed: ${e.message}`);
+        log("error", "telegram", `sendHTML failed: ${e?.message ?? e}`);
       }
       resolve();
     });
@@ -197,7 +197,7 @@ async function poll(onMessage) {
       }
     } catch (e) {
       if (!e.message?.includes("aborted")) {
-        log("error", "telegram", `Poll error: ${e.message}`);
+        log("error", "telegram", `Poll error: ${e?.message ?? e}`);
       }
       await sleep(5000);
     }

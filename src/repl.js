@@ -41,7 +41,7 @@ export async function runBusy(fn) {
   if (_telegramBusy._busy) { console.log("Agent is busy, please wait..."); return; }
   _telegramBusy._busy = true;
   try { await fn(); }
-  catch (e) { log("warn", "repl", `REPL error: ${e.message}`); }
+  catch (e) { log("warn", "repl", `REPL error: ${e?.message ?? e}`); }
   finally { _telegramBusy._busy = false; }
 }
 

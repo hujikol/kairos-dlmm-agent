@@ -115,7 +115,7 @@ async function closeClaimFees(ctx) {
       }
     }
   } catch (e) {
-    const msg = e.message || String(e);
+    const msg = e?.message ?? String(e);
     if (msg.includes("nothing to claim") || msg.includes("no fees") || msg.includes("empty")) {
       log("warn", "close", `Step 1 (Claim): nothing to claim — ${msg}`);
     } else {
@@ -152,7 +152,7 @@ async function closeRemoveLiquidity(ctx) {
       hasLiquidity = bins.some((bin) => new BN(bin.positionLiquidity || "0").gt(new BN(0)));
     }
   } catch (e) {
-    log("warn", "close", `Could not check liquidity state: ${e.message}`);
+    log("warn", "close", `Could not check liquidity state: ${e?.message ?? e}`);
   }
 
   if (hasLiquidity) {
@@ -213,7 +213,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
       if (!stillOpen) { closedConfirmed = true; break; }
     } catch (e) {
       lastError = e;
-      log("warn", "close", `Close verification failed (attempt ${attempt + 1}/3): ${e.message}`);
+      log("warn", "close", `Close verification failed (attempt ${attempt + 1}/3): ${e?.message ?? e}`);
     }
     if (attempt < 2) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
   }
