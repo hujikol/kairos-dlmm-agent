@@ -64,6 +64,7 @@ function migrateConfig() {
   if (v1KeysPresent.length === 0) return;
 
   // Wrap flat keys under their appropriate section
+  const migrated = {};
   for (const [section, keys] of Object.entries(SECTION_MAP)) {
     migrated[section] = {};
     for (const key of keys) {
@@ -232,25 +233,23 @@ export const config = {
   },
 };
 
-export const DEFAULT_LLM_MODEL = "hermes-3-405b";
-
 /**
  * Conviction Sizing Matrix — fixed position sizing based on conviction level
  * and number of open positions. 3x sizing (very_high) only when 0 positions open.
  *
  * | Positions | Conviction | Amount    |
  * |-----------|------------|-----------|
- * | 0         | very_high  | 1.05 SOL  |
- * | 1+        | very_high  | 0.70 SOL  |
- * | any       | high       | 0.53 SOL  |
- * | any       | normal     | 0.35 SOL  |
+ * | 0         | very_high  | 1.50 SOL  |
+ * | 1+        | very_high  | 1.00 SOL  |
+ * | any       | high       | 1.00 SOL  |
+ * | any       | normal     | 0.50 SOL  |
  *
  * Amounts are clamped to wallet balance minus gasReserve.
  */
 const SIZING_MATRIX = {
-  very_high: { 0: 1.05, other: 0.70 },
-  high:      { any: 0.53 },
-  normal:    { any: 0.35 },
+  very_high: { 0: 1.50, 1: 1.00, other: 1.00 },
+  high:      { 0: 1.00, 1: 1.00, other: 1.00 },
+  normal:    { any: 0.50 },
 };
 
 export function computeDeployAmount(walletSol, openPositions = 0, conviction = "normal") {

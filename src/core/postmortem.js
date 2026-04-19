@@ -157,7 +157,6 @@ function saveRules(rules) {
     // Prune old rules beyond MAX_RULES
     db.prepare(`DELETE FROM postmortem_rules WHERE key NOT IN (SELECT key FROM postmortem_rules ORDER BY created_at DESC LIMIT ${MAX_RULES})`).run();
   });
-  tx();
 }
 
 // ─── Core Analysis ──────────────────────────────────────────────
