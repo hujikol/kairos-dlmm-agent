@@ -144,7 +144,7 @@ export function buildManagementReport(positionData, actionMap, positions, config
 export async function autoSwapAndNotify(executedActions) {
   if (executedActions.length === 0) return;
   log("info", "post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
-  const swapResult = await autoSwapRewardFees();
+  const swapResult = await autoSwapRewardFees(null, { forceRefresh: true });
   if (swapResult.swapped && swapResult.swapped.length > 0) {
     log("info", "post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
     for (const swap of swapResult.swapped) {

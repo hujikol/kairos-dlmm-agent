@@ -11,7 +11,7 @@ import {
   timers,
   _busyState,
   _timersState,
-} from "./scheduler.js";
+} from "./state/scheduler-state.js";
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
 import { captureAlert } from "../instrument.js";
 import { getTrackedPosition } from "./state/registry.js";
@@ -55,17 +55,13 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
     if (positions.length === 0) {
       log("debug", "cron", "No open positions — triggering screening cycle");
-      // Dynamic import to avoid circular dep with scheduler.js
-      try {
-        const { runScreeningCycle } = await import("./screening-cycle.js");
+      import("./screening-cycle.js").then(({ runScreeningCycle }) => {
         if (runScreeningCycle) {
           runScreeningCycle().catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
         } else {
           log("error", "cron", "Screening cycle module missing runScreeningCycle export");
         }
-      } catch (e) {
-        log("error", "cron", `Failed to load screening cycle: ${e?.message ?? e}`);
-      }
+      }).catch(e => log("error", "cron", `Failed to load screening cycle: ${e?.message ?? e}`));
       return null;
     }
 
@@ -107,8 +103,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     });
 
     // Direct close execution — bypasses LLM entirely
-    const { closePosition } = await import("../integrations/meteora/close.js");
-    const { claimFees } = await import("../integrations/meteora/close.js");
+    const { closePosition, claimFees } = await import("../integrations/meteora/close.js");
     const closeResults = [];
     for (const p of closeActions) {
       const act = actionMap.get(p.position);
@@ -131,8 +126,9 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
           mgmtReport += `\n❌ Close failed ${p.pair}: ${result.error}`;
         }
       } catch (e) {
-        log("error", "cron", `Direct CLOSE error for ${p.pair}: ${e.message}`);
-        mgmtReport += `\n❌ Close error ${p.pair}: ${e.message}`;
+        const errMsg = e?.message ?? String(e);
+        log("error", "cron", `Direct CLOSE error for ${p.pair}: ${errMsg}`);
+        mgmtReport += `\n❌ Close error ${p.pair}: ${errMsg}`;
       }
     }
 
@@ -152,7 +148,8 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
           log("warn", "cron", `Direct CLAIM failed for ${p.pair}: ${result.error}`);
         }
       } catch (e) {
-        log("error", "cron", `Direct CLAIM error for ${p.pair}: ${e.message}`);
+        const errMsg = e?.message ?? String(e);
+        log("error", "cron", `Direct CLAIM error for ${p.pair}: ${errMsg}`);
       }
     }
 
@@ -197,12 +194,10 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     const afterCount = Math.max(0, positions.length - closesAttempted);
     const lastTriggeredAt = _timersState.screeningLastTriggered;
 
-    // Dynamic import to avoid circular dep with scheduler.js
     if (afterCount < config.risk.maxPositions && Date.now() - lastTriggeredAt > SCREENING_COOLDOWN_MS && circuit.action !== "halt") {
       if (_busyState._screeningBusy) return;
       _busyState._screeningBusy = true;
-      try {
-        const { runScreeningCycle } = await import("./screening-cycle.js");
+      import("./screening-cycle.js").then(({ runScreeningCycle }) => {
         // Re-check to avoid race: if another call set _timersState.screeningLastTriggered while we were waiting for the lock
         if (_timersState.screeningLastTriggered !== lastTriggeredAt) {
           log("debug", "cron", `Post-management screening skipped — already triggered by concurrent call`);
@@ -212,12 +207,9 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
         } else {
           log("error", "cron", "Screening cycle module missing runScreeningCycle export");
         }
-      } catch (e) {
-        log("error", "cron", `Failed to load screening cycle: ${e?.message ?? e}`);
-      } finally {
-        _busyState._screeningBusy = false;
-      }
+      }).catch(e => log("error", "cron", `Failed to import screening cycle: ${e.message}`));
     }
+
   } catch (error) {
     log("error", "cron", `Management cycle failed: ${error.message}`);
     mgmtReport = `Management cycle failed: ${error.message}`;

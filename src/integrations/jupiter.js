@@ -1,6 +1,34 @@
 const DATAPI_BASE = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 import { createCircuitBreaker, CircuitOpenError } from "../core/circuit-breaker.js";
 
+// ─── OKX Enrichment Cache ─────────────────────────────────────────────────────
+// Caches OKX getAdvancedInfo + getClusterList results per token to avoid
+// redundant API calls when both getTokenInfo and getTokenHolders are invoked
+// for the same token in the same enrichment pass.
+const okxEnrichmentCache = new Map();
+const OKX_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Retrieve OKX enrichment data from cache or fetch fresh.
+ * @param {string} mint - Token mint address
+ * @param {Function} getAdvancedInfo - OKX getAdvancedInfo function
+ * @param {Function} getClusterList - OKX getClusterList function
+ * @returns {Promise<{advancedData: object|null, clusterList: array}>}
+ */
+async function getOkxEnrichmentCached(mint, getAdvancedInfo, getClusterList) {
+  const now = Date.now();
+  const cached = okxEnrichmentCache.get(mint);
+  if (cached && (now - cached.timestamp) < OKX_CACHE_TTL_MS) {
+    return { advancedData: cached.advancedData, clusterList: cached.clusterList };
+  }
+  const [advancedData, clusterList] = await Promise.all([
+    getAdvancedInfo(mint).catch(() => null),
+    getClusterList(mint).catch(() => []),
+  ]);
+  okxEnrichmentCache.set(mint, { advancedData, clusterList, timestamp: now });
+  return { advancedData, clusterList };
+}
+
 // Jupiter datapi breaker — protects token info, holders, narrative calls
 const jupiterApi = createCircuitBreaker("jupiterApi", {
   failureThreshold:  5,
@@ -92,10 +120,11 @@ export async function getTokenInfo({ query }) {
   if (results[0]?.mint) {
     let getAdvancedInfo = async () => null, getClusterList = async () => [];
     try { ({ getAdvancedInfo, getClusterList } = await import("./okx.js")); } catch { /* use noop fallbacks */ }
-    const [adv, clusters] = await Promise.all([
-      getAdvancedInfo(results[0].mint).catch(() => null),
-      getClusterList(results[0].mint).catch(() => []),
-    ]);
+    const { advancedData: adv, clusterList: clusters } = await getOkxEnrichmentCached(
+      results[0].mint,
+      getAdvancedInfo,
+      getClusterList,
+    );
     if (adv) {
       results[0].risk_level      = adv.risk_level;
       results[0].bundle_pct      = adv.bundle_pct;
@@ -170,10 +199,11 @@ export async function getTokenHolders({ mint, limit = 20 }) {
   // ─── Bundle / Cluster Analysis (OKX) ─────────────────────────
   let okxGetAdvancedInfo = async () => null, okxGetClusterList = async () => [];
   try { ({ getAdvancedInfo: okxGetAdvancedInfo, getClusterList: okxGetClusterList } = await import("./okx.js")); } catch { /* use noop fallbacks */ }
-  const [advancedData, clusterList] = await Promise.all([
-    okxGetAdvancedInfo(mint).catch(() => null),
-    okxGetClusterList(mint).catch(() => []),
-  ]);
+  const { advancedData, clusterList } = await getOkxEnrichmentCached(
+    mint,
+    okxGetAdvancedInfo,
+    okxGetClusterList,
+  );
 
   // ─── Smart Wallet / KOL Cross-reference ──────────────────────
   // Use targeted holders endpoint — only returns matching wallets, no noise

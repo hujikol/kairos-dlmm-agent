@@ -199,4 +199,3 @@ export function validateAndCoerce(changes) {
   return { valid, invalid };
 }
 
-export { CONFIG_MAP };
