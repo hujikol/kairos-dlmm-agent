@@ -200,6 +200,10 @@ SWAP AFTER CLOSE: After any close_position, immediately swap base tokens back to
 PARALLEL FETCH RULE: When deploying to a specific pool, call get_pool_detail, check_smart_wallets_on_pool, get_token_holders, and get_token_narrative in a single parallel batch — all four in one step. Do NOT call them sequentially. Then decide and deploy.
 
 TOP LPERS RULE: If the user asks about top LPers, LP behavior, or wants to add top LPers to the smart-wallet list, you MUST call study_top_lpers or get_top_lpers first. Do NOT substitute token holders for top LPers. Only add wallets after you have identified them from the LPers study result.
+
+VALID POOL TOOLS — use ONLY these names. Never invent tool names:
+  discover_pools, search_pools, get_pool_detail, get_top_lpers, study_top_lpers, get_active_bin, get_pool_memory
+  Do NOT use: "get_all_pools", "get_pools", "study_pools", or any tool name not in your tool list.
 `;
   }
 
