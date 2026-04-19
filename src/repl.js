@@ -11,6 +11,14 @@ import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { getDB } from "./core/db.js";
 import { rl } from "./rl-shared.js";
 import { _telegramBusy } from "./telegram-handlers.js";
+import {
+  getStatusData,
+  getBalanceData,
+  getCandidatesData,
+  getThresholdsData,
+  triggerScreen,
+  getSwapAllResult,
+} from "./core/shared-handlers.js";
 
 // ─── Module-level state ─────────────────────────────────────────────────────────
 const sessionHistory = [];
@@ -134,7 +142,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
     }
 
     if (input.toLowerCase() === "screen" || input.toLowerCase() === "/screen") {
-      runScreeningCycle().catch(e => log("error", "cron", `Manual screening failed: ${e?.message ?? String(e)}`));
+      triggerScreen();
       console.log("\nManual screening cycle started.\n");
       rl.prompt();
       return;
@@ -143,7 +151,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
     if (input.toLowerCase() === "/swap-all") {
       await runBusy(async () => {
         console.log("\nSweeping wallet to SOL...\n");
-        const result = await swapAllTokensToSol();
+        const result = await getSwapAllResult();
         console.log(result.success
           ? `\nSweep complete. Swapped ${result.swapped?.length || 0} tokens.\n`
           : `\nSweep failed: ${result.error}\n`);
@@ -161,10 +169,10 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
 
     if (input === "/status") {
       await runBusy(async () => {
-        const [wallet, positions] = await Promise.all([getWalletBalances(), getMyPositions({ force: true })]);
+        const { wallet, positions, total_positions } = await getStatusData();
         console.log(`\nWallet: ${wallet.sol} SOL  ($${wallet.sol_usd})`);
-        console.log(`Positions: ${positions.total_positions}`);
-        for (const p of positions.positions) {
+        console.log(`Positions: ${total_positions}`);
+        for (const p of positions) {
           const status = p.in_range ? "in-range ✓" : "OUT OF RANGE ⚠";
           console.log(`  ${p.pair.padEnd(16)} ${status}  fees: ${config.management.solMode ? "◎" : "$"}${p.unclaimed_fees_usd}`);
         }
@@ -175,10 +183,10 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
 
     if (input === "/balance") {
       await runBusy(async () => {
-        const wallet = await getWalletBalances();
-        console.log(`\nWallet Holdings ($${wallet.total_usd.toFixed(2)}):`);
-        console.log(`  SOL:   ${wallet.sol.toFixed(4)} ($${wallet.sol_usd.toFixed(2)})`);
-        for (const t of wallet.tokens) {
+        const { sol, sol_usd, tokens, total_usd } = await getBalanceData();
+        console.log(`\nWallet Holdings ($${total_usd.toFixed(2)}):`);
+        console.log(`  SOL:   ${sol.toFixed(4)} ($${sol_usd.toFixed(2)})`);
+        for (const t of tokens) {
           if (t.symbol !== "SOL" && t.usd > 0.01) {
             console.log(`  ${t.symbol.padEnd(6)}: ${t.balance.toString().padEnd(12)} ($${t.usd.toFixed(2)})`);
           }
@@ -198,7 +206,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
 
     if (input === "/candidates") {
       await runBusy(async () => {
-        const { candidates, total_eligible, total_screened } = await getTopCandidates({ limit: 5 });
+        const { candidates, total_eligible, total_screened } = await getCandidatesData({ limit: 5 });
         startupCandidates = candidates;
         console.log(`\nTop pools (${total_eligible} eligible from ${total_screened} screened):\n`);
         console.log(formatCandidates(candidates));
@@ -208,7 +216,8 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
     }
 
     if (input === "/thresholds") {
-      const s = config.screening;
+      const { screening, performance } = getThresholdsData();
+      const s = screening;
       console.log("\nCurrent screening thresholds:");
       console.log(`  minFeeActiveTvlRatio: ${s.minFeeActiveTvlRatio}`);
       console.log(`  minOrganic:           ${s.minOrganic}`);
@@ -221,10 +230,9 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
       console.log(`  maxBotHoldersPct:     ${s.maxBotHoldersPct}`);
       console.log(`  maxTop10Pct:          ${s.maxTop10Pct}`);
       console.log(`  timeframe:            ${s.timeframe}`);
-      const perf = getPerformanceSummary();
-      if (perf) {
-        console.log(`\n  Based on ${perf.total_positions_closed} closed positions`);
-        console.log(`  Win rate: ${perf.win_rate_pct}%  |  Avg PnL: ${perf.avg_pnl_pct}%`);
+      if (performance) {
+        console.log(`\n  Based on ${performance.total_positions_closed} closed positions`);
+        console.log(`  Win rate: ${performance.win_rate_pct}%  |  Avg PnL: ${performance.avg_pnl_pct}%`);
       } else {
         console.log("\n  No closed positions yet — thresholds are preset defaults.");
       }

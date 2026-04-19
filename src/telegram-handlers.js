@@ -5,13 +5,28 @@ import { getTopCandidates } from "./screening/discovery.js";
 import { runScreeningCycle, escapeHTMLLocal as escapeHTML } from "./core/cycles.js";
 import { swapAllTokensToSol } from "./integrations/helius.js";
 import { generateBriefing } from "./notifications/briefing.js";
-import { getLearningStats, pinLesson, unpinLesson, rateLesson, listLessons } from "./core/lessons.js";
+import {
+  getLearningStats,
+  pinLesson,
+  unpinLesson,
+  rateLesson,
+  listLessons,
+} from "./core/lessons.js";
 import { config } from "./config.js";
 import { agentLoop } from "./agent/index.js";
 import { stripThink } from "./tools/caveman.js";
 import { startPolling, sendHTML, sendMessage } from "./notifications/telegram.js";
-import { _busyState } from "./core/scheduler.js";
+import { _busyState } from "./core/state/scheduler-state.js";
 import { rl, buildPrompt } from "./rl-shared.js";
+import {
+  getStatusData,
+  getBalanceData,
+  getCandidatesData,
+  getThresholdsData,
+  getPositionsData,
+  getSwapAllResult,
+  triggerScreen,
+} from "./core/shared-handlers.js";
 
 // Module-level queue and busy flag (shared via _telegramBusyState so importers can modify without reassigning the binding)
 const _telegramBusyState = { _busy: false };
@@ -24,7 +39,16 @@ const TOKEN_SWAP_MIN_BALANCE = 0.01;
 
 export { MAX_TELEGRAM_QUEUE, TOKEN_SWAP_MIN_BALANCE };
 
-// Safe error sender — sends HTML error message, logs any send failure silently
+// Shared helper: send a message and swallow send errors (always logs)
+async function safeSend(text) {
+  try {
+    await sendMessage(text);
+  } catch (e) {
+    log("error", "telegram-handler", "Telegram send failed", { error: e?.message });
+  }
+}
+
+// Shared helper: send an HTML error message, logs any send failure silently
 async function safeSendError(ctx, error) {
   try {
     await ctx.sendHTML(`<b>Error:</b> <code>${escapeHTML(error?.message || String(error))}</code>`);
@@ -118,250 +142,264 @@ async function handleTeachCommand(sub, { sendHTML, escapeHTML }) {
   await sendHTML(`<b>/teach</b> subcommands:\n<pre>  pin &lt;id&gt;       — pin a lesson\n  unpin &lt;id&gt;     — unpin a lesson\n  rate &lt;id&gt; useful|useless  — rate a lesson\n  stats          — learning system status\n  list [role]    — list lessons (optionally by role)</pre>`);
 }
 
-// ─── Main Telegram handler ─────────────────────────────────────────────────────
-export async function telegramHandler(text) {
-  log("info", "telegram-handler", `telegramHandler called with: "${text}"`);
-  if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._busy) {
-    if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
-      _telegramQueue.push(text);
-      safeSendError(_telegramBusyState, text);
+// ─── Command handlers (module scope) ──────────────────────────────────────────
+
+async function handleBriefing() {
+  try {
+    const briefing = await generateBriefing();
+    await sendHTML(briefing);
+  } catch (e) {
+    log("warn", "telegram", `Briefing generation failed: ${e.message}`);
+    safeSendError(_telegramBusyState, e);
+  }
+}
+
+async function handleBalance() {
+  try {
+    const { sol, sol_usd, tokens, total_usd } = await getBalanceData();
+    const cur = config.management.solMode ? "◎" : "$";
+
+    let table = "Token     Balance      Value\n";
+    table += "────────  ───────────  ──────\n";
+
+    table += `SOL       ${sol.toFixed(4).padEnd(11)}  $${sol_usd.toFixed(2)}\n`;
+
+    tokens.filter(t => t.symbol !== "SOL" && t.usd > TOKEN_SWAP_MIN_BALANCE).forEach(t => {
+      const sym = t.symbol.slice(0, 8).padEnd(8);
+      const bal = t.balance.toString().slice(0, 11).padEnd(11);
+      const val = `$${t.usd.toFixed(2)}`;
+      table += `${sym}  ${bal}  ${val}\n`;
+    });
+
+    await sendHTML(
+      `<b>💰 Wallet Balance</b>\n\n` +
+      `<pre>${escapeHTML(table)}</pre>\n` +
+      `<b>Total:</b> $${total_usd.toFixed(2)}`
+    );
+  } catch (e) {
+    log("warn", "telegram", `Wallet balance failed: ${e.message}`);
+    await safeSend(`Error: ${e.message}`);
+  }
+}
+
+async function handleStatus() {
+  try {
+    const { wallet, positions, total_positions } = await getStatusData();
+    const cur = config.management.solMode ? "◎" : "$";
+
+    let table = "ID  Pair        PnL     Value\n";
+    table += "──  ──────────  ──────  ──────\n";
+    positions.forEach((p, i) => {
+      const pair = p.pair.slice(0, 10).padEnd(10);
+      const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.padEnd(6);
+      const val = `${cur}${p.total_value_usd}`.padEnd(6);
+      table += `${String(i + 1).padEnd(2)}  ${pair}  ${pnl}  ${val}\n`;
+    });
+
+    const posBlock = total_positions > 0 ? `<pre>${escapeHTML(table)}</pre>\n` : "<i>No open positions.</i>\n";
+    await sendHTML(
+      `<b>📊 Status Report</b>\n\n` +
+      posBlock +
+      `<b>Wallet:</b> ${wallet.sol.toFixed(4)} SOL ($${wallet.sol_usd})\n` +
+      `<b>SOL Price:</b> $${wallet.sol_price}`
+    );
+  } catch (e) {
+    log("warn", "telegram", `Status report failed: ${e.message}`);
+    await safeSend(`Error: ${e.message}`);
+  }
+}
+
+async function handleCandidates() {
+  try {
+    const { candidates } = await getCandidatesData({ limit: 5 });
+    if (!candidates?.length) { await sendMessage("No candidates found."); return; }
+
+    let table = "#   Pool        fee/TVL  vol    org\n";
+    table += "──  ──────────  ───────  ─────  ───\n";
+    candidates.forEach((p, i) => {
+      const name = p.name.slice(0, 10).padEnd(10);
+      const ftvl = `${p.fee_active_tvl_ratio ?? p.fee_tvl_ratio}%`.slice(0, 5).padStart(7);
+      const vol = `$${((p.volume_window || 0) / 1000).toFixed(1)}k`.padStart(5);
+      const org = String(p.organic_score).padStart(3);
+      table += `${String(i + 1).padEnd(2)}  ${name}  ${ftvl}  ${vol}  ${org}\n`;
+    });
+
+    await sendHTML(`<b>🔍 Top Candidates</b>\n\n<pre>${escapeHTML(table)}</pre>`);
+  } catch (e) {
+    log("warn", "telegram", `Candidates fetch failed: ${e.message}`);
+    await safeSend(`Error: ${e.message}`);
+  }
+}
+
+async function handleScreen() {
+  triggerScreen();
+  await sendHTML("🔍 <b>Manual Screening Started</b>");
+}
+
+async function handleSwapAll() {
+  try {
+    await sendHTML("🔄 <b>Sweeping all tokens to SOL...</b>");
+    const result = await getSwapAllResult();
+    if (result.success) {
+      const count = result.swapped?.length || 0;
+      if (count === 0) {
+        await sendHTML("No eligible tokens found to swap.");
+      } else {
+        const symbols = result.swapped.map(s => s.input_mint?.slice(0, 4)).join(", ");
+        await sendHTML(`✅ <b>Sweep Complete</b>\nSwapped ${count} tokens (<code>${escapeHTML(symbols)}</code>) to SOL.`);
+      }
     } else {
-      safeSendError(_telegramBusyState, new Error(`Queue is full (${MAX_TELEGRAM_QUEUE} messages). Wait for the agent to finish.`));
+      await sendHTML(`❌ Sweep failed: <code>${escapeHTML(result.error)}</code>`);
     }
-    return;
+  } catch (e) {
+    log("warn", "telegram", `Swap-all failed: ${e.message}`);
+    safeSendError(_telegramBusyState, e);
   }
+}
 
-  if (text === "/briefing") {
-    try {
-      const briefing = await generateBriefing();
-      await sendHTML(briefing);
-    } catch (e) {
-      log("warn", "telegram", `Briefing generation failed: ${e.message}`);
-      safeSendError(_telegramBusyState, e);
+async function handleThresholds() {
+  try {
+    const { screening, management, performance } = getThresholdsData();
+    const s = screening;
+    const m = management;
+
+    let msg = "⚙️ *BOT CONFIGURATION*\n\n";
+
+    let sc = "🔍 SCREENING\n";
+    sc += "────────────────────\n";
+    sc += `fee_aTVL_min    ${s.minFeeActiveTvlRatio}%\n`;
+    sc += `organic_min     ${s.minOrganic}\n`;
+    sc += `holders_min     ${s.minHolders}\n`;
+    sc += `tvl_min         $${(s.minTvl/1000).toFixed(1)}k\n`;
+    sc += `vol_min         $${(s.minVolume/1000).toFixed(1)}k\n`;
+    sc += `mcap_min        $${((s.minMcap ?? 0)/1000).toFixed(1)}k\n`;
+    sc += `mcap_max        $${((s.maxMcap ?? 0)/1000000).toFixed(1)}M\n`;
+    sc += `age_min         ${s.minTokenAgeHours ?? 0}h\n`;
+    sc += `timeframe       ${s.timeframe}\n`;
+    msg += "```\n" + sc + "```\n";
+
+    let mg = "💼 MANAGEMENT\n";
+    mg += "────────────────────\n";
+    mg += `deploy_amt      ${m.deployAmountSol} SOL\n`;
+    mg += `max_pos         ${m.maxPositions}\n`;
+    mg += `min_open        ${m.minSolToOpen} SOL\n`;
+    mg += `gas_reserve     ${m.gasReserve} SOL\n`;
+    mg += `strategy        ${m.strategy}\n`;
+    msg += "```\n" + mg + "```\n";
+
+    let rs = "🛡️ RISK & EXIT\n";
+    rs += "────────────────────\n";
+    rs += `stop_loss       ${m.stopLossPct}%\n`;
+    rs += `tp_fee_pct      ${m.takeProfitFeePct}%\n`;
+    rs += `trailing_tp     ${m.trailingTakeProfit ? "ON" : "OFF"}\n`;
+    rs += `  trigger       ${m.trailingTriggerPct}%\n`;
+    rs += `  drop          ${m.trailingDropPct}%\n`;
+    rs += `oor_wait        ${m.outOfRangeWaitMinutes}m\n`;
+    msg += "```\n" + rs + "```\n";
+
+    if (performance) {
+      msg += `<i>Stats from ${performance.total_positions_closed} closed positions:</i>\n` +
+             `<b>Win Rate:</b> ${performance.win_rate_pct}%  •  <b>Avg PnL:</b> ${performance.avg_pnl_pct}%`;
     }
-    return;
+
+    await sendHTML(msg);
+  } catch (e) {
+    log("warn", "telegram", `Thresholds display failed: ${e.message}`);
+    await safeSend(`Error: ${e.message}`);
   }
+}
 
-  if (text === "/balance") {
-    try {
-      const wallet = await getWalletBalances();
-      const cur = config.management.solMode ? "◎" : "$";
+async function handlePositions() {
+  try {
+    const { positions, total_positions } = await getPositionsData();
+    if (total_positions === 0) { await sendMessage("No open positions."); return; }
+    const cur = config.management.solMode ? "◎" : "$";
 
-      let table = "Token     Balance      Value\n";
-      table += "────────  ───────────  ──────\n";
+    let table = "#   Pair        Value   PnL     Fees\n";
+    table += "──  ──────────  ──────  ──────  ──────\n";
+    positions.forEach((p, i) => {
+      const pair = p.pair.slice(0, 10).padEnd(10);
+      const val = `${cur}${p.total_value_usd}`.slice(0, 6).padEnd(6);
+      const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.slice(0, 6).padEnd(6);
+      const fees = `${cur}${p.unclaimed_fees_usd}`.slice(0, 6).padEnd(6);
+      const oor = !p.in_range ? " ⚠️" : "";
+      table += `${String(i + 1).padEnd(2)}  ${pair}  ${val}  ${pnl}  ${fees}${oor}\n`;
+    });
 
-      table += `SOL       ${wallet.sol.toFixed(4).padEnd(11)}  $${wallet.sol_usd.toFixed(2)}\n`;
-
-      wallet.tokens.filter(t => t.symbol !== "SOL" && t.usd > TOKEN_SWAP_MIN_BALANCE).forEach(t => {
-        const sym = t.symbol.slice(0, 8).padEnd(8);
-        const bal = t.balance.toString().slice(0, 11).padEnd(11);
-        const val = `$${t.usd.toFixed(2)}`;
-        table += `${sym}  ${bal}  ${val}\n`;
-      });
-
-      await sendHTML(
-        `<b>💰 Wallet Balance</b>\n\n` +
-        `<pre>${escapeHTML(table)}</pre>\n` +
-        `<b>Total:</b> $${wallet.total_usd.toFixed(2)}`
-      );
-    } catch (e) { log("warn", "telegram", `Wallet balance failed: ${e.message}`); await sendMessage(`Error: ${e.message}`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
-    return;
+    await sendHTML(
+      `<b>📊 Open Positions (${total_positions})</b>\n\n` +
+      `<pre>${escapeHTML(table)}</pre>\n` +
+      `<code>/close &lt;n&gt;</code> to close | <code>/set &lt;n&gt; &lt;note&gt;</code> to set instruction`
+    );
+  } catch (e) {
+    log("warn", "telegram", `Positions display failed: ${e.message}`);
+    await safeSend(`Error: ${e.message}`);
   }
+}
 
-  if (text === "/status") {
-    try {
-      const [wallet, positionsData] = await Promise.all([
-        getWalletBalances(),
-        getMyPositions({ force: true })
-      ]);
-      const { positions, total_positions } = positionsData;
-      const cur = config.management.solMode ? "◎" : "$";
-
-      let table = "ID  Pair        PnL     Value\n";
-      table += "──  ──────────  ──────  ──────\n";
-      positions.forEach((p, i) => {
-        const pair = p.pair.slice(0, 10).padEnd(10);
-        const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.padEnd(6);
-        const val = `${cur}${p.total_value_usd}`.padEnd(6);
-        table += `${String(i + 1).padEnd(2)}  ${pair}  ${pnl}  ${val}\n`;
-      });
-
-      const posBlock = total_positions > 0 ? `<pre>${escapeHTML(table)}</pre>\n` : "<i>No open positions.</i>\n";
-      await sendHTML(
-        `<b>📊 Status Report</b>\n\n` +
-        posBlock +
-        `<b>Wallet:</b> ${wallet.sol.toFixed(4)} SOL ($${wallet.sol_usd})\n` +
-        `<b>SOL Price:</b> $${wallet.sol_price}`
-      );
-    } catch (e) { log("warn", "telegram", `Status report failed: ${e.message}`); await sendMessage(`Error: ${e.message}`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
-    return;
-  }
-
-  if (text === "/candidates") {
-    try {
-      const { candidates } = await getTopCandidates({ limit: 5 });
-      if (!candidates?.length) { await sendMessage("No candidates found."); return; }
-
-      let table = "#   Pool        fee/TVL  vol    org\n";
-      table += "──  ──────────  ───────  ─────  ───\n";
-      candidates.forEach((p, i) => {
-        const name = p.name.slice(0, 10).padEnd(10);
-        const ftvl = `${p.fee_active_tvl_ratio ?? p.fee_tvl_ratio}%`.slice(0, 5).padStart(7);
-        const vol = `$${((p.volume_window || 0) / 1000).toFixed(1)}k`.padStart(5);
-        const org = String(p.organic_score).padStart(3);
-        table += `${String(i + 1).padEnd(2)}  ${name}  ${ftvl}  ${vol}  ${org}\n`;
-      });
-
-      await sendHTML(`<b>🔍 Top Candidates</b>\n\n<pre>${escapeHTML(table)}</pre>`);
-    } catch (e) { log("warn", "telegram", `Candidates fetch failed: ${e.message}`); await sendMessage(`Error: ${e.message}`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
-    return;
-  }
-
-  if (text === "/screen") {
-    runScreeningCycle().catch((e) => { /* log in orchestration */ });
-    await sendHTML("🔍 <b>Manual Screening Started</b>");
-    return;
-  }
-
-  if (text === "/swap-all") {
-    try {
-      await sendHTML("🔄 <b>Sweeping all tokens to SOL...</b>");
-      const result = await swapAllTokensToSol();
-      if (result.success) {
-        const count = result.swapped?.length || 0;
-        if (count === 0) {
-          await sendHTML("No eligible tokens found to swap.");
-        } else {
-          const symbols = result.swapped.map(s => s.input_mint?.slice(0, 4)).join(", ");
-          await sendHTML(`✅ <b>Sweep Complete</b>\nSwapped ${count} tokens (<code>${escapeHTML(symbols)}</code>) to SOL.`);
-        }
-      } else {
-        await sendHTML(`❌ Sweep failed: <code>${escapeHTML(result.error)}</code>`);
-      }
-    } catch (e) { log("warn", "telegram", `Swap-all failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
-    return;
-  }
-
-  if (text === "/thresholds") {
-    try {
-      const s = config.screening;
-      const m = config.management;
-      const perf = (await import("./core/lessons.js")).getPerformanceSummary();
-
-      let msg = "⚙️ *BOT CONFIGURATION*\n\n";
-
-      let sc = "🔍 SCREENING\n";
-      sc += "────────────────────\n";
-      sc += `fee_aTVL_min    ${s.minFeeActiveTvlRatio}%\n`;
-      sc += `organic_min     ${s.minOrganic}\n`;
-      sc += `holders_min     ${s.minHolders}\n`;
-      sc += `tvl_min         $${(s.minTvl/1000).toFixed(1)}k\n`;
-      sc += `vol_min         $${(s.minVolume/1000).toFixed(1)}k\n`;
-      sc += `mcap_min        $${(s.minMcap/1000).toFixed(1)}k\n`;
-      sc += `mcap_max        $${(s.maxMcap/1000000).toFixed(1)}M\n`;
-      sc += `age_min         ${s.minTokenAgeHours ?? 0}h\n`;
-      sc += `timeframe       ${s.timeframe}\n`;
-      msg += "```\n" + sc + "```\n";
-
-      let mg = "💼 MANAGEMENT\n";
-      mg += "────────────────────\n";
-      mg += `deploy_amt      ${m.deployAmountSol} SOL\n`;
-      mg += `max_pos         ${m.maxPositions}\n`;
-      mg += `min_open        ${m.minSolToOpen} SOL\n`;
-      mg += `gas_reserve     ${m.gasReserve} SOL\n`;
-      mg += `strategy        ${m.strategy}\n`;
-      msg += "```\n" + mg + "```\n";
-
-      let rs = "🛡️ RISK & EXIT\n";
-      rs += "────────────────────\n";
-      rs += `stop_loss       ${m.stopLossPct}%\n`;
-      rs += `tp_fee_pct      ${m.takeProfitFeePct}%\n`;
-      rs += `trailing_tp     ${m.trailingTakeProfit ? "ON" : "OFF"}\n`;
-      rs += `  trigger       ${m.trailingTriggerPct}%\n`;
-      rs += `  drop          ${m.trailingDropPct}%\n`;
-      rs += `oor_wait        ${m.outOfRangeWaitMinutes}m\n`;
-      msg += "```\n" + rs + "```\n";
-
-      if (perf) {
-        msg += `<i>Stats from ${perf.total_positions_closed} closed positions:</i>\n` +
-               `<b>Win Rate:</b> ${perf.win_rate_pct}%  •  <b>Avg PnL:</b> ${perf.avg_pnl_pct}%`;
-      }
-
-      await sendHTML(msg);
-    } catch (e) { log("warn", "telegram", `Thresholds display failed: ${e.message}`); await sendMessage(`Error: ${e.message}`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
-    return;
-  }
-
-  if (text === "/positions") {
-    try {
-      const { positions, total_positions } = await getMyPositions({ force: true });
-      if (total_positions === 0) { await sendMessage("No open positions."); return; }
-      const cur = config.management.solMode ? "◎" : "$";
-
-      let table = "#   Pair        Value   PnL     Fees\n";
-      table += "──  ──────────  ──────  ──────  ──────\n";
-      positions.forEach((p, i) => {
-        const pair = p.pair.slice(0, 10).padEnd(10);
-        const val = `${cur}${p.total_value_usd}`.slice(0, 6).padEnd(6);
-        const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.slice(0, 6).padEnd(6);
-        const fees = `${cur}${p.unclaimed_fees_usd}`.slice(0, 6).padEnd(6);
-        const oor = !p.in_range ? " ⚠️" : "";
-        table += `${String(i + 1).padEnd(2)}  ${pair}  ${val}  ${pnl}  ${fees}${oor}\n`;
-      });
-
-      await sendHTML(
-        `<b>📊 Open Positions (${total_positions})</b>\n\n` +
-        `<pre>${escapeHTML(table)}</pre>\n` +
-        `<code>/close &lt;n&gt;</code> to close | <code>/set &lt;n&gt; &lt;note&gt;</code> to set instruction`
-      );
-    } catch (e) { log("warn", "telegram", `Positions display failed: ${e.message}`); await sendMessage(`Error: ${e.message}`).catch(e => log("error", "telegram-handler", "Telegram send failed", { error: e?.message })); }
-    return;
-  }
-
+// Returns true if the message was handled
+async function handleClose(text) {
   const closeMatch = text.match(/^\/close\s+(\d+)$/i);
-  if (closeMatch) {
-    try {
-      const idx = parseInt(closeMatch[1]) - 1;
-      const { positions } = await getMyPositions({ force: true });
-      if (idx < 0 || idx >= positions.length) { await sendHTML(`Invalid number. Use <code>/positions</code> first.`); return; }
-      const pos = positions[idx];
-      await sendHTML(`Closing <b>${escapeHTML(pos.pair)}</b>...`);
-      const result = await closePosition({ position_address: pos.position });
-      if (result.success) {
-        const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
-        const claimNote = result.claim_txs?.length ? `\nClaim txs: <code>${escapeHTML(result.claim_txs.join(", "))}</code>` : "";
-        await sendHTML(`✅ <b>Closed</b> ${escapeHTML(pos.pair)}\n<b>PnL:</b> ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"}  •  <b>txs:</b> <code>${escapeHTML(closeTxs?.join(", ") || "n/a")}</code>${claimNote}`);
-      } else {
-        await sendHTML(`❌ Close failed: <code>${escapeHTML(JSON.stringify(result))}</code>`);
-      }
-    } catch (e) { log("warn", "telegram", `Close command failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
-    return;
-  }
+  if (!closeMatch) return false;
 
+  try {
+    const idx = parseInt(closeMatch[1]) - 1;
+    const { positions } = await getMyPositions({ force: true });
+    if (idx < 0 || idx >= positions.length) { await sendHTML(`Invalid number. Use <code>/positions</code> first.`); return true; }
+    const pos = positions[idx];
+    await sendHTML(`Closing <b>${escapeHTML(pos.pair)}</b>...`);
+    const result = await closePosition({ position_address: pos.position });
+    if (result.success) {
+      const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
+      const claimNote = result.claim_txs?.length ? `\nClaim txs: <code>${escapeHTML(result.claim_txs.join(", "))}</code>` : "";
+      await sendHTML(`✅ <b>Closed</b> ${escapeHTML(pos.pair)}\n<b>PnL:</b> ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"}  •  <b>txs:</b> <code>${escapeHTML(closeTxs?.join(", ") || "n/a")}</code>${claimNote}`);
+    } else {
+      await sendHTML(`❌ Close failed: <code>${escapeHTML(JSON.stringify(result))}</code>`);
+    }
+  } catch (e) {
+    log("warn", "telegram", `Close command failed: ${e.message}`);
+    safeSendError(_telegramBusyState, e);
+  }
+  return true;
+}
+
+// Returns true if the message was handled
+async function handleSet(text) {
   const setMatch = text.match(/^\/set\s+(\d+)\s+(.+)$/i);
-  if (setMatch) {
-    try {
-      const idx = parseInt(setMatch[1]) - 1;
-      const note = setMatch[2].trim();
-      const { positions } = await getMyPositions({ force: true });
-      if (idx < 0 || idx >= positions.length) { await sendHTML(`Invalid number. Use <code>/positions</code> first.`); return; }
-      const pos = positions[idx];
-      const { setPositionInstruction } = await import("./core/state/index.js");
-      setPositionInstruction(pos.position, note);
-      await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
-    } catch (e) { log("warn", "telegram", `Set instruction failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
-    return;
-  }
+  if (!setMatch) return false;
 
+  try {
+    const idx = parseInt(setMatch[1]) - 1;
+    const note = setMatch[2].trim();
+    const { positions } = await getMyPositions({ force: true });
+    if (idx < 0 || idx >= positions.length) { await sendHTML(`Invalid number. Use <code>/positions</code> first.`); return true; }
+    const pos = positions[idx];
+    const { setPositionInstruction } = await import("./core/state/index.js");
+    setPositionInstruction(pos.position, note);
+    await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
+  } catch (e) {
+    log("warn", "telegram", `Set instruction failed: ${e.message}`);
+    safeSendError(_telegramBusyState, e);
+  }
+  return true;
+}
+
+// Returns true if the message was handled
+async function handleTeach(text) {
   const teachMatch = text.match(/^\/teach\s+(.+)$/i);
-  if (teachMatch) {
-    try {
-      await handleTeachCommand(teachMatch[1].trim(), { sendHTML, escapeHTML });
-    } catch (e) { log("warn", "telegram", `Teach command failed: ${e.message}`); safeSendError(_telegramBusyState, e); }
-    return;
-  }
+  if (!teachMatch) return false;
 
-  // Free-form LLM chat
+  try {
+    await handleTeachCommand(teachMatch[1].trim(), { sendHTML, escapeHTML });
+  } catch (e) {
+    log("warn", "telegram", `Teach command failed: ${e.message}`);
+    safeSendError(_telegramBusyState, e);
+  }
+  return true;
+}
+
+// ─── Free-form LLM chat handler ────────────────────────────────────────────────
+async function handleLLMChat(text) {
   _telegramBusyState._busy = true;
   try {
     const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
@@ -377,6 +415,42 @@ export async function telegramHandler(text) {
     _telegramBusyState._busy = false;
     drainTelegramQueue().catch(err => log("warn", "telegram", `drainTelegramQueue failed: ${err?.message || err}`));
   }
+}
+
+// ─── Main Telegram handler (dispatcher) ────────────────────────────────────────
+export async function telegramHandler(text) {
+  log("info", "telegram-handler", `telegramHandler called with: "${text}"`);
+
+  // Busy check — queue if busy
+  if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._busy) {
+    if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
+      _telegramQueue.push(text);
+      safeSendError(_telegramBusyState, text);
+    } else {
+      safeSendError(_telegramBusyState, new Error(`Queue is full (${MAX_TELEGRAM_QUEUE} messages). Wait for the agent to finish.`));
+    }
+    return;
+  }
+
+  // Dispatch to named handlers (exact-match commands)
+  switch (text) {
+    case "/briefing":   return handleBriefing();
+    case "/balance":    return handleBalance();
+    case "/status":     return handleStatus();
+    case "/candidates": return handleCandidates();
+    case "/screen":     return handleScreen();
+    case "/swap-all":   return handleSwapAll();
+    case "/thresholds": return handleThresholds();
+    case "/positions":  return handlePositions();
+  }
+
+  // Regex-based handlers — return true if they handled the message
+  if (await handleClose(text)) return;
+  if (await handleSet(text)) return;
+  if (await handleTeach(text)) return;
+
+  // Free-form LLM chat (default)
+  await handleLLMChat(text);
 }
 
 // Start polling — called from index.js after rl is set up

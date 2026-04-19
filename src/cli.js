@@ -4,11 +4,11 @@
  * Direct tool invocation with JSON output. Agent-native.
  */
 
-import "dotenv/config";
-import { parseArgs } from "util";
-import os from "os";
 import fs from "fs";
+import os from "os";
 import path from "path";
+import { parseArgs } from "util";
+import { out, die, DRY_RUN, COMMAND_DEFAULTS } from "./cli/utils.js";
 
 // ─── DRY_RUN must be set before any tool imports ─────────────────
 if (process.argv.includes("--dry-run")) process.env.DRY_RUN = "true";
@@ -19,26 +19,6 @@ const kairosEnv = path.join(kairosDir, ".env");
 if (fs.existsSync(kairosEnv)) {
   const { config: loadDotenv } = await import("dotenv");
   loadDotenv({ path: kairosEnv, override: false });
-}
-
-// ─── Command defaults ───────────────────────────────────────────────
-const COMMAND_DEFAULTS = {
-  CANDIDATES_LIMIT:    5,
-  TOKEN_HOLDERS_LIMIT: 20,
-  SEARCH_POOLS_LIMIT:  10,
-  STUDY_LIMIT:          4,
-  LESSONS_LIMIT:       50,
-  PERFORMANCE_LIMIT:  200,
-};
-
-// ─── Output helpers ───────────────────────────────────────────────
-function out(data) {
-  process.stdout.write(JSON.stringify(data, null, 2) + "\n");
-}
-
-function die(msg, extra = {}) {
-  process.stderr.write(JSON.stringify({ error: msg, ...extra }) + "\n");
-  process.exit(1);
 }
 
 // ─── SKILL.md generation ──────────────────────────────────────────
@@ -259,369 +239,65 @@ const { values: flags } = parseArgs({
   strict: false,
 });
 
-// ─── Commands ─────────────────────────────────────────────────────
+// ─── Command registry ─────────────────────────────────────────────
+import { balanceCmd }          from "./cli/commands/balance.js";
+import { positionsCmd }        from "./cli/commands/positions.js";
+import { pnlCmd }              from "./cli/commands/pnl.js";
+import { candidatesCmd }      from "./cli/commands/candidates.js";
+import { tokenInfoCmd }       from "./cli/commands/token-info.js";
+import { tokenHoldersCmd }     from "./cli/commands/token-holders.js";
+import { tokenNarrativeCmd }   from "./cli/commands/token-narrative.js";
+import { poolDetailCmd }      from "./cli/commands/pool-detail.js";
+import { searchPoolsCmd }      from "./cli/commands/search-pools.js";
+import { activeBinCmd }        from "./cli/commands/active-bin.js";
+import { walletPositionsCmd }  from "./cli/commands/wallet-positions.js";
+import { deployCmd }          from "./cli/commands/deploy.js";
+import { claimCmd }           from "./cli/commands/claim.js";
+import { closeCmd }           from "./cli/commands/close.js";
+import { swapCmd }            from "./cli/commands/swap.js";
+import { screenCmd }          from "./cli/commands/screen.js";
+import { manageCmd }          from "./cli/commands/manage.js";
+import { configCmd }          from "./cli/commands/config.js";
+import { studyCmd }           from "./cli/commands/study.js";
+import { startCmd }           from "./cli/commands/start.js";
+import { lessonsCmd }         from "./cli/commands/lessons.js";
+import { poolMemoryCmd }      from "./cli/commands/pool-memory.js";
+import { evolveCmd }          from "./cli/commands/evolve.js";
+import { blacklistCmd }       from "./cli/commands/blacklist.js";
+import { performanceCmd }     from "./cli/commands/performance.js";
 
-switch (subcommand) {
+const COMMANDS = {
+  balance:          balanceCmd,
+  positions:        positionsCmd,
+  pnl:              pnlCmd,
+  candidates:       candidatesCmd,
+  "token-info":     tokenInfoCmd,
+  "token-holders":  tokenHoldersCmd,
+  "token-narrative": tokenNarrativeCmd,
+  "pool-detail":   poolDetailCmd,
+  "search-pools":  searchPoolsCmd,
+  "active-bin":    activeBinCmd,
+  "wallet-positions": walletPositionsCmd,
+  deploy:           deployCmd,
+  claim:            claimCmd,
+  close:            closeCmd,
+  swap:             swapCmd,
+  screen:           screenCmd,
+  manage:           manageCmd,
+  config:           configCmd,
+  study:            studyCmd,
+  start:            startCmd,
+  lessons:          lessonsCmd,
+  "pool-memory":    poolMemoryCmd,
+  evolve:           evolveCmd,
+  blacklist:        blacklistCmd,
+  performance:      performanceCmd,
+};
 
-  // ── balance ──────────────────────────────────────────────────────
-  case "balance": {
-    const { getWalletBalances } = await import("./integrations/helius.js");
-    out(await getWalletBalances({}));
-    break;
-  }
-
-  // ── positions ────────────────────────────────────────────────────
-  case "positions": {
-    const { getMyPositions } = await import("./integrations/meteora.js");
-    out(await getMyPositions({ force: true }));
-    break;
-  }
-
-  // ── pnl <position_address> ───────────────────────────────────────
-  case "pnl": {
-    const posAddr = argv.find((a, i) => !a.startsWith("-") && i > 0 && argv[i - 1] !== "--position" && a !== "pnl");
-    const positionAddress = flags.position || posAddr;
-    if (!positionAddress) die("Usage: kairos pnl <position_address>");
-
-    const { getTrackedPosition } = await import("./core/state/index.js");
-    const { getPositionPnl, getMyPositions } = await import("./integrations/meteora.js");
-
-    let poolAddress;
-    const tracked = getTrackedPosition(positionAddress);
-    if (tracked?.pool) {
-      poolAddress = tracked.pool;
-    } else {
-      // Fall back: scan positions to find pool
-      const pos = await getMyPositions({ force: true });
-      const found = pos.positions?.find(p => p.position === positionAddress);
-      if (!found) die("Position not found", { position: positionAddress });
-      poolAddress = found.pool;
-    }
-
-    const pnl = await getPositionPnl({ pool_address: poolAddress, position_address: positionAddress });
-    if (tracked?.strategy) pnl.strategy = tracked.strategy;
-    if (tracked?.instruction) pnl.instruction = tracked.instruction;
-    out(pnl);
-    break;
-  }
-
-  // ── candidates ───────────────────────────────────────────────────
-  case "candidates": {
-    const { getTopCandidates } = await import("./screening/discovery.js");
-    const { getActiveBin } = await import("./integrations/meteora.js");
-    const { getTokenInfo, getTokenHolders, getTokenNarrative } = await import("./integrations/jupiter.js");
-    const { checkSmartWalletsOnPool } = await import("./features/smart-wallets.js");
-    const { recallForPool } = await import("./features/pool-memory.js");
-
-    const limit = parseInt(flags.limit || String(COMMAND_DEFAULTS.CANDIDATES_LIMIT));
-    const raw = await getTopCandidates({ limit });
-    const pools = raw.candidates || raw.pools || [];
-
-    const enriched = [];
-    for (const pool of pools) {
-      const mint = pool.base?.mint;
-      const [activeBin, smartWallets, tokenInfo, holders, narrative] = await Promise.allSettled([
-        getActiveBin({ pool_address: pool.pool }),
-        checkSmartWalletsOnPool({ pool_address: pool.pool }),
-        mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
-        mint ? getTokenHolders({ mint }) : Promise.resolve(null),
-        mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
-      ]);
-      const ti = tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null;
-      enriched.push({
-        pool: pool.pool,
-        name: pool.name,
-        bin_step: pool.bin_step,
-        fee_pct: pool.fee_pct,
-        fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
-        volume: pool.volume_window,
-        tvl: pool.active_tvl,
-        volatility: pool.volatility,
-        mcap: pool.mcap,
-        organic_score: pool.organic_score,
-        active_pct: pool.active_pct,
-        price_change_pct: pool.price_change_pct,
-        active_bin: activeBin.status === "fulfilled" ? activeBin.value?.binId : null,
-        smart_wallets: smartWallets.status === "fulfilled" ? (smartWallets.value?.in_pool || []).map(w => w.name) : [],
-        token: {
-          mint,
-          symbol: pool.base?.symbol,
-          holders: pool.holders,
-          mcap: ti?.mcap,
-          launchpad: ti?.launchpad,
-          global_fees_sol: ti?.global_fees_sol,
-          price_change_1h: ti?.stats_1h?.price_change,
-          net_buyers_1h: ti?.stats_1h?.net_buyers,
-          audit: {
-            top10_pct: ti?.audit?.top_holders_pct,
-            bots_pct: ti?.audit?.bot_holders_pct,
-          },
-        },
-        holders: holders.status === "fulfilled" ? holders.value : null,
-        narrative: narrative.status === "fulfilled" ? narrative.value?.narrative : null,
-        pool_memory: recallForPool(pool.pool) || null,
-      });
-      await new Promise(r => setTimeout(r, 150)); // avoid 429s
-    }
-
-    out({ candidates: enriched, total_screened: raw.total_screened });
-    break;
-  }
-
-  // ── token-info ──────────────────────────────────────────────────
-  case "token-info": {
-    const query = flags.query || flags.mint || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "token-info");
-    if (!query) die("Usage: kairos token-info --query <mint_or_symbol>");
-    const { getTokenInfo } = await import("./integrations/jupiter.js");
-    out(await getTokenInfo({ query }));
-    break;
-  }
-
-  // ── token-holders ─────────────────────────────────────────────
-  case "token-holders": {
-    const mint = flags.mint || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "token-holders");
-    if (!mint) die("Usage: kairos token-holders --mint <addr>");
-    const { getTokenHolders } = await import("./integrations/jupiter.js");
-    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.TOKEN_HOLDERS_LIMIT;
-    out(await getTokenHolders({ mint, limit }));
-    break;
-  }
-
-  // ── token-narrative ───────────────────────────────────────────
-  case "token-narrative": {
-    const mint = flags.mint || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "token-narrative");
-    if (!mint) die("Usage: kairos token-narrative --mint <addr>");
-    const { getTokenNarrative } = await import("./integrations/jupiter.js");
-    out(await getTokenNarrative({ mint }));
-    break;
-  }
-
-  // ── pool-detail ───────────────────────────────────────────────
-  case "pool-detail": {
-    if (!flags.pool) die("Usage: kairos pool-detail --pool <addr> [--timeframe 5m]");
-    const { getPoolDetail } = await import("./screening/discovery.js");
-    out(await getPoolDetail({ pool_address: flags.pool, timeframe: flags.timeframe || "5m" }));
-    break;
-  }
-
-  // ── search-pools ──────────────────────────────────────────────
-  case "search-pools": {
-    const query = flags.query || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "search-pools");
-    if (!query) die("Usage: kairos search-pools --query <name_or_symbol>");
-    const { searchPools } = await import("./integrations/meteora.js");
-    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.SEARCH_POOLS_LIMIT;
-    out(await searchPools({ query, limit }));
-    break;
-  }
-
-  // ── active-bin ────────────────────────────────────────────────
-  case "active-bin": {
-    if (!flags.pool) die("Usage: kairos active-bin --pool <addr>");
-    const { getActiveBin } = await import("./integrations/meteora.js");
-    out(await getActiveBin({ pool_address: flags.pool }));
-    break;
-  }
-
-  // ── wallet-positions ──────────────────────────────────────────
-  case "wallet-positions": {
-    const wallet = flags.wallet || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "wallet-positions");
-    if (!wallet) die("Usage: kairos wallet-positions --wallet <addr>");
-    const { getWalletPositions } = await import("./integrations/meteora.js");
-    out(await getWalletPositions({ wallet_address: wallet }));
-    break;
-  }
-
-  // ── deploy ───────────────────────────────────────────────────────
-  case "deploy": {
-    if (!flags.pool) die("Usage: kairos deploy --pool <addr> --amount <sol>");
-    const amountX = flags["amount-x"] ? parseFloat(flags["amount-x"]) : undefined;
-    if (!flags.amount && !amountX) die("--amount or --amount-x is required");
-
-    const { executeTool } = await import("./tools/executor.js");
-    out(await executeTool("deploy_position", {
-      pool_address: flags.pool,
-      amount_y: flags.amount ? parseFloat(flags.amount) : undefined,
-      amount_x: amountX,
-      strategy: flags.strategy,
-      single_sided_x: argv.includes("--single-sided-x"),
-      bins_below: flags["bins-below"] ? parseInt(flags["bins-below"]) : undefined,
-      bins_above: flags["bins-above"] ? parseInt(flags["bins-above"]) : undefined,
-      allow_duplicate_pool: argv.includes("--allow-duplicate-pool"),
-    }));
-    break;
-  }
-
-  // ── claim ────────────────────────────────────────────────────────
-  case "claim": {
-    if (!flags.position) die("Usage: kairos claim --position <addr>");
-    const { executeTool } = await import("./tools/executor.js");
-    out(await executeTool("claim_fees", { position_address: flags.position }));
-    break;
-  }
-
-  // ── close ────────────────────────────────────────────────────────
-  case "close": {
-    if (!flags.position) die("Usage: kairos close --position <addr>");
-    const { executeTool } = await import("./tools/executor.js");
-    out(await executeTool("close_position", {
-      position_address: flags.position,
-      skip_swap: flags["skip-swap"] ?? false,
-    }));
-    break;
-  }
-
-  // ── swap ─────────────────────────────────────────────────────────
-  case "swap": {
-    if (!flags.from || !flags.to || !flags.amount) die("Usage: kairos swap --from <mint> --to <mint> --amount <n>");
-    const { executeTool } = await import("./tools/executor.js");
-    out(await executeTool("swap_token", {
-      input_mint: flags.from,
-      output_mint: flags.to,
-      amount: parseFloat(flags.amount),
-    }));
-    break;
-  }
-
-  // ── screen ───────────────────────────────────────────────────────
-  case "screen": {
-    const { runScreeningCycle } = await import("./index.js");
-    const report = await runScreeningCycle({ silent });
-    out({ done: true, report: report || "No action taken" });
-    break;
-  }
-
-  // ── manage ───────────────────────────────────────────────────────
-  case "manage": {
-    const { runManagementCycle } = await import("./index.js");
-    const report = await runManagementCycle({ silent });
-    out({ done: true, report: report || "No action taken" });
-    break;
-  }
-
-  // ── config ───────────────────────────────────────────────────────
-  case "config": {
-    if (sub2 === "get" || !sub2) {
-      const { config } = await import("./config.js");
-      out(config);
-    } else if (sub2 === "set") {
-      const key = argv.filter(a => !a.startsWith("-"))[2];
-      const rawVal = argv.filter(a => !a.startsWith("-"))[3];
-      if (!key || rawVal === undefined) die("Usage: kairos config set <key> <value>");
-      let value = rawVal;
-      try { value = JSON.parse(rawVal); } catch { /* keep as string */ }
-      const { executeTool } = await import("./tools/executor.js");
-      out(await executeTool("update_config", { changes: { [key]: value }, reason: "CLI config set" }));
-    } else {
-      die(`Unknown config subcommand: ${sub2}. Use: get, set`);
-    }
-    break;
-  }
-
-  // ── study ────────────────────────────────────────────────────────
-  case "study": {
-    if (!flags.pool) die("Usage: kairos study --pool <addr> [--limit 4]");
-    const { studyTopLPers } = await import("./integrations/lpagent.js");
-    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.STUDY_LIMIT;
-    out(await studyTopLPers({ pool_address: flags.pool, limit }));
-    break;
-  }
-
-  // ── start ────────────────────────────────────────────────────────
-  case "start": {
-    const { startCronJobs } = await import("./index.js");
-    process.stderr.write("[kairos] Starting autonomous agent...\n");
-    startCronJobs();
-    break;
-  }
-
-  // ── lessons ──────────────────────────────────────────────────────
-  case "lessons": {
-    if (sub2 === "add") {
-      const text = argv.filter(a => !a.startsWith("-")).slice(2).join(" ");
-      if (!text) die("Usage: kairos lessons add <text>");
-      const { addLesson } = await import("./core/lessons.js");
-      addLesson(text, [], { pinned: false, role: null });
-      out({ saved: true, rule: text, outcome: "manual", role: null });
-    } else {
-      const { listLessons } = await import("./core/lessons.js");
-      const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.LESSONS_LIMIT;
-      out(listLessons({ limit }));
-    }
-    break;
-  }
-
-  // ── pool-memory ──────────────────────────────────────────────────
-  case "pool-memory": {
-    if (!flags.pool) die("Usage: kairos pool-memory --pool <addr>");
-    const { getPoolMemory } = await import("./features/pool-memory.js");
-    out(getPoolMemory({ pool_address: flags.pool }));
-    break;
-  }
-
-  // ── evolve ───────────────────────────────────────────────────────
-  case "evolve": {
-    const { config } = await import("./config.js");
-    const { evolveThresholds } = await import("./core/lessons.js");
-    const fs2 = await import("fs");
-    const lessonsFile = "./lessons.json";
-    let perfData = [];
-    if (fs2.existsSync(lessonsFile)) {
-      try { perfData = JSON.parse(fs2.readFileSync(lessonsFile, "utf8")).performance || []; } catch { /* no data */ }
-    }
-    const result = evolveThresholds(perfData, config);
-    if (!result) {
-      out({ evolved: false, reason: `Need at least 5 closed positions (have ${perfData.length})` });
-    } else {
-      out({ evolved: Object.keys(result.changes).length > 0, changes: result.changes, rationale: result.rationale });
-    }
-    break;
-  }
-
-  // ── blacklist ────────────────────────────────────────────────────
-  case "blacklist": {
-    if (sub2 === "add") {
-      if (!flags.mint) die("Usage: kairos blacklist add --mint <addr> --reason <text>");
-      if (!flags.reason) die("--reason is required");
-      const { addToBlacklist } = await import("./features/token-blacklist.js");
-      out(addToBlacklist({ mint: flags.mint, reason: flags.reason }));
-    } else if (sub2 === "list" || !sub2) {
-      const { listBlacklist } = await import("./features/token-blacklist.js");
-      out(listBlacklist());
-    } else {
-      die(`Unknown blacklist subcommand: ${sub2}. Use: add, list`);
-    }
-    break;
-  }
-
-  // ── performance ──────────────────────────────────────────────────
-  case "performance": {
-    const { getPerformanceHistory, getPerformanceSummary } = await import("./core/lessons.js");
-    const limit = flags.limit ? parseInt(flags.limit) : COMMAND_DEFAULTS.PERFORMANCE_LIMIT;
-    const history = getPerformanceHistory({ hours: 999999, limit });
-    const summary = getPerformanceSummary();
-    out({ summary, ...history });
-    break;
-  }
-
-  // ── withdraw-liquidity ─────────────────────────────────────────
-  case "withdraw-liquidity": {
-    if (!flags.position) die("Usage: kairos withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]");
-    if (!flags.pool) die("--pool is required");
-    // Not implemented — withdraw is handled automatically by the management cycle.
-    // Use `close-position` to fully close a position.
-    die("withdraw-liquidity is not yet implemented. Use 'close-position' to close a position.", { hint: "Partial withdrawals are handled by the management cycle." });
-    break;
-  }
-
-  // ── add-liquidity ──────────────────────────────────────────────
-  case "add-liquidity": {
-    if (!flags.position) die("Usage: kairos add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>]");
-    if (!flags.pool) die("--pool is required");
-    // Not implemented — use deploy-position to open a new position.
-    die("add-liquidity is not yet implemented. Use 'deploy-position' to open a new position.", { hint: "Adding to an existing position is handled by the management cycle." });
-    break;
-  }
-
-  default:
-    die(`Unknown command: ${subcommand}. Run 'kairos help' for usage.`);
+// ─── Dispatch ──────────────────────────────────────────────────────
+const handler = COMMANDS[subcommand];
+if (!handler) {
+  die(`Unknown command: ${subcommand}. Run 'kairos help' for usage.`);
 }
+
+handler(argv, flags, sub2, silent);
