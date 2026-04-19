@@ -149,7 +149,7 @@ async function handleBriefing() {
     const briefing = await generateBriefing();
     await sendHTML(briefing);
   } catch (e) {
-    log("warn", "telegram", `Briefing generation failed: ${e.message}`);
+    log("warn", "telegram", `Briefing generation failed: ${e?.message ?? e}`);
     safeSendError(_telegramBusyState, e);
   }
 }
@@ -177,8 +177,8 @@ async function handleBalance() {
       `<b>Total:</b> $${total_usd.toFixed(2)}`
     );
   } catch (e) {
-    log("warn", "telegram", `Wallet balance failed: ${e.message}`);
-    await safeSend(`Error: ${e.message}`);
+    log("warn", "telegram", `Wallet balance failed: ${e?.message ?? e}`);
+    await safeSend(`Error: ${e?.message ?? e}`);
   }
 }
 
@@ -204,8 +204,8 @@ async function handleStatus() {
       `<b>SOL Price:</b> $${wallet.sol_price}`
     );
   } catch (e) {
-    log("warn", "telegram", `Status report failed: ${e.message}`);
-    await safeSend(`Error: ${e.message}`);
+    log("warn", "telegram", `Status report failed: ${e?.message ?? e}`);
+    await safeSend(`Error: ${e?.message ?? e}`);
   }
 }
 
@@ -226,8 +226,8 @@ async function handleCandidates() {
 
     await sendHTML(`<b>🔍 Top Candidates</b>\n\n<pre>${escapeHTML(table)}</pre>`);
   } catch (e) {
-    log("warn", "telegram", `Candidates fetch failed: ${e.message}`);
-    await safeSend(`Error: ${e.message}`);
+    log("warn", "telegram", `Candidates fetch failed: ${e?.message ?? e}`);
+    await safeSend(`Error: ${e?.message ?? e}`);
   }
 }
 
@@ -252,7 +252,7 @@ async function handleSwapAll() {
       await sendHTML(`❌ Sweep failed: <code>${escapeHTML(result.error)}</code>`);
     }
   } catch (e) {
-    log("warn", "telegram", `Swap-all failed: ${e.message}`);
+    log("warn", "telegram", `Swap-all failed: ${e?.message ?? e}`);
     safeSendError(_telegramBusyState, e);
   }
 }
@@ -304,8 +304,8 @@ async function handleThresholds() {
 
     await sendHTML(msg);
   } catch (e) {
-    log("warn", "telegram", `Thresholds display failed: ${e.message}`);
-    await safeSend(`Error: ${e.message}`);
+    log("warn", "telegram", `Thresholds display failed: ${e?.message ?? e}`);
+    await safeSend(`Error: ${e?.message ?? e}`);
   }
 }
 
@@ -332,8 +332,8 @@ async function handlePositions() {
       `<code>/close &lt;n&gt;</code> to close | <code>/set &lt;n&gt; &lt;note&gt;</code> to set instruction`
     );
   } catch (e) {
-    log("warn", "telegram", `Positions display failed: ${e.message}`);
-    await safeSend(`Error: ${e.message}`);
+    log("warn", "telegram", `Positions display failed: ${e?.message ?? e}`);
+    await safeSend(`Error: ${e?.message ?? e}`);
   }
 }
 
@@ -357,7 +357,7 @@ async function handleClose(text) {
       await sendHTML(`❌ Close failed: <code>${escapeHTML(JSON.stringify(result))}</code>`);
     }
   } catch (e) {
-    log("warn", "telegram", `Close command failed: ${e.message}`);
+    log("warn", "telegram", `Close command failed: ${e?.message ?? e}`);
     safeSendError(_telegramBusyState, e);
   }
   return true;
@@ -378,7 +378,7 @@ async function handleSet(text) {
     setPositionInstruction(pos.position, note);
     await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
   } catch (e) {
-    log("warn", "telegram", `Set instruction failed: ${e.message}`);
+    log("warn", "telegram", `Set instruction failed: ${e?.message ?? e}`);
     safeSendError(_telegramBusyState, e);
   }
   return true;
@@ -392,7 +392,7 @@ async function handleTeach(text) {
   try {
     await handleTeachCommand(teachMatch[1].trim(), { sendHTML, escapeHTML });
   } catch (e) {
-    log("warn", "telegram", `Teach command failed: ${e.message}`);
+    log("warn", "telegram", `Teach command failed: ${e?.message ?? e}`);
     safeSendError(_telegramBusyState, e);
   }
   return true;
@@ -409,7 +409,7 @@ async function handleLLMChat(text) {
     const { content } = await agentLoop(text, config.llm.maxSteps, [], agentRole, agentModel, null, { requireTool: true });
     await sendHTML(`<pre>${escapeHTML(stripThink(content))}</pre>`);
   } catch (e) {
-    log("warn", "telegram", `Agent chat failed: ${e.message}`);
+    log("warn", "telegram", `Agent chat failed: ${e?.message ?? e}`);
     safeSendError(_telegramBusyState, e);
   } finally {
     _telegramBusyState._busy = false;
