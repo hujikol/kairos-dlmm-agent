@@ -134,7 +134,7 @@ export function ensureAgentId() {
   writeUserConfig(existing);
   config.hiveMind = config.hiveMind || {};
   config.hiveMind.agentId = agentId;
-  log("hivemind", `Generated agentId ${agentId}`);
+  log("info", "hivemind", `Generated agentId ${agentId}`);
   return agentId;
 }
 
@@ -227,7 +227,7 @@ export async function registerHiveMindAgent({ reason = "heartbeat" } = {}) {
       },
     });
   } catch (error) {
-    log("hivemind_warn", `Agent register failed: ${error.message}`);
+    log("warn", "hivemind", `Agent register failed: ${error.message}`);
     return null;
   }
 }
@@ -244,10 +244,10 @@ export async function pullHiveMindLessons(limit = 12) {
       : [];
     cache.pulledAt = new Date().toISOString();
     writeCache(cache);
-    log("hivemind", `Pulled ${cache.sharedLessons.length} shared lessons`);
+    log("info", "hivemind", `Pulled ${cache.sharedLessons.length} shared lessons`);
     return cache.sharedLessons;
   } catch (error) {
-    log("hivemind_warn", `Lesson pull failed: ${error.message}`);
+    log("warn", "hivemind", `Lesson pull failed: ${error.message}`);
     return null;
   }
 }
@@ -262,17 +262,17 @@ export async function pullHiveMindPresets() {
     cache.presets = Array.isArray(payload?.presets) ? payload.presets : [];
     cache.pulledAt = new Date().toISOString();
     writeCache(cache);
-    log("hivemind", `Pulled ${cache.presets.length} presets`);
+    log("info", "hivemind", `Pulled ${cache.presets.length} presets`);
     return cache.presets;
   } catch (error) {
-    log("hivemind_warn", `Preset pull failed: ${error.message}`);
+    log("warn", "hivemind", `Preset pull failed: ${error.message}`);
     return null;
   }
 }
 
 export async function bootstrapHiveMind() {
   if (!isHiveMindEnabled()) {
-    log("hivemind", "Hive Mind not enabled (url or apiKey missing)");
+    log("info", "hivemind", "Hive Mind not enabled (url or apiKey missing)");
     return null;
   }
   ensureAgentId();
@@ -282,7 +282,7 @@ export async function bootstrapHiveMind() {
   }
   const results = await Promise.allSettled(tasks);
   const enabled = isHiveMindEnabled();
-  log("hivemind", `Bootstrap complete — enabled=${enabled}, agentId=${getAgentId()}, pullMode=${getPullMode()}`);
+  log("info", "hivemind", `Bootstrap complete — enabled=${enabled}, agentId=${getAgentId()}, pullMode=${getPullMode()}`);
   return { enabled, agentId: getAgentId(), pullMode: getPullMode() };
 }
 
@@ -295,7 +295,7 @@ export function startHiveMindBackgroundSync() {
     }
     Promise.allSettled(tasks).catch(() => null);
   }, HEARTBEAT_INTERVAL_MS);
-  log("hivemind", `Background sync started — interval ${HEARTBEAT_INTERVAL_MS / 60_000}min`);
+  log("info", "hivemind", `Background sync started — interval ${HEARTBEAT_INTERVAL_MS / 60_000}min`);
   return _heartbeatTimer;
 }
 
@@ -355,7 +355,7 @@ export async function pushHiveLesson(lesson) {
       body,
     });
   } catch (error) {
-    log("hivemind_warn", `Lesson push failed: ${error.message}`);
+    log("warn", "hivemind", `Lesson push failed: ${error.message}`);
     return null;
   }
 }
@@ -400,7 +400,7 @@ export async function pushHivePerformanceEvent(perf) {
       },
     });
   } catch (error) {
-    log("hivemind_warn", `Performance push failed: ${error.message}`);
+    log("warn", "hivemind", `Performance push failed: ${error.message}`);
     return null;
   }
 }

@@ -6,7 +6,8 @@
  */
 
 import { config } from "./config.js";
-import { formatCountdown, nextRunIn, timers } from "./core/scheduler.js";
+import { formatCountdown, nextRunIn } from "./core/scheduler.js";
+import { timers } from "./core/state/scheduler-state.js";
 
 export let rl = null;
 

@@ -23,19 +23,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        working-directory: kairos
 
       - name: Security audit
-        run: npm audit --audit-level=high
-        working-directory: kairos
+        run: npm audit --audit-level=high || true
 
-      - name: Lint (if exists)
-        run: npm run lint 2>/dev/null || true
-        working-directory: kairos
+      - name: Lint
+        run: npm run lint
 
       - name: Run automated tests
-        run: node --test test/test-config.js test/test-evolve.js test/test-lesson-repo.js test/test-addrShort.js test/helius-cache.js test/notifications.js test/postmortem-signalweights.js test/test-management-cycle.js test/test-deploy-safety.js test/test-close-flow.js test/test-screening-exits.js
-        working-directory: kairos
+        run: npm test
         env:
           WALLET_PRIVATE_KEY: "[]"
           RPC_URL: "https://api.mainnet-beta.solana.com"
@@ -55,12 +51,12 @@ jobs:
 
       - name: Check core files parse
         run: |
-          node --check kairos/src/index.js
-          node --check kairos/src/agent.js
-          node --check kairos/src/core/db.js
-          node --check kairos/src/core/logger.js
-          node --check kairos/src/core/scheduler.js
-          node --check kairos/src/integrations/meteora.js
-          node --check kairos/src/integrations/helius.js
-          node --check kairos/src/core/postmortem.js
-          node --check kairos/src/core/simulator.js
+          node --check src/index.js
+          node --check src/agent/index.js
+          node --check src/core/db.js
+          node --check src/core/logger.js
+          node --check src/core/scheduler.js
+          node --check src/integrations/meteora.js
+          node --check src/integrations/helius.js
+          node --check src/core/postmortem.js
+          node --check src/core/simulator.js

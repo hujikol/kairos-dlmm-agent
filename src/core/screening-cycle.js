@@ -13,7 +13,7 @@ import {
   timers,
   _busyState,
   _timersState,
-} from "./scheduler.js";
+} from "./state/scheduler-state.js";
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
 import { captureAlert } from "../instrument.js";
 import { getActiveStrategy } from "./strategy-library.js";

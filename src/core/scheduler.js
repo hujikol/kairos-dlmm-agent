@@ -8,17 +8,13 @@ import { updatePnlAndCheckExits } from "./state/pnl.js";
 import { sendHTML, isEnabled as telegramEnabled } from "../notifications/telegram.js";
 import { generateBriefing } from "../notifications/briefing.js";
 import { captureError } from "../instrument.js";
+import { timers, _busyState, _timersState } from "./state/scheduler-state.js";
+import { runManagementCycle, runScreeningCycle } from "./cycles.js";
 
 // ─── Cron-only constants ─────────────────────────────────────────────────────
 // PnL polling interval driven by config (in seconds, converted to ms below)
 
-// ═══════════════════════════════════════════
-//  CYCLE TIMERS (shared with index.js for buildPrompt)
-// ═══════════════════════════════════════════
-export const timers = {
-  managementLastRun: null,
-  screeningLastRun: null,
-};
+
 
 export function nextRunIn(lastRun, intervalMin) {
   if (!lastRun) return intervalMin * 60;
@@ -33,22 +29,7 @@ export function formatCountdown(seconds) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
-// ═══════════════════════════════════════════
-//  CRON STATE (re-exported so index.js can use guards)
-// ═══════════════════════════════════════════
 export const _cronState = { tasks: [], _pnlPollInterval: null };
-// NOTE: Node.js v24 regressed — exported `let` bindings are read-only when imported.
-// Use object wrapper so imported modules can modify properties (not bindings).
-export const _busyState = {
-  _managementBusy: false,
-  _screeningBusy: false,
-  _pnlPollBusy: false,
-};
-// Also use object wrapper for timestamps to avoid ESM live-binding reassignment issues
-export const _timersState = {
-  screeningLastTriggered: 0,
-  pollTriggeredAt: 0,
-};
 
 // ═══════════════════════════════════════════
 //  BRIEFING CRON FUNCTIONS
@@ -104,10 +85,8 @@ export async function startCronJobs() {
 
   // Ensure DB is initialized before any cron callback runs.
   // This prevents sync getDB() callers in cycle functions from
-  // receiving a Promise when the database isn't ready yet.
+  // Receive a Promise when the database isn't ready yet.
   await getDB();
-
-  const { runManagementCycle, runScreeningCycle } = await import("./cycles.js");
 
   const mgmtTask = new Cron(
     `*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`,

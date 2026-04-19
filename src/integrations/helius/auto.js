@@ -1,5 +1,5 @@
 import { config } from "../../config.js";
-import { getWalletBalances, getMintBalance } from "./balances.js";
+import { getWalletBalances, getMintBalance, invalidateBalanceCache } from "./balances.js";
 import { swapToken } from "./swaps.js";
 import { normalizeMint } from "./normalize.js";
 import { addrShort } from "../../tools/addrShort.js";
@@ -8,19 +8,26 @@ import { log } from "../../core/logger.js";
 /**
  * Automatically swap non-SOL tokens (fees or closed principal) to SOL.
  * If mints are provided, only those are checked. Otherwise all non-SOL tokens
- * with USD value >= $0.10 are swapped via Jupiter.
+ * with USD value >= $0.10 (or unknown USD value from RPC fallback) are swapped via Jupiter.
  * @param {string[]|null} [mints=null] - Specific mints to swap, or null to auto-detect
+ * @param {Object} [opts={}] - Options
+ * @param {boolean} [opts.forceRefresh=false] - Invalidate balance cache before fetching
  * @returns {Promise<Object>} { success, swapped: [{ success, tx, ... }, ...] } or { success: false, error }
  */
-export async function autoSwapRewardFees(mints = null) {
+export async function autoSwapRewardFees(mints = null, opts = {}) {
   try {
+    if (opts.forceRefresh) {
+      invalidateBalanceCache();
+    }
+
     const balances = await getWalletBalances();
     const solMint = normalizeMint(config.tokens.SOL);
 
     let tokensToSwap = balances.tokens?.filter(t =>
       normalizeMint(t.mint) !== solMint &&
       (mints === null || mints.includes(t.mint)) &&
-      t.usd >= 0.10
+      // Include tokens with usd >= $0.10 OR unknown usd (null = RPC fallback, can't price)
+      (t.usd === null || t.usd === undefined || t.usd >= 0.10)
     );
 
     // ─── Direct Fallback for provided mints (Helius lag or stale balance) ─────
@@ -72,8 +79,9 @@ export async function autoSwapRewardFees(mints = null) {
 
 /**
  * Sweeps all tokens in the wallet back to SOL (manual command).
+ * Forces a fresh balance fetch (invalidates cache) to see newly received tokens.
  */
 export async function swapAllTokensToSol() {
   log("info", "wallet", "Manual 'Swap All' triggered — sweeping wallet to SOL...");
-  return await autoSwapRewardFees(null);
+  return await autoSwapRewardFees(null, { forceRefresh: true });
 }

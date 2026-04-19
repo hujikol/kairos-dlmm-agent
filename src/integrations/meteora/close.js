@@ -279,13 +279,14 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
         finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
         initialUsd    = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
         feesUsd       = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
-        log("info", "close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} USD (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)}, deposited=${initialUsd.toFixed(2)}`);
+        log("info", "close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} USD (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)}, deposited=${initialUsd.toFixed(2)}, fees=${feesUsd.toFixed(2)}`);
       } else {
-        log("warn", "close", `Position not found in status=closed response — may still be settling`);
+        // API lag on newly-closed positions — preserve claimed fees from on-chain claim step
+        log("warn", "close", `Position not in closed API response — preserving claimed fees (${feesUsd.toFixed(2)} USD)`);
       }
     }
   } catch (e) {
-    log("warn", "close", `Closed PnL fetch failed: ${e.message}`);
+    log("warn", "close", `Closed PnL fetch failed: ${e?.message ?? e} — preserving claimed fees (${feesUsd.toFixed(2)} USD)`);
   }
 
   if (finalValueUsd === 0) {

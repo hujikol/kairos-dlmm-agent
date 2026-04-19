@@ -53,15 +53,36 @@ export function getCachedBalance() {
 
 /**
  * Fallback balance check using direct Solana RPC — no external API needed.
- * Returns SOL balance accurately even without Helius.
+ * Returns SOL balance and all SPL token balances accurately.
  * @param {string} walletAddress
  * @returns {Promise<Object>}
  */
 export async function getBalancesViaRpc(walletAddress) {
   try {
     const connection = getConnection();
-    const lamports = await connection.getBalance(new PublicKey(walletAddress));
+    const walletPubKey = new PublicKey(walletAddress);
+    const lamports = await connection.getBalance(walletPubKey);
     const solBalance = lamports / LAMPORTS_PER_SOL;
+
+    // Enumerate all SPL token accounts owned by this wallet
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      walletPubKey,
+      { programId: new PublicKey("TokenkegQfeufY51mhKE9FknRSAoGYStdFCo5vvhMpkp") }
+    ).catch(() => ({ value: [] }));
+
+    const tokens = [];
+    for (const account of (tokenAccounts.value || [])) {
+      const parsed = account.account?.data?.parsed?.info;
+      if (!parsed) continue;
+      const uiAmount = parsed.tokenAmount?.uiAmount || 0;
+      if (uiAmount <= 0) continue;
+      tokens.push({
+        mint: parsed.mint,
+        symbol: addrShort(parsed.mint),
+        balance: uiAmount,
+        usd: null, // RPC fallback can't provide USD pricing
+      });
+    }
 
     return {
       wallet: walletAddress,
@@ -69,7 +90,7 @@ export async function getBalancesViaRpc(walletAddress) {
       sol_price: 0,
       sol_usd: 0,
       usdc: 0,
-      tokens: [],
+      tokens,
       total_usd: 0,
       error: null,
     };

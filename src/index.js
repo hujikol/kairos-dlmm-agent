@@ -14,8 +14,8 @@ if (isHiveMindEnabled()) {
 import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
 import { config, isDryRun } from "./config.js";
+import { timers } from "./core/state/scheduler-state.js";
 import {
-  timers,
   startCronJobs,
   stopCronJobs,
   nextRunIn,

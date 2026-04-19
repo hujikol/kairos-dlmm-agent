@@ -1,6 +1,6 @@
 import http from "http";
 import { log } from "../core/logger.js";
-import { timers } from "../core/scheduler.js";
+import { timers } from "../core/state/scheduler-state.js";
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || "3030", 10);
 
