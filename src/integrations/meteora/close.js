@@ -474,9 +474,10 @@ export async function closePosition({ position_address, reason }) {
     // it means the close tx itself failed because the position no longer exists on-chain.
     // HOWEVER: "not found" from pool.getPosition may be a stale cache / SDK lag issue.
     // Verify by calling getAllLbPairPositionsByUser — the authoritative open-positions list.
-    if (!error.message.includes("not found") && !error.message.includes("already closed")) {
-      log("error", "close", error.message);
-      return { success: false, error: error.message };
+    const errMsg = error?.message ?? String(error);
+    if (!errMsg.includes("not found") && !errMsg.includes("already closed")) {
+      log("error", "close", errMsg);
+      return { success: false, error: errMsg };
     }
 
     log("warn", "close", `Position ${position_address} not found in SDK — verifying on-chain state...`);

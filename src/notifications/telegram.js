@@ -7,6 +7,7 @@ import { caveman } from "../tools/caveman.js";
 import { config, isDryRun } from "../config.js";
 import { addrShort } from "../tools/addrShort.js";
 import { PRICE_FORMAT_THRESHOLD, TELEGRAM_MSG_DELAY_MS, TELEGRAM_POLL_TIMEOUT_MS } from "../core/constants.js";
+import { escapeHTMLLocal } from "../core/cycle-helpers.js";
 import writeFileAtomic from "write-file-atomic";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
@@ -117,6 +118,74 @@ export async function sendMessage(text, parseMode = "Markdown") {
     });
   });
 }
+
+/**
+ * Send a message directly to Telegram — bypasses the outbound queue.
+ * Used for critical errors when the queue is backed up.
+ * @param {string} text - Message text
+ * @returns {Promise<void>}
+ */
+export async function sendMessageDirect(text) {
+  if (!TOKEN) { log("warn", "telegram", `sendMessageDirect skipped: TOKEN not set`); return; }
+  if (!chatId) { log("warn", "telegram", `sendMessageDirect skipped: chatId not set`); return; }
+  if (isDryRun()) {
+    log("debug", "telegram", "DRY_RUN: skipping direct send", { text: String(text).slice(0, 80) });
+    return;
+  }
+  const safeText = escapeHTMLLocal(String(text)).slice(0, 4096);
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${BASE}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: safeText,
+        parse_mode: "HTML",
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      log("error", "telegram", `sendMessageDirect failed: ${res.status}`);
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      log("error", "telegram", `sendMessageDirect timed out after 8s`);
+    } else {
+      log("error", "telegram", `sendMessageDirect failed: ${e?.message ?? e}`);
+    }
+  }
+}
+
+/**
+ * Send a chat action to Telegram — shows "typing..." indicator to user.
+ * Bypasses the outbound queue. 5s timeout.
+ * @param {string} action - Telegram action: "typing" | "upload_photo" | "record_video" | "voice_message" | etc.
+ * @returns {Promise<void>}
+ */
+export async function sendChatAction(action = "typing") {
+  if (!TOKEN) return;
+  if (!chatId) return;
+  if (isDryRun()) return;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    await fetch(`${BASE}/sendChatAction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, action }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+  } catch (e) {
+    // Silently ignore — chat action is non-critical
+  }
+}
+
+// Re-export drainTelegramQueue from telegram-handlers (avoids circular import in management-cycle)
+export { drainTelegramQueue } from "../telegram-handlers.js";
 
 /**
  * Send an HTML-formatted message to the registered Telegram chat.

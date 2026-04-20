@@ -11,6 +11,7 @@ import { log } from "../logger.js";
 
 /**
  * Mark a position as out of range (sets timestamp on first detection).
+ * @param {string} position_address - The position address to mark as out of range
  */
 export function markOutOfRange(position_address) {
   const db = getDB();
@@ -23,6 +24,7 @@ export function markOutOfRange(position_address) {
 
 /**
  * Mark a position as back in range (clears OOR timestamp).
+ * @param {string} position_address - The position address to mark as back in range
  */
 export function markInRange(position_address) {
   const db = getDB();
@@ -36,6 +38,8 @@ export function markInRange(position_address) {
 /**
  * How many minutes has a position been out of range?
  * Returns 0 if currently in range.
+ * @param {string} position_address - The position address to check
+ * @returns {number} - Minutes out of range, or 0 if currently in range
  */
 export function minutesOutOfRange(position_address) {
   const db = getDB();

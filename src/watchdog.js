@@ -137,7 +137,7 @@ export async function startWatchdog(config) {
             _healerRunning = true;
             log("info", "watchdog", `Soft loss detected (${live.pnl_pct}%) for ${pos.pool_name} — triggering unscheduled management cycle`);
             runManagementCycle({ silent: true })
-              .catch((e) => log("error", "watchdog", `Unscheduled management cycle failed: ${e.message}`))
+              .catch((e) => log("error", "watchdog", `Unscheduled management cycle failed: ${e?.message ?? String(e)}`))
               .finally(() => { _healerRunning = false; });
           }
         }

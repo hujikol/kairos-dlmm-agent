@@ -4,6 +4,7 @@ import { log } from "../../core/logger.js";
 import { config, isDryRun } from "../../config.js";
 import { normalizeMint } from "./normalize.js";
 import { getConnection } from "../solana.js";
+import { SLIPPAGE_BPS as DEFAULT_SLIPPAGE_BPS } from "../../core/constants.js";
 
 // ─── Magic numbers / API defaults ────────────────────────────────
 export const JUPITER_DATAPI_BASE_URL = process.env.JUPITER_DATAPI_BASE_URL || "https://api.jup.ag/price/v3";
@@ -11,7 +12,7 @@ export const JUPITER_ULTRA_API        = process.env.JUPITER_ULTRA_API_URL || "ht
 export const JUPITER_QUOTE_API        = process.env.JUPITER_QUOTE_API_URL || "https://api.jup.ag/swap/v1";
 export const JUPITER_API_KEY          = process.env.JUPITER_API_KEY;
 
-const SLIPPAGE_BPS = config.screening?.slippageBps ?? 300; // 3%
+const SLIPPAGE_BPS = config.screening?.slippageBps ?? DEFAULT_SLIPPAGE_BPS; // 3%
 
 // ─── Wallet lazy init (shared with balances.js) ────────────────
 let _wallet = null;

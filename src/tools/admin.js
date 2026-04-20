@@ -154,6 +154,7 @@ export function registerAdmin(registerTool) {
     }
 
     const applied = {};
+    const beforeMap = {};
     const unknown = [];
 
     for (const [key, val] of Object.entries(valid)) {
@@ -172,11 +173,13 @@ export function registerAdmin(registerTool) {
       if (section === "cavemanEnabled") {
         // Root-level key — no section prefix
         const before = config[section];
+        beforeMap[key] = before;
         config[section] = val;
         log("info", "config", `update_config: config.${section} ${before} → ${val}`);
         continue;
       }
       const before = config[section][field];
+      beforeMap[key] = before;
       config[section][field] = val;
       log("info", "config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
     }
@@ -199,7 +202,7 @@ export function registerAdmin(registerTool) {
       k => k !== "managementIntervalMin" && k !== "screeningIntervalMin"
     );
     if (lessonsKeys.length > 0) {
-      const summary = lessonsKeys.map(k => `${k}=${applied[k]}`).join(", ");
+      const summary = lessonsKeys.map(k => `${k}: ${beforeMap[k]} → ${applied[k]}`).join(", ");
       addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
     }
 

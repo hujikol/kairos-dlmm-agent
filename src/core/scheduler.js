@@ -43,7 +43,7 @@ export async function runBriefing() {
     }
     setLastBriefingDate();
   } catch (error) {
-    log("error", "cron", `Morning briefing failed: ${error.message}`);
+    log("error", "cron", `Morning briefing failed: ${error?.message ?? String(error)}`);
   }
 }
 
@@ -94,10 +94,12 @@ export async function startCronJobs() {
     async () => {
       if (_busyState._managementBusy) return;
       timers.managementLastRun = Date.now();
-      Promise.resolve().then(() => runManagementCycle()).catch((e) => {
+      try {
+        await runManagementCycle();
+      } catch (e) {
         captureError(e, { phase: "management_cycle" });
-        log("error", "scheduler", `Management cycle error: ${e.message}`);
-      });
+        log("error", "scheduler", `Management cycle error: ${e?.message ?? String(e)}`);
+      }
     }
   );
 
@@ -109,7 +111,7 @@ export async function startCronJobs() {
         await runScreeningCycle();
       } catch (e) {
         captureError(e, { phase: "screening_cycle" });
-        log("error", "scheduler", `Screening cycle error: ${e.message}`);
+        log("error", "scheduler", `Screening cycle error: ${e?.message ?? String(e)}`);
       }
     }
   );
@@ -120,7 +122,7 @@ export async function startCronJobs() {
       await runBriefing();
     } catch (e) {
       captureError(e, { phase: "briefing" });
-      log("error", "scheduler", `Briefing error: ${e.message}`);
+      log("error", "scheduler", `Briefing error: ${e?.message ?? String(e)}`);
     }
   });
 
@@ -130,7 +132,7 @@ export async function startCronJobs() {
       await maybeRunMissedBriefing();
     } catch (e) {
       captureError(e, { phase: "briefing_watchdog" });
-      log("error", "scheduler", `Briefing watchdog error: ${e.message}`);
+      log("error", "scheduler", `Briefing watchdog error: ${e?.message ?? String(e)}`);
     }
   });
 

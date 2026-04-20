@@ -35,7 +35,7 @@ export const RETRY_DELAY_MS                = 5_000;
 export const SOLANA_BACKOFF_BASE_DELAY_MS  = 1_000;
 export const SOLANA_BACKOFF_MAX_DELAY_MS   = 30_000;
 export const TELEGRAM_POLL_TIMEOUT_MS      = 35_000;
-export const TELEGRAM_MSG_DELAY_MS         = 1_500;
+export const TELEGRAM_MSG_DELAY_MS         = 500;
 export const HIVE_MIND_SYNC_DEBOUNCE_MS    = 300_000;
 export const HIVE_MIND_GET_TIMEOUT_MS      = 5_000;
 export const HIVE_MIND_POST_TIMEOUT_MS     = 10_000;
@@ -65,3 +65,21 @@ export const GAS_COST_PER_TX_SOL = 0.01; // 0.005 * 2 for deploy + close
 
 // ─── Price Formatting ──────────────────────────────────────────────
 export const PRICE_FORMAT_THRESHOLD = 0.0001; // below this, use toExponential(3); else toFixed(6)
+
+// ─── Darwin Weights ───────────────────────────────────────────────
+export const DARWIN_BOOST_FACTOR    = 0.25;  // weight boost for top-quartile signals
+export const DARWIN_DECAY_FACTOR    = 0.75;  // weight decay for bottom-quartile signals
+export const DARWIN_WEIGHT_FLOOR    = 1.05;  // minimum signal weight
+export const DARWIN_WEIGHT_CEILING  = 0.95;  // maximum signal decay (NOT ceiling — floor for decay)
+export const DARWIN_RARITY_BOOST    = 0.3;   // rarity bonus multiplier
+export const DARWIN_VOLUME_FACTOR   = 2.5;   // volume signal multiplier
+
+// ─── Post-Mortem Thresholds ─────────────────────────────────────────
+export const WIN_RATE_THRESHOLD     = 0.33;  // win rate below this triggers AVOID_PATTERN (postmortem.js line 236)
+export const FREQUENCY_THRESHOLD    = 0.6;   // failure frequency above this triggers RECURRING_FAILURE (postmortem.js line 272)
+
+// ─── External Integrations ─────────────────────────────────────────
+export const OKX_ENRICHMENT_TIMEOUT_MS = 60_000;  // OKX enrichment timeout (discovery.js line 172)
+export const BALANCE_CACHE_AGE_MS       = 30_000;  // balance cache max age (executor.js line 180)
+export const SLIPPAGE_BPS               = 300;      // default slippage in basis points (helius/swaps.js line 14)
+export const TOKEN_AGE_MS_PER_HOUR      = 3_600_000; // ms per hour for token age calculation (discovery.js line 45)

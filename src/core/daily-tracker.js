@@ -4,7 +4,28 @@ import { config } from "../config.js";
 const DAILY_PROFIT_TARGET = config.risk.dailyProfitTarget ?? 2;
 const DAILY_LOSS_LIMIT = config.risk.dailyLossLimit ?? -5;
 
+// ─── Test injection ───────────────────────────────────────────────────────────
+let _testDailyPnL = null;
+let _testCircuitBreaker = null;
+
+/**
+ * Inject a mock PnL result for unit tests.
+ * Pass null to disable and use real implementation.
+ */
+export function _injectDailyPnL(result) {
+  _testDailyPnL = result;
+}
+
+/**
+ * Inject a mock circuit breaker result for unit tests.
+ * Pass null to disable and use real implementation.
+ */
+export function _injectCircuitBreaker(result) {
+  _testCircuitBreaker = result;
+}
+
 export async function getDailyPnL() {
+  if (_testDailyPnL !== null) return _testDailyPnL;
   const db = await getDB();
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
@@ -19,6 +40,7 @@ export async function getDailyPnL() {
 }
 
 export async function checkDailyCircuitBreaker() {
+  if (_testCircuitBreaker !== null) return _testCircuitBreaker;
   const pnl = await getDailyPnL();
   if (pnl.realized >= pnl.threshold) {
     return { action: "preserve", reason: "Daily profit target hit" };

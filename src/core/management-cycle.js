@@ -18,7 +18,7 @@ import { getTrackedPosition } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
 import { recordPositionSnapshot, recallForPool } from "../features/pool-memory.js";
 import { pushNotification, hasPendingNotifications } from "../notifications/queue.js";
-import { isEnabled as telegramIsEnabled } from "../notifications/telegram.js";
+import { isEnabled as telegramIsEnabled, drainTelegramQueue } from "../notifications/telegram.js";
 import {
   computeManagementActions,
   buildManagementReport,
@@ -29,6 +29,7 @@ import { SCREENING_COOLDOWN_MS } from "./constants.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
 
 export async function runManagementCycle({ silent = false, gateway = agentGateway } = {}) {
+  const cycleStart = Date.now();
   if (_busyState._managementBusy) return null;
   _busyState._managementBusy = true;
   timers.managementLastRun = Date.now();
@@ -47,17 +48,22 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       // Still manage existing positions (close/claim) in halt mode
     }
 
+    const posStart = Date.now();
     const [livePositions, currentBalance] = await Promise.all([
       getMyPositions({ force: true }).catch(e => { log("warn", "cron", `getMyPositions failed: ${e?.message ?? e}`); return null; }),
       getWalletBalances(),
     ]);
+    log("info", "cron", `[TIMING] getMyPositions + getWalletBalances: ${Date.now() - posStart}ms`);
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
       log("debug", "cron", "No open positions — triggering screening cycle");
       import("./screening-cycle.js").then(({ runScreeningCycle }) => {
         if (runScreeningCycle) {
-          runScreeningCycle().catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+          const p = runScreeningCycle();
+          if (p && typeof p.catch === "function") {
+            p.catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+          }
         } else {
           log("error", "cron", "Screening cycle module missing runScreeningCycle export");
         }
@@ -203,18 +209,29 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
           log("debug", "cron", `Post-management screening skipped — already triggered by concurrent call`);
         } else if (runScreeningCycle) {
           log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
-          runScreeningCycle().catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+          const p = runScreeningCycle();
+          if (p && typeof p.catch === "function") {
+            p.catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+          }
         } else {
           log("error", "cron", "Screening cycle module missing runScreeningCycle export");
         }
-      }).catch(e => log("error", "cron", `Failed to import screening cycle: ${e.message}`));
+      }).catch(e => {
+        _busyState._screeningBusy = false;
+        log("error", "cron", `Failed to import screening cycle: ${e?.message ?? String(e)}`);
+      });
     }
 
   } catch (error) {
-    log("error", "cron", `Management cycle failed: ${error.message}`);
-    mgmtReport = `Management cycle failed: ${error.message}`;
+    log("error", "cron", `Management cycle failed: ${error?.message ?? String(error)}`);
+    mgmtReport = `Management cycle failed: ${error?.message ?? String(error)}`;
   } finally {
+    const finallyStart = Date.now();
+    log("info", "cron", `Management cycle finally block entered after ${finallyStart - cycleStart}ms`);
     _busyState._managementBusy = false;
+    log("info", "cron", `Management cycle complete: ${finallyStart - cycleStart}ms total`);
+    // Drain queued Telegram commands after releasing the busy flag (fire-and-forget)
+    drainTelegramQueue();
     if (!silent && telegramIsEnabled()) {
       // Batch OOR positions
       const oorPositions = positions.filter(
@@ -239,6 +256,9 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       if (!isAllHealthy || mgmtReport) {
         buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions });
       }
+      log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (report sent)`);
+    } else {
+      log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (silent or telegram disabled)`);
     }
   }
   return mgmtReport;

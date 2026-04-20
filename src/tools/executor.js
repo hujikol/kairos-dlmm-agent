@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { log, logAction } from "../core/logger.js";
+import { BALANCE_CACHE_AGE_MS } from "../core/constants.js";
 import { cachedTool } from "./cache.js";
 import { registerCronRestarter as _registerCron } from "./admin.js";
 export const registerCronRestarter = _registerCron;
@@ -175,9 +176,24 @@ async function runSafetyChecks(name, args) {
         }
       }
 
+      // bid_ask is one-sided — bins_above must be 0 and amount_x must be 0
+      const effectiveStrategy = args.strategy || config.strategy.strategy;
+      if (effectiveStrategy === "bid_ask") {
+        if (args.bins_above != null && args.bins_above > 0) {
+          return { pass: false, reason: `bid_ask strategy is one-sided — bins_above must be 0, got ${args.bins_above}.` };
+        }
+        // amount_x is not used for bid_ask; force to 0 to prevent LLM hallucination
+        args.amount_x = 0;
+      }
+
+      // Guard against absurd amount_x values (LLM hallucination)
+      if (args.amount_x != null && args.amount_x > 1e11) {
+        return { pass: false, reason: `amount_x ${args.amount_x} is absurdly large — LLM likely hallucinated. Provide only amount_y (SOL) and let the protocol compute amount_x.` };
+      }
+
       // Fetch balance for conviction sizing
       const balanceAgeMs = getBalanceCacheAgeMs();
-      const balance = balanceAgeMs !== null && balanceAgeMs < 30_000
+      const balance = balanceAgeMs !== null && balanceAgeMs < BALANCE_CACHE_AGE_MS
         ? getCachedBalance()
         : await getWalletBalances();
 

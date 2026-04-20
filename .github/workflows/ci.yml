@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.17.0"
           cache: "npm"
           cache-dependency-path: .
 
@@ -25,13 +25,59 @@ jobs:
         run: npm ci
 
       - name: Security audit
-        run: npm audit --audit-level=high || true
+        run: npm audit --audit-level=high
 
       - name: Lint
         run: npm run lint
 
       - name: Run automated tests
         run: npm test
+        env:
+          WALLET_PRIVATE_KEY: "[]"
+          RPC_URL: "https://api.mainnet-beta.solana.com"
+          OPENROUTER_API_KEY: "test-key"
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.17.0"
+          cache: "npm"
+          cache-dependency-path: .
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Find integration test files
+        id: find-integration-tests
+        run: |
+          # Find test files in test/ subdir that do NOT match *.test.js pattern
+          # Also include any file with "integration" in its name
+          INTEGRATION_TESTS=$(node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const testDir = 'test';
+            const files = fs.readdirSync(testDir)
+              .filter(f => f.endsWith('.js'))
+              .filter(f => !f.match(/^test-.*\.js$/) && !f.match(/^.*\.test\.js$/))  // not test-*.js or *.test.js
+              .map(f => path.join(testDir, f));
+            console.log(files.join(' '));
+          " || echo "")
+          echo "tests=$INTEGRATION_TESTS" >> $GITHUB_OUTPUT
+
+      - name: Run integration tests
+        run: |
+          if [ -n "${{ steps.find-integration-tests.outputs.tests }}" ]; then
+            node --test ${{ steps.find-integration-tests.outputs.tests }}
+          else
+            echo "No integration tests found"
+          fi
         env:
           WALLET_PRIVATE_KEY: "[]"
           RPC_URL: "https://api.mainnet-beta.solana.com"
@@ -47,7 +93,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.17.0"
 
       - name: Check core files parse
         run: |

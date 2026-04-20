@@ -104,6 +104,7 @@ const CONFIG_MAP = {
   screeningModel: ["llm", "screeningModel"],
   generalModel: ["llm", "generalModel"],
   binsBelow: ["strategy", "binsBelow"],
+  binsAbove: ["strategy", "binsAbove"],
   cavemanEnabled: ["cavemanEnabled", null],
 };
 

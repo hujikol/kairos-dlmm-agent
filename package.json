@@ -16,7 +16,7 @@
     "test:watch": "node --test --watch test-*.js",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
-    "lint": "echo 'no lint configured'",
+    "lint": "eslint src/ test/",
     "postinstall": "node scripts/patch-anchor.js"
   },
   "dependencies": {
@@ -25,19 +25,26 @@
     "@sentry/profiling-node": "10.49.0",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
-    "sql.js": "^1.14.1",
     "bn.js": "5.2.3",
     "bs58": "5.0.0",
+    "croner": "^10.0.0",
     "dotenv": "17.4.2",
     "jsonrepair": "3.14.0",
-    "croner": "^10.0.0",
     "openai": "6.34.0",
+    "sql.js": "^1.14.1",
     "write-file-atomic": "7.0.1"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.2.5"
   },
   "engines": {
     "node": ">=20.17.0 || >=22.9.0"
   },
   "overrides": {
-    "debug": "^4.3.0"
+    "debug": "^4.3.0",
+    "@coral-xyz/anchor": "0.31.0",
+    "@meteora-ag/dlmm": "1.9.6"
   }
 }

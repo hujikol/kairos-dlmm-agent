@@ -36,7 +36,7 @@ const SECTION_MAP = {
     "managementModel", "screeningModel", "generalModel",
   ],
   strategy: [
-    "strategy", "binsBelow",
+    "strategy", "binsBelow", "binsAbove",
   ],
   okx: [
     "okxApiTimeoutMs",
@@ -202,6 +202,7 @@ export const config = {
   strategy: {
     strategy:  u.strategy?.strategy  ?? u.strategy  ?? "bid_ask",
     binsBelow: u.strategy?.binsBelow ?? u.binsBelow ?? 69,
+    binsAbove: u.strategy?.binsAbove ?? u.binsAbove ?? 5,
   },
 
   // ─── Scheduling ─────────────────────────

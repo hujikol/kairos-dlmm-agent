@@ -142,7 +142,7 @@ DEPLOY RULES:
   - Calculation: min_bin = active_bin - floor(total_bins * 0.4), max_bin = active_bin + ceil(total_bins * 0.6)
   - Example: active_bin=100, total_bins=69 → min_bin=72, max_bin=141 (price centered)
   - For low volatility (≤2): min_bin=active_bin-20, max_bin=active_bin+5 (narrow, near current)
-  - For high volatility (≥7): use full range below active bin (bins_below=69, bins_above=0) to capture wide swings
+  - For high volatility (≥7): use wide range (bins_below=69, bins_above=10) — buffer above for upward moves
 - bins_below = round(35 + (volatility/5)*34) clamped to [35,69] — this is total width, not necessarily all below
 - Bin steps must be [80-125].
 - Pick ONE pool. Deploy or explain why none qualify.

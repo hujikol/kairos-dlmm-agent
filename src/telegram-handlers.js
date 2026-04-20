@@ -15,7 +15,7 @@ import {
 import { config } from "./config.js";
 import { agentLoop } from "./agent/index.js";
 import { stripThink } from "./tools/caveman.js";
-import { startPolling, sendHTML, sendMessage } from "./notifications/telegram.js";
+import { startPolling, sendHTML, sendMessage, sendMessageDirect, sendChatAction } from "./notifications/telegram.js";
 import { _busyState } from "./core/state/scheduler-state.js";
 import { rl, buildPrompt } from "./rl-shared.js";
 import {
@@ -27,14 +27,17 @@ import {
   getSwapAllResult,
   triggerScreen,
 } from "./core/shared-handlers.js";
+import { buildAsciiTable } from "./core/shared-formatters.js";
 
-// Module-level queue and busy flag (shared via _telegramBusyState so importers can modify without reassigning the binding)
-const _telegramBusyState = { _busy: false };
+// Module-level queue and concurrent handler counter
+// _telegramBusyCount tracks active handlers (named + LLM chat), allows parallel processing
+const _telegramBusyState = { _count: 0 };
 const _telegramQueue = [];
 
 export const _telegramBusy = _telegramBusyState;
 
-const MAX_TELEGRAM_QUEUE = 5;
+const MAX_TELEGRAM_QUEUE = 10;
+const MAX_CONCURRENT_TELEGRAM = 3; // max parallel Telegram handlers
 const TOKEN_SWAP_MIN_BALANCE = 0.01;
 
 export { MAX_TELEGRAM_QUEUE, TOKEN_SWAP_MIN_BALANCE };
@@ -49,18 +52,35 @@ async function safeSend(text) {
 }
 
 // Shared helper: send an HTML error message, logs any send failure silently
-async function safeSendError(ctx, error) {
+async function safeSendError(error) {
   try {
-    await ctx.sendHTML(`<b>Error:</b> <code>${escapeHTML(error?.message || String(error))}</code>`);
+    await sendHTML(`<b>Error:</b> <code>${escapeHTML(error?.message || String(error))}</code>`);
   } catch (e) {
     log("error", "telegram-handler", "Telegram send failed", { error: e?.message });
   }
 }
 
-export async function drainTelegramQueue() {
-  while (_telegramQueue.length > 0 && !_busyState._managementBusy && !_busyState._screeningBusy && !_telegramBusyState._busy) {
+// Spawn parallel handlers up to MAX_CONCURRENT_TELEGRAM
+// NOTE: cycle busy flags are NOT checked here — queued Telegram messages (notifications,
+// chat responses) are lightweight and never start new cycles. Blocking drainage while
+// cycles run is what caused the stale queue problem.
+// This function is synchronous — call it after any async handler that may have
+// added items to the queue. It drains everything it can immediately.
+export function drainTelegramQueue() {
+  // Synchronously drain as many queued items as concurrency allows.
+  // NOTE: telegramHandler itself manages _count (increment on entry, decrement in finally).
+  // Do NOT increment/decrement _count here — that caused double-counting, stale queues,
+  // and infinite-loop bugs.
+  while (_telegramQueue.length > 0) {
+    if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
     const queued = _telegramQueue.shift();
-    await telegramHandler(queued);
+    if (!queued) break;
+    // Fire-and-forget — telegramHandler owns _count lifecycle
+    telegramHandler(queued).then(() => {
+      drainTelegramQueue(); // recurse after handler completes to drain next
+    }).catch(() => {
+      drainTelegramQueue(); // on error, still drain next
+    });
   }
 }
 
@@ -150,7 +170,7 @@ async function handleBriefing() {
     await sendHTML(briefing);
   } catch (e) {
     log("warn", "telegram", `Briefing generation failed: ${e?.message ?? e}`);
-    safeSendError(_telegramBusyState, e);
+    safeSendError(e);
   }
 }
 
@@ -159,17 +179,16 @@ async function handleBalance() {
     const { sol, sol_usd, tokens, total_usd } = await getBalanceData();
     const cur = config.management.solMode ? "◎" : "$";
 
-    let table = "Token     Balance      Value\n";
-    table += "────────  ───────────  ──────\n";
+    const colWidths = [8, 11, 10];
+    const rows = [
+      { cells: ["Token", "Balance", "Value"] },
+      { cells: ["SOL", sol.toFixed(4), `$${sol_usd.toFixed(2)}`] },
+      ...tokens.filter(t => t.symbol !== "SOL" && t.usd > TOKEN_SWAP_MIN_BALANCE).map(t => ({
+        cells: [t.symbol.slice(0, 8), t.balance.toString().slice(0, 11), `$${t.usd.toFixed(2)}`],
+      })),
+    ];
 
-    table += `SOL       ${sol.toFixed(4).padEnd(11)}  $${sol_usd.toFixed(2)}\n`;
-
-    tokens.filter(t => t.symbol !== "SOL" && t.usd > TOKEN_SWAP_MIN_BALANCE).forEach(t => {
-      const sym = t.symbol.slice(0, 8).padEnd(8);
-      const bal = t.balance.toString().slice(0, 11).padEnd(11);
-      const val = `$${t.usd.toFixed(2)}`;
-      table += `${sym}  ${bal}  ${val}\n`;
-    });
+    const table = buildAsciiTable(rows, colWidths);
 
     await sendHTML(
       `<b>💰 Wallet Balance</b>\n\n` +
@@ -187,15 +206,21 @@ async function handleStatus() {
     const { wallet, positions, total_positions } = await getStatusData();
     const cur = config.management.solMode ? "◎" : "$";
 
-    let table = "ID  Pair        PnL     Value\n";
-    table += "──  ──────────  ──────  ──────\n";
-    positions.forEach((p, i) => {
-      const pair = p.pair.slice(0, 10).padEnd(10);
-      const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.padEnd(6);
-      const val = `${cur}${p.total_value_usd}`.padEnd(6);
-      table += `${String(i + 1).padEnd(2)}  ${pair}  ${pnl}  ${val}\n`;
-    });
+    const colWidths = [2, 10, 6, 6];
+    const rows = [
+      { cells: ["ID", "Pair", "PnL", "Value"] },
+      ...positions.map((p, i) => ({
+        align: ["right", "left", "right", "right"],
+        cells: [
+          String(i + 1),
+          p.pair.slice(0, 10),
+          `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`,
+          `${cur}${p.total_value_usd}`.slice(0, 6),
+        ],
+      })),
+    ];
 
+    const table = buildAsciiTable(rows, colWidths);
     const posBlock = total_positions > 0 ? `<pre>${escapeHTML(table)}</pre>\n` : "<i>No open positions.</i>\n";
     await sendHTML(
       `<b>📊 Status Report</b>\n\n` +
@@ -253,7 +278,7 @@ async function handleSwapAll() {
     }
   } catch (e) {
     log("warn", "telegram", `Swap-all failed: ${e?.message ?? e}`);
-    safeSendError(_telegramBusyState, e);
+    safeSendError(e);
   }
 }
 
@@ -315,17 +340,22 @@ async function handlePositions() {
     if (total_positions === 0) { await sendMessage("No open positions."); return; }
     const cur = config.management.solMode ? "◎" : "$";
 
-    let table = "#   Pair        Value   PnL     Fees\n";
-    table += "──  ──────────  ──────  ──────  ──────\n";
-    positions.forEach((p, i) => {
-      const pair = p.pair.slice(0, 10).padEnd(10);
-      const val = `${cur}${p.total_value_usd}`.slice(0, 6).padEnd(6);
-      const pnl = `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`.slice(0, 6).padEnd(6);
-      const fees = `${cur}${p.unclaimed_fees_usd}`.slice(0, 6).padEnd(6);
-      const oor = !p.in_range ? " ⚠️" : "";
-      table += `${String(i + 1).padEnd(2)}  ${pair}  ${val}  ${pnl}  ${fees}${oor}\n`;
-    });
+    const colWidths = [2, 10, 6, 6, 8];
+    const rows = [
+      { cells: ["#", "Pair", "Value", "PnL", "Fees"] },
+      ...positions.map((p, i) => ({
+        align: ["right", "left", "right", "right", "right"],
+        cells: [
+          String(i + 1),
+          p.pair.slice(0, 10),
+          `${cur}${p.total_value_usd}`.slice(0, 6),
+          `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%`,
+          `${cur}${p.unclaimed_fees_usd}`.slice(0, 6) + (!p.in_range ? " ⚠️" : ""),
+        ],
+      })),
+    ];
 
+    const table = buildAsciiTable(rows, colWidths);
     await sendHTML(
       `<b>📊 Open Positions (${total_positions})</b>\n\n` +
       `<pre>${escapeHTML(table)}</pre>\n` +
@@ -358,7 +388,7 @@ async function handleClose(text) {
     }
   } catch (e) {
     log("warn", "telegram", `Close command failed: ${e?.message ?? e}`);
-    safeSendError(_telegramBusyState, e);
+    safeSendError(e);
   }
   return true;
 }
@@ -379,7 +409,7 @@ async function handleSet(text) {
     await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
   } catch (e) {
     log("warn", "telegram", `Set instruction failed: ${e?.message ?? e}`);
-    safeSendError(_telegramBusyState, e);
+    safeSendError(e);
   }
   return true;
 }
@@ -393,64 +423,81 @@ async function handleTeach(text) {
     await handleTeachCommand(teachMatch[1].trim(), { sendHTML, escapeHTML });
   } catch (e) {
     log("warn", "telegram", `Teach command failed: ${e?.message ?? e}`);
-    safeSendError(_telegramBusyState, e);
+    safeSendError(e);
   }
   return true;
 }
 
 // ─── Free-form LLM chat handler ────────────────────────────────────────────────
 async function handleLLMChat(text) {
-  _telegramBusyState._busy = true;
-  try {
-    const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
-    const isDeployRequest = !hasCloseIntent && /\bdeploy\b|\bopen position\b|\blp into\b|\badd liquidity\b/i.test(text);
-    const agentRole = isDeployRequest ? "SCREENER" : "GENERAL";
-    const agentModel = agentRole === "SCREENER" ? config.llm.screeningModel : config.llm.generalModel;
-    const { content } = await agentLoop(text, config.llm.maxSteps, [], agentRole, agentModel, null, { requireTool: true });
-    await sendHTML(`<pre>${escapeHTML(stripThink(content))}</pre>`);
-  } catch (e) {
-    log("warn", "telegram", `Agent chat failed: ${e?.message ?? e}`);
-    safeSendError(_telegramBusyState, e);
-  } finally {
-    _telegramBusyState._busy = false;
-    drainTelegramQueue().catch(err => log("warn", "telegram", `drainTelegramQueue failed: ${err?.message || err}`));
-  }
+  const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
+  const isDeployRequest = !hasCloseIntent && /\bdeploy\b|\bopen position\b|\blp into\b|\badd liquidity\b/i.test(text);
+  const agentRole = isDeployRequest ? "SCREENER" : "GENERAL";
+  const agentModel = agentRole === "SCREENER" ? config.llm.screeningModel : config.llm.generalModel;
+  const { content } = await agentLoop(text, config.llm.maxSteps, [], agentRole, agentModel, null, { requireTool: true });
+  await sendHTML(`<pre>${escapeHTML(stripThink(content))}</pre>`);
 }
 
 // ─── Main Telegram handler (dispatcher) ────────────────────────────────────────
 export async function telegramHandler(text) {
   log("info", "telegram-handler", `telegramHandler called with: "${text}"`);
 
-  // Busy check — queue if busy
-  if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._busy) {
+  // Busy check first — if queuing, send queue confirmation and skip acknowledgment
+  if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) {
+    sendChatAction("typing").catch(() => {});
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(text);
-      safeSendError(_telegramBusyState, text);
+      await sendMessageDirect(`⏳ Queued. ${_telegramQueue.length} message(s) ahead of yours. I'll respond shortly.`);
     } else {
-      safeSendError(_telegramBusyState, new Error(`Queue is full (${MAX_TELEGRAM_QUEUE} messages). Wait for the agent to finish.`));
+      await sendMessageDirect(`<b>Queue full.</b> ${MAX_TELEGRAM_QUEUE} messages waiting. Try again shortly.`);
     }
     return;
   }
 
-  // Dispatch to named handlers (exact-match commands)
-  switch (text) {
-    case "/briefing":   return handleBriefing();
-    case "/balance":    return handleBalance();
-    case "/status":     return handleStatus();
-    case "/candidates": return handleCandidates();
-    case "/screen":     return handleScreen();
-    case "/swap-all":   return handleSwapAll();
-    case "/thresholds": return handleThresholds();
-    case "/positions":  return handlePositions();
+  // Immediate "typing" indicator + acknowledgment
+  const cmdAcks = {
+    "/briefing":   "📋 Generating morning briefing...",
+    "/balance":    "💰 Fetching wallet balance...",
+    "/status":     "📊 Fetching status report...",
+    "/candidates": "🔍 Screening for top candidates...",
+    "/screen":     "🔍 Running screening cycle...",
+    "/swap-all":   "🔄 Sweeping all tokens to SOL...",
+    "/thresholds": "⚙️ Fetching configuration...",
+    "/positions":  "📋 Fetching open positions...",
+  };
+  const ackMsg = cmdAcks[text] ?? `🧠 Thinking...`;
+  sendChatAction("typing").catch(() => {}); // non-blocking — indicator shows immediately
+  await sendMessageDirect(ackMsg);
+
+  // Increment concurrent handler count (tracks all active handlers for parallel queue)
+  _telegramBusyState._count++;
+  try {
+    // Dispatch to named handlers (exact-match commands)
+    switch (text) {
+      case "/briefing":   await handleBriefing(); break;
+      case "/balance":    await handleBalance(); break;
+      case "/status":     await handleStatus(); break;
+      case "/candidates": await handleCandidates(); break;
+      case "/screen":     await handleScreen(); break;
+      case "/swap-all":   await handleSwapAll(); break;
+      case "/thresholds": await handleThresholds(); break;
+      case "/positions":  await handlePositions(); break;
+      default: {
+        // Regex-based handlers — return true if they handled the message
+        if (await handleClose(text)) { drainTelegramQueue(); return; }
+        if (await handleSet(text)) { drainTelegramQueue(); return; }
+        if (await handleTeach(text)) { drainTelegramQueue(); return; }
+        // Free-form LLM chat (default)
+        await handleLLMChat(text);
+        drainTelegramQueue();
+        return;
+      }
+    }
+    // Named commands drain the queue in background (don't block the user's response)
+    drainTelegramQueue();
+  } finally {
+    _telegramBusyState._count--;
   }
-
-  // Regex-based handlers — return true if they handled the message
-  if (await handleClose(text)) return;
-  if (await handleSet(text)) return;
-  if (await handleTeach(text)) return;
-
-  // Free-form LLM chat (default)
-  await handleLLMChat(text);
 }
 
 // Start polling — called from index.js after rl is set up

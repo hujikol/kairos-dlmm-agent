@@ -66,7 +66,7 @@ if (isTTY) {
 
   // Update prompt countdown every 10 seconds
   const _promptRefreshInterval = setInterval(() => {
-    if (!_telegramBusy._busy) {
+    if (_telegramBusy._count === 0) {
       rl.setPrompt(buildPrompt());
       rl.prompt(true);
     }

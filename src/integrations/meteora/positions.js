@@ -104,7 +104,7 @@ export async function deployPosition({
   const activeStrategy = strategy || config.strategy.strategy;
 
   const activeBinsBelow = Number(bins_below ?? config.strategy.binsBelow);
-  const activeBinsAbove = Number(bins_above ?? 0);
+  const activeBinsAbove = Number(bins_above ?? config.strategy.binsAbove ?? 5);
 
   if (isPoolOnCooldown(pool_address)) {
     log("debug", "deploy", `Pool ${addrShort(pool_address)} is on cooldown (closed for low yield) — skipping`);
@@ -158,6 +158,13 @@ export async function deployPosition({
 
   const minBinId = activeBin.binId - activeBinsBelow;
   const maxBinId = activeBin.binId + activeBinsAbove;
+
+  // Sanity check: range must contain the active bin (prevent bearish setup on bullish intent)
+  if (maxBinId <= activeBin.binId) {
+    const errMsg = `Invalid bin range: maxBinId=${maxBinId} <= activeBin=${activeBin.binId} — range would be entirely below current price and go OOR immediately. Override by explicitly setting bins_above > 0.`;
+    log("error", "deploy", errMsg);
+    return { success: false, error: errMsg };
+  }
 
   const strategyMap = {
     spot: StrategyType.Spot,

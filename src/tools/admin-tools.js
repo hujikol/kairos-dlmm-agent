@@ -18,7 +18,7 @@ Management: minClaimAmount, outOfRangeBinsToClose, outOfRangeWaitMinutes, minVol
 Risk: maxPositions, maxDeployAmount
 Schedule: managementIntervalMin, screeningIntervalMin
 Models: managementModel, screeningModel, generalModel
-Strategy: binsBelow
+Strategy: binsBelow, binsAbove
 
 Reason is optional but helpful — logged as a lesson when provided.`,
       parameters: {

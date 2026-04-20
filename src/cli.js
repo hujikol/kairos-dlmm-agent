@@ -240,64 +240,46 @@ const { values: flags } = parseArgs({
 });
 
 // ─── Command registry ─────────────────────────────────────────────
-import { balanceCmd }          from "./cli/commands/balance.js";
-import { positionsCmd }        from "./cli/commands/positions.js";
-import { pnlCmd }              from "./cli/commands/pnl.js";
-import { candidatesCmd }      from "./cli/commands/candidates.js";
-import { tokenInfoCmd }       from "./cli/commands/token-info.js";
-import { tokenHoldersCmd }     from "./cli/commands/token-holders.js";
-import { tokenNarrativeCmd }   from "./cli/commands/token-narrative.js";
-import { poolDetailCmd }      from "./cli/commands/pool-detail.js";
-import { searchPoolsCmd }      from "./cli/commands/search-pools.js";
-import { activeBinCmd }        from "./cli/commands/active-bin.js";
-import { walletPositionsCmd }  from "./cli/commands/wallet-positions.js";
-import { deployCmd }          from "./cli/commands/deploy.js";
-import { claimCmd }           from "./cli/commands/claim.js";
-import { closeCmd }           from "./cli/commands/close.js";
-import { swapCmd }            from "./cli/commands/swap.js";
-import { screenCmd }          from "./cli/commands/screen.js";
-import { manageCmd }          from "./cli/commands/manage.js";
-import { configCmd }          from "./cli/commands/config.js";
-import { studyCmd }           from "./cli/commands/study.js";
-import { startCmd }           from "./cli/commands/start.js";
-import { lessonsCmd }         from "./cli/commands/lessons.js";
-import { poolMemoryCmd }      from "./cli/commands/pool-memory.js";
-import { evolveCmd }          from "./cli/commands/evolve.js";
-import { blacklistCmd }       from "./cli/commands/blacklist.js";
-import { performanceCmd }     from "./cli/commands/performance.js";
-
-const COMMANDS = {
-  balance:          balanceCmd,
-  positions:        positionsCmd,
-  pnl:              pnlCmd,
-  candidates:       candidatesCmd,
-  "token-info":     tokenInfoCmd,
-  "token-holders":  tokenHoldersCmd,
-  "token-narrative": tokenNarrativeCmd,
-  "pool-detail":   poolDetailCmd,
-  "search-pools":  searchPoolsCmd,
-  "active-bin":    activeBinCmd,
-  "wallet-positions": walletPositionsCmd,
-  deploy:           deployCmd,
-  claim:            claimCmd,
-  close:            closeCmd,
-  swap:             swapCmd,
-  screen:           screenCmd,
-  manage:           manageCmd,
-  config:           configCmd,
-  study:            studyCmd,
-  start:            startCmd,
-  lessons:          lessonsCmd,
-  "pool-memory":    poolMemoryCmd,
-  evolve:           evolveCmd,
-  blacklist:        blacklistCmd,
-  performance:      performanceCmd,
+const COMMAND_PATHS = {
+  balance:           "./cli/commands/balance.js",
+  positions:         "./cli/commands/positions.js",
+  pnl:               "./cli/commands/pnl.js",
+  candidates:        "./cli/commands/candidates.js",
+  "token-info":      "./cli/commands/token-info.js",
+  "token-holders":   "./cli/commands/token-holders.js",
+  "token-narrative": "./cli/commands/token-narrative.js",
+  "pool-detail":     "./cli/commands/pool-detail.js",
+  "search-pools":    "./cli/commands/search-pools.js",
+  "active-bin":      "./cli/commands/active-bin.js",
+  "wallet-positions":"./cli/commands/wallet-positions.js",
+  deploy:            "./cli/commands/deploy.js",
+  claim:             "./cli/commands/claim.js",
+  close:             "./cli/commands/close.js",
+  swap:              "./cli/commands/swap.js",
+  screen:            "./cli/commands/screen.js",
+  manage:            "./cli/commands/manage.js",
+  config:            "./cli/commands/config.js",
+  study:             "./cli/commands/study.js",
+  start:             "./cli/commands/start.js",
+  lessons:           "./cli/commands/lessons.js",
+  "pool-memory":     "./cli/commands/pool-memory.js",
+  evolve:            "./cli/commands/evolve.js",
+  blacklist:         "./cli/commands/blacklist.js",
+  performance:       "./cli/commands/performance.js",
 };
 
 // ─── Dispatch ──────────────────────────────────────────────────────
-const handler = COMMANDS[subcommand];
-if (!handler) {
+const cmdPath = COMMAND_PATHS[subcommand];
+if (!cmdPath) {
   die(`Unknown command: ${subcommand}. Run 'kairos help' for usage.`);
 }
 
+// Derive export name: "token-info" → "tokenInfoCmd", "balance" → "balanceCmd"
+const toCamel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+const cmdExport = toCamel(subcommand) + "Cmd";
+const mod = await import(cmdPath);
+const handler = mod[cmdExport];
+if (!handler) {
+  die(`Command ${subcommand} has no ${cmdExport} export`);
+}
 handler(argv, flags, sub2, silent);

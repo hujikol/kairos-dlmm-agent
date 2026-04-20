@@ -141,7 +141,7 @@ STEPS:
      - For normal/high volatility (3+): total_bins = round(35 + (volatility/5)*34) clamped to [35,69]
        min_bin = active_bin - floor(total_bins * 0.4), max_bin = active_bin + ceil(total_bins * 0.6)
      - For low volatility (≤2): min_bin = active_bin - 20, max_bin = active_bin + 5 (narrow near current)
-     - For very high volatility (≥7): bins_below=69, bins_above=0 (wide below to capture swings)
+     - For very high volatility (≥7): bins_below=69, bins_above=10 (wide range with buffer above for upward moves)
    Example: active_bin=100, volatility=5 → total=69 → min_bin=72, max_bin=141
 4. Report in this exact format (no tables, no extra sections):
     *Decision:* DEPLOYED PAIR

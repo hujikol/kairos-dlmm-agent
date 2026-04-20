@@ -198,6 +198,8 @@ Before `deploy_position`:
 - `maxPositionsPerToken` enforced (correlation check)
 - SOL balance must cover `amount_y + gasReserve`
 - If `amount_x > 0`: tokenX-only deploy (no SOL needed)
+- `bid_ask` strategy: `bins_above` must be 0 (rejects if > 0, forces `amount_x = 0`)
+- `amount_x > 1e11`: rejected as LLM hallucination
 
 ---
 
@@ -504,12 +506,31 @@ Node.js v24.14.1 regressed ES module live bindings — imported `let` exports ar
 
 ---
 
+## CI — Run Before Every Commit
+
+All changes are validated by CI. **Run locally before pushing** to avoid blocked PRs:
+
+```bash
+npm run lint      # ESLint (eslint.config.js)
+npm test          # Unit tests
+node --check src/index.js  # Syntax check on core files
+```
+
+CI pipeline (`.github/workflows/ci.yml`):
+1. `npm audit --audit-level=high` — security audit, blocks on high+ vulnerabilities
+2. `npm run lint` — ESLint, blocks on any lint error
+3. `npm test` — Node.js test runner, blocks on test failures
+4. Integration tests — `node --test` on `test/*.js` (non `test-*.js` / `*.test.js` files)
+5. Syntax check — `node --check` on 8 core entry files
+
+**CI does not require real API keys.** All jobs use mock env vars (`WALLET_PRIVATE_KEY="[]"`, `RPC_URL="https://api.mainnet-beta.solana.com"`, `OPENROUTER_API_KEY="test-key"`).
+
 ## Infrastructure
 
 - **Linting:** ESLint (`.eslintrc.json`) — `npm run lint`
 - **Formatting:** Prettier (`.prettierrc.json`) — `npm run format`
 - **Dependency updates:** Dependabot (`.github/dependabot.yml`) — automated PRs for npm packages
-- **CI:** GitHub Actions (`.github/workflows/ci.yml`)
+- **CI:** GitHub Actions (`.github/workflows/ci.yml`) — see §CI
 - **SQLite DB:** `*.db` files in `.gitignore` — never commit wallet/position data
 
 ---

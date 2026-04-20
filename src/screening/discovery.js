@@ -4,6 +4,7 @@ import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
 import { poolCache } from "../core/cache-manager.js";
+import { TOKEN_AGE_MS_PER_HOUR, OKX_ENRICHMENT_TIMEOUT_MS } from "../core/constants.js";
 
 const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 
@@ -21,6 +22,9 @@ export function _injectDiscovery(result) {
 /**
  * Fetch pools from the Meteora Pool Discovery API.
  * Returns condensed data optimized for LLM consumption (saves tokens).
+ * @param {object} params - Parameters object
+ * @param {number} [params.page_size=50] - Number of pools to fetch per page
+ * @returns {Promise<{total: number, pools: object[]}>} - Total count and array of condensed pool objects
  */
 export async function discoverPools({
   page_size = 50,
@@ -42,8 +46,8 @@ export async function discoverPools({
     `fee_active_tvl_ratio>=${s.minFeeActiveTvlRatio}`,
     `base_token_organic_score>=${s.minOrganic}`,
     "quote_token_organic_score>=60",
-    s.minTokenAgeHours != null ? `base_token_created_at<=${Date.now() - s.minTokenAgeHours * 3_600_000}` : null,
-    s.maxTokenAgeHours != null ? `base_token_created_at>=${Date.now() - s.maxTokenAgeHours * 3_600_000}` : null,
+    s.minTokenAgeHours != null ? `base_token_created_at<=${Date.now() - s.minTokenAgeHours * TOKEN_AGE_MS_PER_HOUR}` : null,
+    s.maxTokenAgeHours != null ? `base_token_created_at>=${Date.now() - s.maxTokenAgeHours * TOKEN_AGE_MS_PER_HOUR}` : null,
   ].filter(Boolean).join("&&");
 
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
@@ -120,6 +124,9 @@ export async function discoverPools({
 /**
  * Returns eligible pools for the agent to evaluate and pick from.
  * Hard filters applied in code, agent decides which to deploy into.
+ * @param {object} params - Parameters object
+ * @param {number} [params.limit=10] - Maximum number of candidates to return
+ * @returns {Promise<{candidates: object[], total_eligible: number, total_screened: number}>}
  */
 export async function getTopCandidates({ limit = 10 } = {}) {
   const { config } = await import("../config.js");
@@ -169,7 +176,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     );
     const okxResults = await Promise.race([
       enrichmentPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("OKX enrichment timeout (60s)")), 60_000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("OKX enrichment timeout (60s)")), OKX_ENRICHMENT_TIMEOUT_MS)),
     ]);
     for (let i = 0; i < eligible.length; i++) {
       const r = okxResults[i];
@@ -246,6 +253,10 @@ export async function getTopCandidates({ limit = 10 } = {}) {
  * Get full raw details for a specific pool.
  * Fetches top 50 pools from discovery API and finds the matching address.
  * Returns the full unfiltered API object (all fields, not condensed).
+ * @param {object} params - Parameters object
+ * @param {string} params.pool_address - The pool address to fetch details for
+ * @param {string} [params.timeframe="5m"] - Timeframe for the pool data
+ * @returns {Promise<object>} - Full raw pool object from the API
  */
 export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
