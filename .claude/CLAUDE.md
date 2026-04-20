@@ -508,12 +508,13 @@ Node.js v24.14.1 regressed ES module live bindings — imported `let` exports ar
 
 ## CI — Run Before Every Commit
 
-All changes are validated by CI. **Run locally before pushing** to avoid blocked PRs:
+**All commits must pass lint and syntax checks locally before pushing.**
 
 ```bash
-npm run lint      # ESLint (eslint.config.js)
-npm test          # Unit tests
-node --check src/index.js  # Syntax check on core files
+npm run lint      # ESLint — must show 0 errors (warnings OK)
+npm test          # Unit tests — must pass
+node --check src/index.js src/agent/index.js src/core/db.js src/core/logger.js src/core/scheduler.js src/integrations/meteora.js src/integrations/helius.js src/core/postmortem.js src/core/simulator.js  # All must exit 0
+WALLET_PRIVATE_KEY="[]" RPC_URL="https://api.mainnet-beta.solana.com" OPENROUTER_API_KEY="test-key" node --test test/debug_insert.js test/helius-cache.js test/mem-db.js test/notifications.js test/postmortem-signalweights.js test/screening-api.js  # Integration tests — all must pass
 ```
 
 CI pipeline (`.github/workflows/ci.yml`):
