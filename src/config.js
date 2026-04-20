@@ -23,7 +23,8 @@ const SECTION_MAP = {
     "trailingTakeProfit", "trailingTriggerPct", "trailingDropPct", "solMode",
     "deployAmountSol", "pnlSuspectThresholdPct", "pnlSuspectMinUsd",
     "yieldCheckMinAgeMs", "minLlmOutputLen", "maxLlmOutputDisplay",
-    "telegramMaxMsgLen",
+    "telegramMaxMsgLen", "lossStreakEnabled", "lossStreakThreshold",
+    "lossStreakMinPnlPct", "lossStreakMinPositionAgeCycles",
   ],
   risk: [
     "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
@@ -174,6 +175,10 @@ export const config = {
     minLlmOutputLen:        u.management?.minLlmOutputLen        ?? 5,
     maxLlmOutputDisplay:    u.management?.maxLlmOutputDisplay    ?? 2000,
     telegramMaxMsgLen:      u.management?.telegramMaxMsgLen      ?? 4096,
+    lossStreakEnabled:      u.management?.lossStreakEnabled      ?? u.lossStreakEnabled      ?? false,
+    lossStreakThreshold:    u.management?.lossStreakThreshold    ?? u.lossStreakThreshold    ?? 3,
+    lossStreakMinPnlPct:    u.management?.lossStreakMinPnlPct    ?? u.lossStreakMinPnlPct    ?? -1.0,
+    lossStreakMinPositionAgeCycles: u.management?.lossStreakMinPositionAgeCycles ?? u.lossStreakMinPositionAgeCycles ?? 2,
   },
 
   // ─── OKX ────────────────────────────────

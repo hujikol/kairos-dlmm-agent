@@ -83,3 +83,8 @@ export const OKX_ENRICHMENT_TIMEOUT_MS = 60_000;  // OKX enrichment timeout (dis
 export const BALANCE_CACHE_AGE_MS       = 30_000;  // balance cache max age (executor.js line 180)
 export const SLIPPAGE_BPS               = 300;      // default slippage in basis points (helius/swaps.js line 14)
 export const TOKEN_AGE_MS_PER_HOUR      = 3_600_000; // ms per hour for token age calculation (discovery.js line 45)
+
+// ─── Loss Streak ───────────────────────────────────────────────────
+export const DEFAULT_LOSS_STREAK_THRESHOLD = 3;
+export const DEFAULT_LOSS_STREAK_MIN_PNL_PCT = -1.0;
+export const DEFAULT_LOSS_STREAK_MIN_AGE_CYCLES = 2;

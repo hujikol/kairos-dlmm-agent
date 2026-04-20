@@ -49,3 +49,6 @@ export { updatePnlAndCheckExits } from "./pnl.js";
 
 // sync
 export { syncOpenPositions } from "./sync.js";
+
+// loss-streak
+export { getStreak, incrementStreak, resetStreak, _injectStreakMap } from "./loss-streak.js";

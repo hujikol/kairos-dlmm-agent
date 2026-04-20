@@ -14,9 +14,6 @@ export async function makeMemDB() {
   const SQL = await initSqlJs();
   const db = new SQL.Database();
 
-  // Wrap the WASM db to expose synchronous-looking prepare() interface.
-  // sql.js's db.exec() returns results but prepare() is not synchronous.
-  // We simulate the sync prepare interface that registry.js uses.
   const wrapper = {
     transaction(fn) {
       return () => {
@@ -35,61 +32,70 @@ export async function makeMemDB() {
       const upper = sql.trim().toUpperCase();
 
       if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE")) {
-        return {
-          run(...vals) {
-            db.run(sql, vals);
-          },
-          get(...vals) { return null; },
-          all(...vals) { return []; },
+        const stmt = {
+          _runArgs: null,
+          bind(...vals) { this._runArgs = vals; return stmt; },
+          step() { return false; },
+          run(...vals) { db.run(sql, vals.length ? vals : this._runArgs || []); },
+          get() { return null; },
+          free() {},
+          reset() {},
+          getRowsModified: () => db.getRowsModified(),
         };
+        return stmt;
       }
 
       if (upper.startsWith("SELECT")) {
+        // Use real sql.js prepared statement to get proper bind/step/get interface
+        const rawStmt = db.prepare(sql);
         const tableMatch = sql.match(/FROM\s+(\w+)/i);
         const tableName = tableMatch ? tableMatch[1] : null;
 
         return {
-          run(...vals) { db.run(sql, vals); },
-          get(...vals) {
-            const overlay = _testRows.get(tableName);
-            if (!overlay) {
-              try {
-                const res = db.exec(sql, vals);
-                if (!res.length || !res[0].values.length) return null;
-                const cols = res[0].columns;
-                const vals2 = res[0].values[0];
-                return Object.fromEntries(cols.map((c, i) => [c, vals2[i]]));
-              } catch { return null; }
+          bind(...vals) { rawStmt.bind(vals); return this; },
+          step() {
+            // Check overlay first for test data injection
+            const overlay = wrapper._testRows.get(tableName);
+            if (overlay && overlay.length > 0) {
+              rawStmt.bind([]);  // Bind empty — overlay uses no params
+              wrapper._resultRow = 0;
+              return true;
             }
-            if (tableName && vals[0] !== undefined) {
-              const row = overlay.find(r => r.position === vals[0]);
-              return row || null;
+            return rawStmt.step();
+          },
+          get() {
+            const overlay = wrapper._testRows.get(tableName);
+            if (overlay && overlay.length > 0) {
+              return overlay[wrapper._resultRow++] || null;
             }
-            return overlay[0] || null;
+            return rawStmt.step() ? rawStmt.getAsObject() : null;
           },
-          all(...vals) {
-            const overlay = _testRows.get(tableName);
-            if (overlay) return overlay;
-            try {
-              const res = db.exec(sql, vals);
-              if (!res.length) return [];
-              const cols = res[0].columns;
-              return res[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
-            } catch { return []; }
-          },
+          free() { rawStmt.free(); },
+          reset() { wrapper._resultRow = 0; rawStmt.reset(); },
+          getAsObject() { return rawStmt.getAsObject(); },
+          _raw: rawStmt,
+          _resultRow: 0,
         };
       }
 
       // DDL / other
-      return {
-        run(...vals) { db.run(sql); },
-        get(...vals) { return null; },
-        all(...vals) { return []; },
+      const stmt = {
+        bind() { return stmt; },
+        step() { return false; },
+        run() { db.run(sql); },
+        get() { return null; },
+        free() {},
+        reset() {},
       };
+      return stmt;
     },
 
     exec(sql) {
       db.run(sql);
+    },
+
+    run(sql, ...vals) {
+      db.run(sql, vals);
     },
 
     close() {

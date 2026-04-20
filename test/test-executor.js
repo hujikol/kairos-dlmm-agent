@@ -49,12 +49,11 @@ describe("tools/executor.js", () => {
   });
 
   test("executeTool strips model artifacts from tool name (e.g. <|channel|>)", async () => {
+    // get_wallet_balance is registered — artifact suffix should be stripped before lookup
     const { executeTool } = await import("../src/tools/executor.js");
-    // get_balances is a known read-only tool — with artifact suffix it should still route
-    const result = await executeTool("get_balances<|channel|>", {});
-    if (result.error) {
-      assert.ok(!result.error.includes("Unknown tool"), "Should not be unknown after stripping artifact");
-    }
+    const result = await executeTool("get_wallet_balance<|channel|>", {});
+    // Should not crash and should return a valid result (not "Unknown tool")
+    assert.ok(!result.error || !result.error.includes("Unknown tool"), "Should not be unknown after stripping artifact");
   });
 
   // ── DRY_RUN bypass for write tools ─────────────────────────────────────────
@@ -249,30 +248,51 @@ describe("tools/executor.js", () => {
 
     let apiCallCount = 0;
     const heliusMod = await import("../src/integrations/helius.js");
-    const origGetBalances = heliusMod.getWalletBalances;
-    heliusMod.getWalletBalances = async () => {
-      apiCallCount++;
-      return { sol: 1.5, sol_price: 150, tokens: [] };
-    };
+    const orig = heliusMod.getWalletBalances;
+
+    Object.defineProperty(heliusMod, "getWalletBalances", {
+      value: async () => {
+        apiCallCount++;
+        return orig();
+      },
+      writable: true,
+      configurable: true,
+    });
 
     try {
-      const r1 = await executeTool("get_balances", {});
-      const r2 = await executeTool("get_balances", {});
+      // Pre-inject balance so executor cache can intercept without real API call
+      _injectBalances({ sol: 1.5, sol_price: 150, tokens: [] });
 
+      const r1 = await executeTool("get_wallet_balance", {});
+      const r2 = await executeTool("get_wallet_balance", {});
+
+      // First call: real function called (apiCallCount=1)
+      // Second call: served from executor cache — wrapped function not called (apiCallCount=1)
       assert.strictEqual(apiCallCount, 1, "Second call should be served from cache — zero extra API calls");
       assert.deepStrictEqual(r1, r2, "Cached result should equal original result");
     } finally {
-      heliusMod.getWalletBalances = origGetBalances;
+      Object.defineProperty(heliusMod, "getWalletBalances", {
+        value: orig,
+        writable: true,
+        configurable: true,
+      });
     }
   });
 
   test("write tools do not use the read-only cache", async () => {
     const { executeTool } = await import("../src/tools/executor.js");
-    const positionsMod = await import("../src/integrations/meteora/positions.js");
-    const origTrack = positionsMod.trackPosition;
+    const { trackPosition: origTrack } = await import("../src/core/registry.js");
 
     let trackCallCount = 0;
-    positionsMod.trackPosition = (...args) => { trackCallCount++; return origTrack.apply(this, args); };
+    const wrapped = (...args) => { trackCallCount++; return origTrack(...args); };
+
+    // Use Object.defineProperty to override (bypasses module immutability)
+    const registryMod = await import("../src/core/registry.js");
+    Object.defineProperty(registryMod, "trackPosition", {
+      value: wrapped,
+      writable: true,
+      configurable: true,
+    });
 
     try {
       _injectPositionsCache({ wallet: "TestWallet", total_positions: 0, positions: [] });
@@ -283,7 +303,11 @@ describe("tools/executor.js", () => {
 
       assert.strictEqual(trackCallCount, 2, "Write tool should be called twice (no cache bypass for writes)");
     } finally {
-      positionsMod.trackPosition = origTrack;
+      Object.defineProperty(registryMod, "trackPosition", {
+        value: origTrack,
+        writable: true,
+        configurable: true,
+      });
     }
   });
 

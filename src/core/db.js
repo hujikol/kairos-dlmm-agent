@@ -125,7 +125,8 @@ function _makePreparedStatement(sql) {
       if (bindParams.length > 0) stmt.bind(bindParams);
       stmt.step();
       stmt.free();
-      return { changes: _db.getRowsModified(), lastInsertRowid: 0 };
+      // _db is the wrapper; _db._db is the sql.js Database instance
+      return { changes: _db._db.getRowsModified(), lastInsertRowid: 0 };
     },
     _stmt: stmt,
   };
@@ -133,21 +134,26 @@ function _makePreparedStatement(sql) {
 
 // Attach helpers to _db so callers can use db.all() / db.get() / db.prepare()
 function _extendDb() {
-  _rawRun = _db.run.bind(_db);
+  if (!_db) return;
   _setRawPrepare();
   _db.all = _all;
   _db.get = _get;
-  _db.run = _run;
-  _db.prepare = _makePreparedStatement;
+  // Note: _db.run and _db.prepare are NOT overwritten — they are already set
+  // to the underlying sql.js methods in _injectDB (bound to _db._db).
+  // Overwriting them with _run/_makePreparedStatement would break the binding.
 }
 
 // ─── Test injection ───────────────────────────────────────────────────────────
 
 /** Inject a test database instance (for unit tests only). */
 export function _injectDB(db) {
-  if (_db && _db !== db) _db.close();
+  if (!db) return;
+  if (_db && _db !== db) {
+    try { _db.close(); } catch (_) { /* ignore */ }
+  }
   _db = db;
-  // Re-initialize raw prepare/run from the injected DB's underlying sql.js instance
+  // Bind to the underlying sql.js instance, not the wrapper's methods
+  // (wrapper methods get overwritten by _extendDb)
   _rawRun = db._db.run.bind(db._db);
   _rawPrepare = db._db.prepare.bind(db._db);
   _extendDb();
