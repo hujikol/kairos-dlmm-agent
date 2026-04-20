@@ -5,8 +5,9 @@
 
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { describe, it } from 'node:test';
 import Database from "better-sqlite3";
-import { _injectDB, initSchema } from '../src/core/db.js';
+import { _injectDB, initSchema, getDB } from '../src/core/db.js';
 
 // Use isolated in-memory DB for this test file
 const _testDb = new Database(":memory:");
