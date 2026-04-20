@@ -23,6 +23,9 @@ const TTL_MAP = {
   get_wallet_balance: 5 * 60,
 };
 
+// Named exports for test injection
+export { CACHE, PENDING, TTL_MAP };
+
 /**
  * Get cached tool result or compute + cache it.
  * @param {string} name - tool name

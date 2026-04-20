@@ -176,20 +176,14 @@ async function runSafetyChecks(name, args) {
         }
       }
 
-      // bid_ask is one-sided — bins_above must be 0 and amount_x must be 0
-      const effectiveStrategy = args.strategy || config.strategy.strategy;
-      if (effectiveStrategy === "bid_ask") {
-        if (args.bins_above != null && args.bins_above > 0) {
-          return { pass: false, reason: `bid_ask strategy is one-sided — bins_above must be 0, got ${args.bins_above}.` };
-        }
-        // amount_x is not used for bid_ask; force to 0 to prevent LLM hallucination
-        args.amount_x = 0;
-      }
-
       // Guard against absurd amount_x values (LLM hallucination)
       if (args.amount_x != null && args.amount_x > 1e11) {
         return { pass: false, reason: `amount_x ${args.amount_x} is absurdly large — LLM likely hallucinated. Provide only amount_y (SOL) and let the protocol compute amount_x.` };
       }
+
+      // ─── Token-only deploy check (before any mutation — must use original args) ─
+      // Token-only = user provides amount_x with SOL amount explicitly set to 0 (or omitted)
+      const isTokenOnly = args.amount_x != null && args.amount_x > 0 && (args.amount_y == null || args.amount_y === 0);
 
       // Fetch balance for conviction sizing
       const balanceAgeMs = getBalanceCacheAgeMs();
@@ -197,28 +191,36 @@ async function runSafetyChecks(name, args) {
         ? getCachedBalance()
         : await getWalletBalances();
 
+      // bid_ask is one-sided — bins_above must be 0 and amount_x must be 0
+      const effectiveStrategy = args.strategy || config.strategy.strategy;
+      if (effectiveStrategy === "bid_ask") {
+        if (args.bins_above != null && args.bins_above > 0) {
+          return { pass: false, reason: `bid_ask strategy is one-sided — bins_above must be 0, got ${args.bins_above}.` };
+        }
+        // Token-only deploys can have amount_x > 0 (user explicitly requested token-side)
+        if (!isTokenOnly) args.amount_x = 0;
+      }
+
       // ─── Conviction Sizing Matrix ──────────────────────────────
       const { computeDeployAmount } = await import("../config.js");
       const conviction = args.conviction || "normal";
-      const sizingResult = computeDeployAmount(balance.sol, positions.total_positions, conviction);
 
-      if (sizingResult.error) {
-        return { pass: false, reason: sizingResult.error };
-      }
+      // Token-only deploys skip conviction sizing and SOL balance check
+      if (!isTokenOnly) {
+        const sizingResult = computeDeployAmount(balance.sol, positions.total_positions, conviction);
+        if (sizingResult.error) {
+          return { pass: false, reason: sizingResult.error };
+        }
+        const amountY = sizingResult.amount;
+        args.amount_y = amountY;
+        if (args.amount_sol) args.amount_sol = amountY;
+        log("info", "conviction_sizing", `Conviction: ${conviction} | Positions: ${positions.total_positions} | Deploy: ${amountY} SOL (wallet: ${balance.sol.toFixed(2)} SOL)`);
 
-      // Override amount_y with conviction-sized amount (prevents LLM hallucination)
-      const amountY = sizingResult.amount;
-      args.amount_y = amountY;
-      if (args.amount_sol) args.amount_sol = amountY;
-
-      log("info", "conviction_sizing", `Conviction: ${conviction} | Positions: ${positions.total_positions} | Deploy: ${amountY} SOL (wallet: ${balance.sol.toFixed(2)} SOL)`);
-
-      const gasReserve = config.management.gasReserve;
-      const minRequired = amountY + gasReserve;
-      // Token-only deploys (amount_x > 0) don't need SOL for the position — only gas
-      const isTokenOnly = args.amount_x != null && args.amount_x > 0 && (args.amount_y == null || args.amount_y === 0);
-      if (!isTokenOnly && balance.sol < minRequired) {
-        return { pass: false, reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).` };
+        const gasReserve = config.management.gasReserve;
+        const minRequired = amountY + gasReserve;
+        if (balance.sol < minRequired) {
+          return { pass: false, reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).` };
+        }
       }
 
       return { pass: true };

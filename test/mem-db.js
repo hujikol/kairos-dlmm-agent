@@ -153,6 +153,11 @@ export async function makeSchemaDB() {
       pnl_usd REAL, pnl_pct REAL, range_efficiency REAL, deployed_at TEXT, closed_at TEXT,
       recorded_at TEXT, base_mint TEXT
     );
+    CREATE TABLE pool_memory (
+      pool_address TEXT PRIMARY KEY, name TEXT, base_mint TEXT, total_deploys INTEGER,
+      avg_pnl_pct REAL, win_rate REAL, last_deployed_at TEXT, last_outcome TEXT,
+      notes TEXT, cooldown_until TEXT
+    );
   `);
   return db;
 }
