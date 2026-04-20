@@ -56,6 +56,7 @@ let _rawRun = null;
 
 function _setRawPrepare() {
   _rawPrepare = _db.prepare.bind(_db);
+  _rawRun = _db.run.bind(_db);
 }
 
 /** Run a query and return all rows */
@@ -112,21 +113,20 @@ function _makePreparedStatement(sql) {
       if (bindParams.length > 0) stmt.bind(bindParams);
       const rows = [];
       while (stmt.step()) rows.push(stmt.getAsObject());
-      stmt.reset();
+      stmt.free();
       return rows;
     },
     get: (...bindParams) => {
       if (bindParams.length > 0) stmt.bind(bindParams);
       const row = stmt.step() ? stmt.getAsObject() : null;
-      stmt.reset();
+      stmt.free();
       return row;
     },
     run: (...bindParams) => {
       if (bindParams.length > 0) stmt.bind(bindParams);
       stmt.step();
       stmt.free();
-      // _db is the wrapper; _db._db is the sql.js Database instance
-      return { changes: _db._db.getRowsModified(), lastInsertRowid: 0 };
+      return { changes: _db.getRowsModified(), lastInsertRowid: 0 };
     },
     _stmt: stmt,
   };
@@ -138,9 +138,9 @@ function _extendDb() {
   _setRawPrepare();
   _db.all = _all;
   _db.get = _get;
-  // Note: _db.run and _db.prepare are NOT overwritten — they are already set
-  // to the underlying sql.js methods in _injectDB (bound to _db._db).
-  // Overwriting them with _run/_makePreparedStatement would break the binding.
+  _db.prepare = _makePreparedStatement;
+  // Note: _db.run is NOT overwritten — it is already bound to the raw sql.js run().
+  // Overwriting with _run would break the binding.
 }
 
 // ─── Test injection ───────────────────────────────────────────────────────────
