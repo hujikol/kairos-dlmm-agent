@@ -6,13 +6,21 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { describe, it } from 'node:test';
-import Database from "better-sqlite3";
+import Database from 'better-sqlite3';
 import { _injectDB, initSchema, getDB } from '../src/core/db.js';
+import { migrate as migration001 } from '../migrations/001_initial_schema.js';
+import { migrate as migration002 } from '../migrations/002_add_missing_columns.js';
+import { migrate as migration003 } from '../migrations/003_decision_log.js';
 
-// Use isolated in-memory DB for this test file
-const _testDb = new Database(":memory:");
-initSchema(_testDb);
-_injectDB(_testDb);
+// Use isolated in-memory DB for this test file.
+// _injectDB must run first so that tableHasColumn() (used by migration002)
+// resolves against _db rather than a null pointer.
+const _testDb = new Database(':memory:');
+_injectDB(_testDb);      // sets module-level _db = _testDb
+migration001(_testDb);   // creates all tables (fresh DB path)
+migration002(_testDb);   // adds missing columns
+migration003(_testDb);   // adds decision_log table
+initSchema(_testDb);     // creates indexes (safety net)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

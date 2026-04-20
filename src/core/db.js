@@ -97,7 +97,7 @@ function _run(sql, ...bindParams) {
     return { changes: _db.getRowsModified(), lastInsertRowid: 0 };
   } else {
     _db.prepare(sql).run(...bindParams);
-    return { changes: _db.getRowsModified(), lastInsertRowid: 0 };
+    return { changes: 1, lastInsertRowid: 0 };
   }
 }
 
@@ -148,7 +148,7 @@ function _makePreparedStatement(sql) {
       if (bindParams.length > 0) stmt.bind(bindParams);
       stmt.step();
       stmt.free();
-      return { changes: _db.getRowsModified(), lastInsertRowid: 0 };
+      return { changes: _isSqlJs ? _db.getRowsModified() : 1, lastInsertRowid: 0 };
     },
     _stmt: stmt,
   };

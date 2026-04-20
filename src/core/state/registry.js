@@ -10,8 +10,8 @@ import { pushEvent } from "./events.js";
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
-export function updatePosition(position_address, updates) {
-  const db = getDB();
+export function updatePosition(position_address, updates, db) {
+  if (!db) db = getDB();
   const keys = Object.keys(updates);
   if (keys.length === 0) return;
   const setCols = keys.map(k => `${k} = ?`).join(", ");
@@ -26,8 +26,8 @@ function touchLastUpdated() {
   db.prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)').run("lastUpdated", new Date().toISOString());
 }
 
-export function appendNote(position_address, note) {
-  const db = getDB();
+export function appendNote(position_address, note, db) {
+  if (!db) db = getDB();
   const pos = db.prepare("SELECT notes FROM positions WHERE position = ?").get(position_address);
   if (!pos) return;
   let notes = [];
@@ -36,7 +36,7 @@ export function appendNote(position_address, note) {
     notes = [];
   }
   notes.push(note);
-  updatePosition(position_address, { notes: JSON.stringify(notes) });
+  updatePosition(position_address, { notes: JSON.stringify(notes) }, db);
 }
 
 function rowToPos(row) {

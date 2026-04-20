@@ -114,6 +114,14 @@ export function saveRules(rules) {
   const db = getDB();
   ensureTable(db);
 
+  // When given an empty array, clear all existing rules.
+  if (rules.length === 0) {
+    runTransaction(() => {
+      db.prepare('DELETE FROM postmortem_rules').run();
+    });
+    return;
+  }
+
   const trimmed = rules.slice(-MAX_RULES);
 
   const upsert = db.prepare(`
