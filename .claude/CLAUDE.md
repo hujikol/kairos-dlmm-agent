@@ -510,6 +510,11 @@ Node.js v24.14.1 regressed ES module live bindings — imported `let` exports ar
 
 **All commits must pass lint and syntax checks locally before pushing.**
 
+**Strict rule: unused variables and imports must be removed or prefixed with `_`.**
+Do not leave `argv`, `flags`, `log`, `config`, `db`, etc. unused. Prefix genuinely
+unneeded params with `_` (e.g., `function foo(_arg)`). Prefix unused imports with
+`_` (e.g., `import { foo as _foo }`). This keeps lint warnings at zero.
+
 ```bash
 npm run lint      # ESLint — must show 0 errors (warnings OK)
 npm test          # Unit tests — must pass

@@ -11,7 +11,7 @@ import { buildSystemPrompt } from "../prompt.js";
 import { getToolsForRole } from "./tools.js";
 import { shouldRequireRealToolUse } from "./intent.js";
 import { client, callWithRetry } from "./fallback.js";
-import { DEFAULT_MODEL } from "./intent.js";
+import { DEFAULT_MODEL as _DEFAULT_MODEL } from "./intent.js";
 import { parseToolArgs } from "./repair.js";
 import { isRateLimitError, rateLimitBackoff, sleep } from "./rate.js";
 import { executeTool } from "../tools/executor.js";
