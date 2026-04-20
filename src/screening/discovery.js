@@ -259,6 +259,8 @@ export async function getTopCandidates({ limit = 10 } = {}) {
  * @returns {Promise<object>} - Full raw pool object from the API
  */
 export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
+  if (!pool_address) throw new Error("pool_address is required");
+
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
     `page_size=1` +
     `&filter_by=${encodeURIComponent(`pool_address=${pool_address}`)}` +
@@ -274,7 +276,7 @@ export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
   const pool = (data.data || [])[0];
 
   if (!pool) {
-    throw new Error(`Pool ${pool_address} not found`);
+    return undefined;
   }
 
   return pool;
