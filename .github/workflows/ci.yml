@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.17.0"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: .
 
@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.17.0"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: .
 
@@ -93,7 +93,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.17.0"
+          node-version: "24"
 
       - name: Check core files parse
         run: |
