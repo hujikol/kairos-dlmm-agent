@@ -39,6 +39,7 @@ export function log(level, category, message, meta = {}) {
     for (const line of stack.slice(2)) {
       const m = line.match(/\(([^)]+)\)/) || line.match(/at\s+([^ ]+)/);
       if (m && !m[1].includes("logger.js")) {
+        const parts = m[1].split(":");
         const urlOrPath = m[1];
         let file;
         if (urlOrPath.startsWith("file://")) {
