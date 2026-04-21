@@ -3,13 +3,13 @@ import BN from "bn.js";
 import { CLAIM_DEDUP_MS, METEORA_CLOSE_SYNC_WAIT_MS, METEORA_CLOSE_RETRY_DELAY_MS } from "../../core/constants.js";
 import { recordClaim, recordClose, getTrackedPosition } from "../../core/state/registry.js";
 import { recordPerformance } from "../../core/lessons.js";
-import { config, isDryRun } from "../../config.js";
+import { isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { getPool, getWallet, getDLMM, getConnection, sendTx, lookupPoolForPosition } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
-import { getMyPositions, invalidatePositionsCache } from "./positions.js";
+import { invalidatePositionsCache } from "./positions.js";
 import { positionsCache, poolCache } from "../../core/cache-manager.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
@@ -195,8 +195,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   await new Promise(r => setTimeout(r, METEORA_CLOSE_SYNC_WAIT_MS));
   invalidatePositionsCache();
 
-  let closedConfirmed = false;
-  let lastError = null;
+  let confirmed = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       // Use getAllLbPairPositionsByUser directly — do NOT trust getMyPositions (relay/Meteora API has stale data)
@@ -210,15 +209,14 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
         return key === position_address;
       });
       log("debug", "close", `Close verification attempt ${attempt + 1}/3: ${stillOpen ? "still open" : "confirmed closed"} (${allPos.length} on-chain positions)`);
-      if (!stillOpen) { closedConfirmed = true; break; }
-    } catch (e) {
-      lastError = e;
-      log("warn", "close", `Close verification failed (attempt ${attempt + 1}/3): ${e?.message ?? e}`);
+      if (!stillOpen) { confirmed = true; break; }
+    } catch (_e) {
+      log("warn", "close", `Close verification failed (attempt ${attempt + 1}/3): ${_e?.message ?? _e}`);
     }
     if (attempt < 2) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
   }
 
-  if (!closedConfirmed) {
+  if (!confirmed) {
     return {
       closedConfirmed: false,
       result: {
@@ -463,7 +461,7 @@ export async function closePosition({ position_address, reason }) {
     const { closeTxHashes } = await closeRemoveLiquidity(ctx);
 
     // Phase 3: Verify & record
-    const { closedConfirmed, result } = await closeVerifyAndRecord(
+    const { result } = await closeVerifyAndRecord(
       ctx, { claimTxHashes, closeTxHashes }, reason,
     );
 

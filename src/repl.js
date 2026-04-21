@@ -97,9 +97,9 @@ export async function runStartupFetch() {
     }
     console.log(`Top pools (${total_eligible} eligible from ${total_screened} screened):\n`);
     console.log(formatCandidates(candidates));
-  } catch (e) {
-    try { (await import("./instrument.js")).captureError(e, { phase: "startup" }).catch(err => log("warn", "startup", `Sentry capture failed: ${err?.message || err}`)); } catch (_) {}
-    console.error(`Startup fetch failed: ${e.message}`);
+  } catch (_e) {
+    try { (await import("./instrument.js")).captureError(_e, { phase: "startup" }).catch(_err => log("warn", "startup", `Sentry capture failed: ${_err?.message || _err}`)); } catch {}
+    console.error(`Startup fetch failed: ${_e.message}`);
   } finally {
     _telegramBusy._count--;
   }
@@ -107,7 +107,7 @@ export async function runStartupFetch() {
 }
 
 // ─── REPL line handler ─────────────────────────────────────────────────────────
-export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, swapAllTokensToSol) {
+export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle, _swapAllTokensToSol) {
   rl.on("line", async (line) => {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
@@ -283,7 +283,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
         } else {
           reloadScreeningThresholds();
           console.log("\nThresholds evolved:");
-          for (const [key, val] of Object.entries(result.changes)) {
+          for (const [key, _val] of Object.entries(result.changes)) {
             console.log(`  ${key}: ${result.rationale[key]}`);
           }
           console.log("\nSaved to user-config.json. Applied immediately.\n");

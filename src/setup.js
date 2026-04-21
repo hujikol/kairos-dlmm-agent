@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, "user-config.json");
 const ENV_PATH    = path.join(__dirname, ".env");
 
-const DEFAULT_MODEL = process.env.LLM_MODEL || "minimax/minimax-01";
+const _DEFAULT_MODEL = process.env.LLM_MODEL || "minimax/minimax-01";
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 

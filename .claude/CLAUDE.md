@@ -323,6 +323,7 @@ Delegates to `src/core/shared-handlers.js` for: `/status`, `/balance`, `/candida
 - `_timersState.screeningLastTriggered` — cooldown between post-management screening triggers
 - `ONCE_PER_SESSION` set in `agent/react.js` — blocks duplicate `deploy_position` / `swap_token` / `close_position` per session
 - `deploy_position` safety check uses `force: true` on `getMyPositions()` for fresh count
+- `_positionsInflight` (module-level, `src/integrations/meteora/positions.js`) — deduplicates concurrent `getMyPositions()` calls via a shared promise. **Must remain at module scope** — local scope inside the function defeats the deduplication.
 
 ---
 
@@ -506,37 +507,91 @@ Node.js v24.14.1 regressed ES module live bindings — imported `let` exports ar
 
 ---
 
-## CI — Run Before Every Commit
+## Development Workflow
 
-**All commits must pass lint and syntax checks locally before pushing.**
-
-**Strict rule: unused variables and imports must be removed or prefixed with `_`.**
-Do not leave `argv`, `flags`, `log`, `config`, `db`, etc. unused. Prefix genuinely
-unneeded params with `_` (e.g., `function foo(_arg)`). Prefix unused imports with
-`_` (e.g., `import { foo as _foo }`). This keeps lint warnings at zero.
+### Before Every Commit — Run Locally First
 
 ```bash
-npm run lint      # ESLint — must show 0 errors (warnings OK)
-npm test          # Unit tests — must pass
-node --check src/index.js src/agent/index.js src/core/db.js src/core/logger.js src/core/scheduler.js src/integrations/meteora.js src/integrations/helius.js src/core/postmortem.js src/core/simulator.js  # All must exit 0
-WALLET_PRIVATE_KEY="[]" RPC_URL="https://api.mainnet-beta.solana.com" OPENROUTER_API_KEY="test-key" node --test test/debug_insert.js test/helius-cache.js test/mem-db.js test/notifications.js test/postmortem-signalweights.js test/screening-api.js  # Integration tests — all must pass
+# 1. Lint — must show 0 errors and 0 warnings (strict)
+npm run lint
+
+# 2. Unit tests
+npm test
+
+# 3. Syntax check on all entry points
+node --check src/index.js src/agent/index.js src/core/db.js src/core/logger.js \
+  src/core/scheduler.js src/integrations/meteora.js src/integrations/helius.js \
+  src/core/postmortem.js src/core/simulator.js
+
+# 4. Integration tests (uses CI mock env — no real keys needed)
+WALLET_PRIVATE_KEY="[]" RPC_URL="https://api.mainnet-beta.solana.com" \
+  OPENROUTER_API_KEY="test-key" \
+  node --test test/debug_insert.js test/helius-cache.js test/mem-db.js \
+         test/notifications.js test/postmortem-signalweights.js test/screening-api.js
 ```
 
-CI pipeline (`.github/workflows/ci.yml`):
-1. `npm audit --audit-level=high` — security audit, blocks on high+ vulnerabilities
-2. `npm run lint` — ESLint, blocks on any lint error
-3. `npm test` — Node.js test runner, blocks on test failures
-4. Integration tests — `node --test` on `test/*.js` (non `test-*.js` / `*.test.js` files)
-5. Syntax check — `node --check` on 8 core entry files
+All four steps must exit 0 before pushing.
 
-**CI does not require real API keys.** All jobs use mock env vars (`WALLET_PRIVATE_KEY="[]"`, `RPC_URL="https://api.mainnet-beta.solana.com"`, `OPENROUTER_API_KEY="test-key"`).
+### Zero-Warnings Policy
+
+ESLint rule: `no-unused-vars: ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }]`
+
+| Situation | Action |
+|----------|--------|
+| Unused function param | Prefix with `_`: `function foo(_arg)` |
+| Unused import | Remove it, or prefix: `import { bar as _bar }` |
+| Unused local variable | Rename to `_bar` |
+| Silent catch block (error intentionally ignored) | Use bare `catch {}` — no variable binding, ESLint doesn't check it |
+
+**Never leave `catch (_)` with a single underscore — that triggers the unused-var warning because ESLint's `argsIgnorePattern` only covers function arguments, not catch bindings. Use bare `catch {}` instead.**
+
+Examples:
+```js
+// Bad — warning: '_' is defined but never used
+try { ... } catch (_) { /* ignore */ }
+
+// Good — bare catch, no binding, ESLint is happy
+try { ... } catch { /* ignore */ }
+
+// Good — error is actually used
+try { ... } catch (e) { log("warn", "tag", e.message); }
+
+// Good — unused but named so intent is clear
+try { ... } catch (_err) { _err; /* ignore */ }
+```
+
+### CI Pipeline
+
+```
+1. npm audit --audit-level=high     — security, blocks on high+ vulnerabilities
+2. npm run lint                    — ESLint, blocks on any error
+3. npm test                        — Node.js test runner (test-*.js, *.test.js)
+4. Integration tests (above cmd)   — node --test on test/*.js
+5. Syntax check (above cmd)        — node --check on 8 core entry files
+```
+
+CI uses `WALLET_PRIVATE_KEY="[]"` as a sentinel — `config.js` `validateEnv()` accepts this value so integration tests can run without real keys.
+
+### Test Injection Functions
+
+Used by integration tests to isolate logic from real network calls:
+
+| Function | Location | Purpose |
+|----------|----------|---------|
+| `_injectDB(db)` | `src/core/db.js` | Inject in-memory SQLite for tests |
+| `_injectPositionsCache(result)` | `src/integrations/meteora/positions.js` | Mock positions response |
+| `_resetPositionsCache()` | `src/integrations/meteora/positions.js` | Reset positions cache |
+| `_injectDiscovery(pools)` | `src/screening/discovery.js` | Mock candidate discovery |
+| `_injectPool(pool)` | `src/integrations/meteora/pool.js` | Mock DLMM pool |
+| `_injectSendTx(fn)` | `src/integrations/meteora/pool.js` | Mock transaction sender |
+| `_injectTrackedPosition(pos)` | `src/core/state/index.js` | Mock tracked position lookup |
 
 ## Infrastructure
 
-- **Linting:** ESLint (`.eslintrc.json`) — `npm run lint`
+- **Linting:** ESLint (`eslint.config.js`) — `npm run lint`
 - **Formatting:** Prettier (`.prettierrc.json`) — `npm run format`
 - **Dependency updates:** Dependabot (`.github/dependabot.yml`) — automated PRs for npm packages
-- **CI:** GitHub Actions (`.github/workflows/ci.yml`) — see §CI
+- **CI:** GitHub Actions (`.github/workflows/ci.yml`) — see §Development Workflow
 - **SQLite DB:** `*.db` files in `.gitignore` — never commit wallet/position data
 
 ---

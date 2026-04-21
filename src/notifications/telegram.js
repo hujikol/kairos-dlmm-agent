@@ -1,6 +1,4 @@
 import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import { log } from "../core/logger.js";
 import { USER_CONFIG_PATH } from "../config.js";
 import { caveman } from "../tools/caveman.js";
@@ -179,10 +177,7 @@ export async function sendChatAction(action = "typing") {
       signal: controller.signal,
     });
     clearTimeout(timeout);
-  } catch (e) {
-    // Silently ignore — chat action is non-critical
-  }
-}
+  } catch {}}
 
 // Re-export drainTelegramQueue from telegram-handlers (avoids circular import in management-cycle)
 export { drainTelegramQueue } from "../telegram-handlers.js";

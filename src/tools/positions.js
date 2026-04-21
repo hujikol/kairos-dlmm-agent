@@ -4,7 +4,7 @@ import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../features/
 import { blockDev, unblockDev, listBlockedDevs } from "../features/dev-blocklist.js";
 import { addPoolNote, getPoolMemory } from "../features/pool-memory.js";
 import { config } from "../config.js";
-import { log, logAction } from "../core/logger.js";
+import { log } from "../core/logger.js";
 import { pushNotification } from "../notifications/queue.js";
 import { setPositionInstruction } from "../core/state/registry.js";
 import { addrShort } from "./addrShort.js";

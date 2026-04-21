@@ -8,7 +8,7 @@ import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert";
 import { fileURLToPath } from "url";
 import path from "path";
-import { makeMemDB } from "./mem-db.js";
+import { _makeMemDB } from "./mem-db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

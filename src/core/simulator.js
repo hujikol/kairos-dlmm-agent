@@ -1,4 +1,3 @@
-import { config } from "../config.js";
 import {
   MIN_DAILY_ROI,
   IL_RISK_HIGH, IL_RISK_MED, IL_RISK_LOW,

@@ -5,7 +5,7 @@
 
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { describe, it } from 'node:test';
+import { it } from 'node:test';
 import Database from 'better-sqlite3';
 import { _injectDB, initSchema, getDB } from '../src/core/db.js';
 import { migrate as migration001 } from '../migrations/001_initial_schema.js';
@@ -26,7 +26,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
-function delay(ms) {
+function _delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
@@ -123,7 +123,7 @@ await it('signal_weights_history table has correct schema', async () => {
 });
 
 await it('saveRules() persists rules to DB and loadRules() retrieves them', async () => {
-  const { clearRules, getActiveRules } = await import('../src/core/postmortem.js');
+  const { clearRules, getActiveRules} = await import('../src/core/postmortem.js');
   clearRules();
 
   const db = getDB();
@@ -232,7 +232,7 @@ await it('matchesBlockedPattern() returns rule for blocked pattern or null', asy
 });
 
 await it('MAX_RULES pruning is enforced (50 rule limit)', async () => {
-  const { clearRules, getActiveRules } = await import('../src/core/postmortem.js');
+  const { clearRules} = await import('../src/core/postmortem.js');
   clearRules();
 
   const db = getDB();

@@ -1,5 +1,5 @@
 import { getDB } from "../core/db.js";
-import { getPerformanceSummary, getPerformanceHistory } from "../core/lessons.js";
+import { getPerformanceSummary } from "../core/lessons.js";
 
 export async function generateBriefing() {
   const db = getDB();
@@ -19,7 +19,6 @@ export async function generateBriefing() {
 
   const openPositions = db.prepare('SELECT * FROM positions WHERE closed = 0').all();
   const perfSummary = getPerformanceSummary();
-  const perf24h = getPerformanceHistory({ hours: 24, limit: 50 });
 
   const winRate24h = closedLast24h.length > 0
     ? Math.round((closedLast24h.filter(p => p.pnl_usd > 0).length / closedLast24h.length) * 100)

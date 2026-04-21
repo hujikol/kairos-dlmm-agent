@@ -21,7 +21,6 @@ import {
   getPool,
   getDLMM,
   DLMM_PROGRAM,
-  applyPriorityFee,
   sendTx,
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
@@ -311,7 +310,7 @@ export async function deployPosition({
  * @param {boolean} ctx.silent - Suppress logging
  * @returns {Promise<{ pools: Array, walletAddress: string }>}
  */
-async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
+async function _fetchPositionsFromMeteora({ walletAddress, force: _force, silent }) {
   let pools = [];
 
   // 1. Try Meteora portfolio API first (fastest, freshest on-chain data)
@@ -363,7 +362,7 @@ async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
  * @param {Object} ctx - Orchestrator context { walletAddress, silent }
  * @returns {Promise<Array>} positions - Enriched position objects
  */
-async function _enrichPositionsWithPnL(pools, { walletAddress, silent }) {
+async function _enrichPositionsWithPnL(pools, { walletAddress, silent: _silent }) {
   const binDataByPool = {};
   const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
   pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });

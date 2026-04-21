@@ -64,7 +64,7 @@ const SCHEMA = {
   cavemanEnabled:         { type: "boolean" },
 };
 
-const CONFIG_MAP = {
+const _CONFIG_MAP = {
   minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
   minTvl: ["screening", "minTvl"],
   maxTvl: ["screening", "maxTvl"],

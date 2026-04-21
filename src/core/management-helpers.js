@@ -16,8 +16,8 @@ import {
   PRICE_FORMAT_THRESHOLD,
 } from "./constants.js";
 import { autoSwapRewardFees } from "../integrations/helius.js";
-import { pushNotification, flushNotifications, hasPendingNotifications } from "../notifications/queue.js";
-import { sendHTML, isEnabled as telegramEnabled } from "../notifications/telegram.js";
+import { pushNotification, flushNotifications } from "../notifications/queue.js";
+import { sendHTML } from "../notifications/telegram.js";
 import { stripThink } from "../tools/caveman.js";
 import { getStreak } from "./state/index.js";
 

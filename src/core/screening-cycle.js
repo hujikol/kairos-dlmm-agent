@@ -17,7 +17,7 @@ import {
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
 import { captureAlert } from "../instrument.js";
 import { getActiveStrategy } from "./strategy-library.js";
-import { detectMarketPhase, PHASE_CONFIG } from "./phases.js";
+import { detectMarketPhase as _detectMarketPhase, PHASE_CONFIG } from "./phases.js";
 import { findStrategiesForPhase } from "./lparmy-strategies.js";
 import { simulatePoolDeploy } from "./simulator.js";
 import { isEnabled as telegramEnabled, sendHTML } from "../notifications/telegram.js";

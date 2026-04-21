@@ -6,7 +6,7 @@
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
-import { config, computeDeployAmount, isDryRun } from "../config.js";
+import { config } from "../config.js";
 import {
   timers,
   _busyState,
@@ -177,7 +177,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
       const cur = config.management.solMode ? "◎" : "$";
       const actionBlocks = instructionActions.map((p) => {
-        const act = actionMap.get(p.position);
+        const _act = actionMap.get(p.position);
         return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,

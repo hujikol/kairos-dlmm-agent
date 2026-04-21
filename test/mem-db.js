@@ -125,7 +125,7 @@ export async function makeMemDB() {
  * Create a fully initialized in-memory DB with schema, suitable for registry tests.
  */
 export async function makeSchemaDB() {
-  const { initSchema } = await import("../src/core/db.js");
+  const { initSchema: _initSchema } = await import("../src/core/db.js");
   const db = await makeMemDB();
   // Apply full schema
   db.exec(`

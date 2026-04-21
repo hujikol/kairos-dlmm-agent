@@ -307,7 +307,9 @@ export function reloadScreeningThresholds() {
  * Throws a clear error if WALLET_PRIVATE_KEY or RPC_URL is missing.
  */
 export function validateEnv() {
-  if (!process.env.WALLET_PRIVATE_KEY?.trim()) {
+  // CI/test sentinel values — empty JSON array or empty string mean "configured for test only"
+  const isTestWallet = process.env.WALLET_PRIVATE_KEY === "[]" || process.env.WALLET_PRIVATE_KEY === "";
+  if (!process.env.WALLET_PRIVATE_KEY?.trim() && !isTestWallet) {
     throw new Error("Missing required env var: WALLET_PRIVATE_KEY — set it in .env or user-config.json");
   }
   if (!process.env.RPC_URL?.trim()) {

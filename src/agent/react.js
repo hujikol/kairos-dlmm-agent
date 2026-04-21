@@ -149,51 +149,75 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         break;
       }
 
-      const results = await Promise.allSettled(msg.tool_calls.map(async (toolCall) => {
-        const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
-        const rawArgs = toolCall.function.arguments ?? "{}";
-        const { args } = parseToolArgs(rawArgs, functionName);
+      // Helper to safely stringify tool results containing BigInts or circular refs
+      const safeStringify = (obj) => {
+        try {
+          return JSON.stringify(obj, (key, value) => typeof value === 'bigint' ? value.toString() : value);
+        } catch (e) {
+          return JSON.stringify({ error: `Could not serialize result: ${e.message}` });
+        }
+      };
 
-        // Block once-per-session tools from firing a second time
-        if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
-          log("info", "agent", `Blocked duplicate ${functionName} call — already executed this session`);
+      const results = await Promise.allSettled(msg.tool_calls.map(async (toolCall) => {
+        try {
+          const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
+          const rawArgs = toolCall.function.arguments ?? "{}";
+          const { args } = parseToolArgs(rawArgs, functionName);
+
+          // Block once-per-session tools from firing a second time
+          if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
+            log("info", "agent", `Blocked duplicate ${functionName} call — already executed this session`);
+            return {
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: safeStringify({ blocked: true, reason: `${functionName} already attempted this session — do not retry.` }),
+            };
+          }
+
+          const result = await executeTool(functionName, args);
+
+          // Track meaningful on-chain results so MAX_REACT_DEPTH break still returns useful info.
+          const isMeaningfulClose = functionName === "close_position" && result?.already_closed === true;
+          if (result?.success === true || isMeaningfulClose) {
+            lastMeaningfulResult = { functionName, result };
+          }
+
+          if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
+          else if (ONCE_PER_SESSION.has(functionName) && result?.success === true) firedOnce.add(functionName);
+
           return {
             role: "tool",
             tool_call_id: toolCall.id,
-            content: JSON.stringify({ blocked: true, reason: `${functionName} already attempted this session — do not retry.` }),
+            content: safeStringify(result ?? { error: "Tool returned no result" }),
+          };
+        } catch (callErr) {
+          // Catch any unexpected throw inside the callback so it becomes a fulfilled
+          // result with an error message instead of a rejected promise.
+          const errDetail = callErr?.stack ? `\n${callErr.stack}` : ` - ${callErr?.message}`;
+          log("error", "agent", `Tool call callback error (${toolCall?.function?.name})${errDetail}`);
+          return {
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: safeStringify({ error: callErr?.message || "Tool call failed unexpectedly" }),
           };
         }
-
-        const result = await executeTool(functionName, args);
-
-        // Track meaningful on-chain results so MAX_REACT_DEPTH break still returns useful info.
-        // close_position returns { success, already_closed } — success=false with already_closed=true
-        // means position confirmed closed on-chain but returned false (catch block path).
-        // We treat this as meaningful since it means the position is actually closed.
-        const isMeaningfulClose = functionName === "close_position" && result?.already_closed === true;
-        if (result?.success === true || isMeaningfulClose) {
-          lastMeaningfulResult = { functionName, result };
-        }
-
-        if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
-        else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
-
-        return {
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: JSON.stringify(result),
-        };
       }));
       // Log any rejections
       results.forEach((r, i) => {
         if (r.status === 'rejected') {
-          log("error", "agent", `Tool call ${i} failed`, { reason: r.reason?.message });
+          const tc = msg.tool_calls[i];
+          const toolName = tc?.function?.name ?? "unknown";
+          const reason = r.reason instanceof Error
+            ? `${r.reason.message}\n${r.reason.stack}`
+            : String(r.reason ?? "unknown");
+          const argsPreview = tc?.function?.arguments?.slice(0, 200) || "none";
+          log("error", "agent", `Tool call ${i} failed (${toolName})\nArgs: ${argsPreview}\nReason: ${reason}`);
         }
       });
       const toolResults = results.map(r => r.status === 'fulfilled' ? r.value : {
         role: "tool",
         tool_call_id: msg.tool_calls[results.indexOf(r)].id,
-        content: JSON.stringify({ error: r.reason?.message || "Tool call rejected" }),
+        content: safeStringify({ error: r.reason?.message || "Tool call rejected" }),
       });
 
       messages.push(...toolResults);

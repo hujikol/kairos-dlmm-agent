@@ -1,9 +1,8 @@
 import { config } from "../config.js";
 import { isBlacklisted } from "../features/token-blacklist.js";
-import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
+import { getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
-import { poolCache } from "../core/cache-manager.js";
 import { TOKEN_AGE_MS_PER_HOUR, OKX_ENRICHMENT_TIMEOUT_MS } from "../core/constants.js";
 
 const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";

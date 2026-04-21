@@ -42,7 +42,7 @@ import { getRulesForPrompt } from "./core/postmortem.js";
 import { addrShort } from "./tools/addrShort.js";
 
 export function buildSystemPrompt(agentType, portfolio, positions, stateSummary = null, lessons = null, perfSummary = null) {
-  const s = config.screening;
+  const _s = config.screening;
 
   // MANAGER gets a leaner prompt — positions are pre-loaded in the goal, not repeated here
   if (agentType === "MANAGER") {

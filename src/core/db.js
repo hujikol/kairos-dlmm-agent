@@ -173,7 +173,7 @@ function _extendDb() {
 export function _injectDB(db) {
   if (!db) return;
   if (_db && _db !== db) {
-    try { _db.close(); } catch (_) { /* ignore */ }
+    try { _db.close(); } catch (_) { _; /* silently ignore */ }
   }
   _db = db;
   // Detect engine: sql.js Database has ._db property, better-sqlite3 does not
@@ -241,7 +241,7 @@ export function initSchema(db) {
     `CREATE INDEX IF NOT EXISTS idx_lessons_outcome ON lessons(outcome)`,
   ];
   for (const sql of indexes) {
-    try { db.exec(sql); } catch (_) { /* table doesn't exist yet — skip */ }
+    try { db.exec(sql); } catch (_) { _; }
   }
 }
 

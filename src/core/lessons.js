@@ -9,7 +9,6 @@
  *   - src/core/lesson-service.js      — recordPerformance orchestration + stats
  */
 
-import { log } from "./logger.js";
 import { getDB } from "./db.js";
 import { ageWeight, ROLE_TAGS } from "./lesson-repo.js";
 import {
@@ -84,7 +83,7 @@ export function getLessonsForPrompt(opts = {}) {
       parsedTags = JSON.parse(l.tags || '[]');
       if (typeof parsedTags === "string") parsedTags = JSON.parse(parsedTags);
       if (!Array.isArray(parsedTags)) parsedTags = [];
-    } catch (e) { parsedTags = []; }
+    } catch { parsedTags = []; }
 
     return {
       ...l,

@@ -1,7 +1,5 @@
 import fs from "fs";
 import writeFileAtomic from "write-file-atomic";
-import path from "path";
-import { fileURLToPath } from "url";
 import { execSync, spawn } from "child_process";
 import { studyTopLPers } from "../integrations/lpagent.js";
 import { validateAndCoerce } from "../core/config-validator.js";
@@ -13,7 +11,7 @@ import {
   addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy,
 } from "../core/strategy-library.js";
 import { config, USER_CONFIG_PATH } from "../config.js";
-import { log, logAction } from "../core/logger.js";
+import { log } from "../core/logger.js";
 import { runManagementCycle } from "../core/cycles.js";
 
 let _cronRestarter = null;
@@ -115,7 +113,7 @@ export function registerAdmin(registerTool) {
   registerTool("add_lesson", ({ rule, tags, pinned, role }) => {
     let parsedTags = tags;
     if (typeof parsedTags === "string") {
-      try { parsedTags = JSON.parse(parsedTags); } catch (e) { parsedTags = [parsedTags]; }
+      try { parsedTags = JSON.parse(parsedTags); } catch { parsedTags = [parsedTags]; }
     }
     if (!Array.isArray(parsedTags)) parsedTags = [];
     addLesson(rule, parsedTags, { pinned: !!pinned, role: role || null });

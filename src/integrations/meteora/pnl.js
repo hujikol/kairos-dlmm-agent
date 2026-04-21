@@ -1,4 +1,3 @@
-import { config } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";

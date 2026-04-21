@@ -1,10 +1,6 @@
 import { log } from "./core/logger.js";
-import { getMyPositions, closePosition } from "./integrations/meteora.js";
-import { getWalletBalances } from "./integrations/helius.js";
-import { getTopCandidates } from "./screening/discovery.js";
-import { runScreeningCycle, escapeHTMLLocal as escapeHTML } from "./core/cycles.js";
-import { swapAllTokensToSol } from "./integrations/helius.js";
-import { generateBriefing } from "./notifications/briefing.js";
+import { closePosition } from "./integrations/meteora.js";
+import { escapeHTMLLocal as escapeHTML } from "./core/cycles.js";
 import {
   getLearningStats,
   pinLesson,
@@ -17,7 +13,6 @@ import { agentLoop } from "./agent/index.js";
 import { stripThink } from "./tools/caveman.js";
 import { startPolling, sendHTML, sendMessage, sendMessageDirect, sendChatAction } from "./notifications/telegram.js";
 import { _busyState } from "./core/state/scheduler-state.js";
-import { rl, buildPrompt } from "./rl-shared.js";
 import {
   getStatusData,
   getBalanceData,
@@ -76,7 +71,10 @@ export function drainTelegramQueue() {
     const queued = _telegramQueue.shift();
     if (!queued) break;
     // Fire-and-forget — telegramHandler owns _count lifecycle
-    telegramHandler(queued).then(() => {
+    // Pass fromDrain=true so drained commands skip the busy-state re-queuing check.
+    // Without this, drained commands see _screeningBusy/_managementBusy still true
+    // and re-queue themselves, creating an infinite drain→re-queue→drain loop.
+    telegramHandler(queued, /* fromDrain */ true).then(() => {
       drainTelegramQueue(); // recurse after handler completes to drain next
     }).catch(() => {
       drainTelegramQueue(); // on error, still drain next
@@ -177,7 +175,6 @@ async function handleBriefing() {
 async function handleBalance() {
   try {
     const { sol, sol_usd, tokens, total_usd } = await getBalanceData();
-    const cur = config.management.solMode ? "◎" : "$";
 
     const colWidths = [8, 11, 10];
     const rows = [
@@ -439,11 +436,17 @@ async function handleLLMChat(text) {
 }
 
 // ─── Main Telegram handler (dispatcher) ────────────────────────────────────────
-export async function telegramHandler(text) {
-  log("info", "telegram-handler", `telegramHandler called with: "${text}"`);
+export async function telegramHandler(text, fromDrain = false) {
+  log("info", "telegram-handler", `telegramHandler called with: "${text}"${fromDrain ? " (from drain)" : ""}`);
 
   // Busy check first — if queuing, send queue confirmation and skip acknowledgment
-  if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) {
+  // When fromDrain=true, skip cycle-busy checks — this command already waited in the
+  // queue and must not be re-queued (that causes an infinite drain→queue→drain loop).
+  // Only enforce the concurrent handler limit for drained commands.
+  const cycleBusy = _busyState._managementBusy || _busyState._screeningBusy;
+  const atConcurrencyLimit = _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM;
+
+  if (!fromDrain && (cycleBusy || atConcurrencyLimit)) {
     sendChatAction("typing").catch(() => {});
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(text);
@@ -451,6 +454,12 @@ export async function telegramHandler(text) {
     } else {
       await sendMessageDirect(`<b>Queue full.</b> ${MAX_TELEGRAM_QUEUE} messages waiting. Try again shortly.`);
     }
+    return;
+  }
+
+  // Even drained commands must respect concurrency — re-queue if at limit
+  if (fromDrain && atConcurrencyLimit) {
+    _telegramQueue.unshift(text); // put it back at the front
     return;
   }
 
