@@ -16,7 +16,7 @@ const heliusApi = createCircuitBreaker("heliusApi", {
 });
 
 // ─── 5-minute TTL cache for getWalletBalances() ─────────────────
-export const CACHE_TTL = parseInt(process.env.HELIUS_BALANCE_CACHE_TTL_MS || String(config.screening?.balanceCacheTtlMs ?? 300_000)); // 5 minutes
+export const CACHE_TTL = parseInt(process.env.HELIUS_BALANCE_CACHE_TTL_MS || "300000"); // 5 minutes default
 const _CACHE_KEY = "balances";
 
 export function invalidateBalanceCache() {

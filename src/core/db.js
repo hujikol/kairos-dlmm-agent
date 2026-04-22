@@ -187,6 +187,9 @@ export function _injectDB(db) {
     _rawPrepare = null; // not used — native prepare handles this
   }
   _extendDb();
+  // Run migrations and schema init on the injected test DB
+  migrate(db);
+  initSchema(db);
 }
 
 // ─── Schema Migration Runner ──────────────────────────────────────────────────

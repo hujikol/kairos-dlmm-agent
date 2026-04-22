@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { addrShort } from "../../tools/addrShort.js";
+import { addrShort } from "../utils/addrShort.js";
 import { rotateIfNeeded } from "./rotation.js";
 import { logAction } from "./action-log.js";
 import { logSnapshot } from "./snapshot-log.js";

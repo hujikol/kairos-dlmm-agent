@@ -65,7 +65,7 @@ export async function claimFees({ position_address }) {
       if (entry) {
         claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
       }
-    } catch (_) { log("warn", "claim", `Non-critical error fetching claimed fees: ${_?.message || _}`); }
+    } catch (e) { log("warn", "claim", `Non-critical error fetching claimed fees: ${e?.message || e}`); }
     if (claimedFeesUsd !== null) {
       recordClaim(position_address, claimedFeesUsd);
     }
@@ -111,7 +111,7 @@ async function closeClaimFees(ctx) {
             const claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
             if (claimedFeesUsd > 0) recordClaim(position_address, claimedFeesUsd);
           }
-        } catch (_) { log("warn", "close", `Non-critical error fetching claimed fees in close flow: ${_?.message || _}`); }
+        } catch (e) { log("warn", "close", `Non-critical error fetching claimed fees in close flow: ${e?.message || e}`); }
       }
     }
   } catch (e) {

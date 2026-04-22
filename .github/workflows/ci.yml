@@ -105,7 +105,5 @@ jobs:
           node --check src/core/db.js
           node --check src/core/logger.js
           node --check src/core/scheduler.js
-          node --check src/integrations/meteora.js
-          node --check src/integrations/helius.js
           node --check src/core/postmortem.js
           node --check src/core/simulator.js

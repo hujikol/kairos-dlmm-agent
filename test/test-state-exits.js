@@ -77,6 +77,8 @@ function defaultMgmtConfig() {
 }
 
 beforeEach(() => {
+  if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+  if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
   testDb.exec("DELETE FROM positions");
   testDb.exec("DELETE FROM recent_events");
   testDb.exec("DELETE FROM lessons");

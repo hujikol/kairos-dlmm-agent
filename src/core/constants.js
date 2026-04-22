@@ -1,6 +1,8 @@
 /**
  * Centralized magic numbers and tuning constants.
  * All hardcoded numeric values that could benefit from named identification.
+ *
+ * For per-instance operator overrides (e.g. emergency tuning), see constants-local.js.
  */
 
 // ─── Simulator / IL Model ────────────────────────────────────────

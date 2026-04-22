@@ -158,6 +158,11 @@ export async function makeSchemaDB() {
       avg_pnl_pct REAL, win_rate REAL, last_deployed_at TEXT, last_outcome TEXT,
       notes TEXT, cooldown_until TEXT
     );
+    -- Seed schema versions so migrate() skips all migrations (DB already has full schema)
+    CREATE TABLE _schema_versions (version INTEGER PRIMARY KEY, applied_at TEXT);
+    INSERT INTO _schema_versions VALUES (1, '2026-01-01T00:00:00.000Z');
+    INSERT INTO _schema_versions VALUES (2, '2026-01-01T00:00:00.000Z');
+    INSERT INTO _schema_versions VALUES (3, '2026-01-01T00:00:00.000Z');
   `);
   return db;
 }

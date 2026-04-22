@@ -4,7 +4,7 @@
 
 import { captureError } from "../instrument.js";
 import { log } from "../core/logger.js";
-import { config } from "../config.js";
+import { getLlmConfig } from "../core/config-facade.js";
 import { getWalletBalances } from "../integrations/helius.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { buildSystemPrompt } from "../prompt.js";
@@ -20,20 +20,18 @@ import { getStateSummary } from "../core/state/index.js";
 import { getLessonsForPrompt, getPerformanceSummary } from "../core/lessons.js";
 import { LOOP_TIMEOUT_MS } from "../core/constants.js";
 
+import { canRun, recordRun, createFiredOnceTracker } from "./once-per-session.js";
+
 // ReAct safety guards
 const MAX_REACT_DEPTH = 10;
 const MAX_TOOL_CALLS_PER_STEP = 10;
 
-// Tools that should only fire once per session
-const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_position"]);
-// These lock after first attempt regardless of outcome
-const NO_RETRY_TOOLS = new Set(["deploy_position"]);
-
 export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
+  const llmConfig = getLlmConfig();
   const effectiveMaxSteps = maxSteps ?? (
-    agentType === "SCREENER" ? config.llm.screenerMaxSteps ?? 5
-    : agentType === "MANAGER" ? config.llm.managerMaxSteps ?? 4
-    : config.llm.maxSteps ?? 10
+    agentType === "SCREENER" ? llmConfig.screenerMaxSteps ?? 5
+    : agentType === "MANAGER" ? llmConfig.managerMaxSteps ?? 4
+    : llmConfig.maxSteps ?? 10
   );
   const { requireTool = false, portfolio: prePortfolio, positions: prePositions } = options;
 
@@ -60,7 +58,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
     { role: "user", content: goalText },
   ];
 
-  const firedOnce = new Set();
+  const firedOnce = createFiredOnceTracker();
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, requireTool);
   let sawToolCall = false;
   let noToolRetryCount = 0;
@@ -165,7 +163,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
           const { args } = parseToolArgs(rawArgs, functionName);
 
           // Block once-per-session tools from firing a second time
-          if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
+          if (!canRun(functionName, firedOnce)) {
             log("info", "agent", `Blocked duplicate ${functionName} call — already executed this session`);
             return {
               role: "tool",
@@ -182,8 +180,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
             lastMeaningfulResult = { functionName, result };
           }
 
-          if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
-          else if (ONCE_PER_SESSION.has(functionName) && result?.success === true) firedOnce.add(functionName);
+          recordRun(functionName, result?.success === true, firedOnce);
 
           return {
             role: "tool",

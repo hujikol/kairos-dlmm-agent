@@ -6,6 +6,11 @@
  * 2. discoverPools rejects pools with >30% bundle percentage
  * 3. getTopCandidates returns an array (or throws if unconfigured)
  */
+
+// Sentinel values so module imports don't throw validateEnv()
+if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 

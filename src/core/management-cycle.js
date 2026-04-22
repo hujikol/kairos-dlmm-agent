@@ -122,14 +122,12 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
     // Direct close execution — bypasses LLM entirely
     const { closePosition, claimFees } = await import("../integrations/meteora/close.js");
-    const closeResults = [];
     for (const p of closeActions) {
       const act = actionMap.get(p.position);
       const reason = act.reason || "agent decision";
       log("info", "cron", `Direct CLOSE: ${p.pair} (${p.position}) — ${reason}`);
       try {
         const result = await closePosition({ position_address: p.position, reason });
-        closeResults.push({ position: p, result, reason });
         if (result.success !== false) {
           pushNotification({
             type: "close",

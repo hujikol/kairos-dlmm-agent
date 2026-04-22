@@ -43,6 +43,10 @@ describe("runScreeningCycle pre-checks", () => {
     _injectDailyPnL({ realized: 0, unrealized: 0 });
     _injectCircuitBreaker({ action: "trade", reason: "normal" });
     if (!process.env.DRY_RUN) process.env.DRY_RUN = "true";
+    if (!process.env.OPENROUTER_API_KEY) process.env.OPENROUTER_API_KEY = "test-key";
+    // Sentinel values accepted by validateEnv() so tests don't need real keys
+    if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+    if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
   });
 
   afterEach(async () => {
@@ -71,7 +75,7 @@ describe("runScreeningCycle pre-checks", () => {
     });
     _injectBalances({ sol: 5.0, tokens: [] });
 
-    const { runScreeningCycle: _runScreeningCycle } = await import("../src/core/screening-cycle.js");
+    const { runScreeningCycle } = await import("../src/core/screening-cycle.js");
     const result = await runScreeningCycle({ silent: true });
 
     Object.assign(config.risk, origConfigRisk);
@@ -89,9 +93,14 @@ describe("runScreeningCycle pre-checks", () => {
     // Insufficient SOL for any deploy
     _injectBalances({ sol: 0.001, tokens: [] });
 
+    // DRY_RUN bypasses the SOL check, so disable it for this test
+    const origDryRun = process.env.DRY_RUN;
+    process.env.DRY_RUN = "false";
+
     const { runScreeningCycle } = await import("../src/core/screening-cycle.js");
     const result = await runScreeningCycle({ silent: true });
 
+    process.env.DRY_RUN = origDryRun ?? "true";
     Object.assign(config.management, origConfigMgmt);
     assert.strictEqual(result, null, "Should return null when SOL insufficient");
   });

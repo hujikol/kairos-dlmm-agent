@@ -1,4 +1,2 @@
-//Backward-compatible re-export — all public APIs from the old helius.js
-//Now split across src/integrations/helius/{normalize,balances,swaps,auto,index}.js
-//Existing callers (helius.js import path) continue to work without changes.
+// Re-export all public APIs from sub-module index
 export * from "./helius/index.js";

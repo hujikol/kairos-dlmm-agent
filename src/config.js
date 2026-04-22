@@ -108,7 +108,18 @@ export function isDryRun() {
   return process.env.DRY_RUN === "true";
 }
 
-export const config = {
+// Lazy validation — only runs when config is first accessed
+let _validated = false;
+
+function ensureValidated() {
+  if (!_validated) {
+    validateEnv();
+    _validated = true;
+  }
+}
+
+// Wrap config in a Proxy so validation runs on first property access
+const _rawConfig = {
   // ─── Risk Limits ─────────────────────────
   risk: {
     maxPositions:        u.risk?.maxPositions        ?? u.maxPositions        ?? 3,
@@ -239,6 +250,22 @@ export const config = {
   },
 };
 
+export const config = new Proxy(_rawConfig, {
+  get(target, prop) {
+    ensureValidated();
+    const val = target[prop];
+    if (val && typeof val === "object") {
+      return new Proxy(val, {
+        get(subTarget, subProp) {
+          ensureValidated();
+          return subTarget[subProp];
+        },
+      });
+    }
+    return val;
+  },
+});
+
 /**
  * Conviction Sizing Matrix — fixed position sizing based on conviction level
  * and number of open positions. 3x sizing (very_high) only when 0 positions open.
@@ -317,5 +344,4 @@ export function validateEnv() {
   }
 }
 
-// Validate on module load (fail-fast at startup)
-validateEnv();
+// validateEnv() is called lazily via ensureValidated() on first config access

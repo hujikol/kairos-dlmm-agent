@@ -13,6 +13,7 @@ import { agentLoop } from "./agent/index.js";
 import { stripThink } from "./tools/caveman.js";
 import { startPolling, sendHTML, sendMessage, sendMessageDirect, sendChatAction } from "./notifications/telegram.js";
 import { _busyState } from "./core/state/scheduler-state.js";
+import { setPositionInstruction } from "./core/state/index.js";
 import {
   getStatusData,
   getBalanceData,
@@ -401,7 +402,6 @@ async function handleSet(text) {
     const { positions } = await getMyPositions({ force: true });
     if (idx < 0 || idx >= positions.length) { await sendHTML(`Invalid number. Use <code>/positions</code> first.`); return true; }
     const pos = positions[idx];
-    const { setPositionInstruction } = await import("./core/state/index.js");
     setPositionInstruction(pos.position, note);
     await sendHTML(`✅ Note set for <b>${escapeHTML(pos.pair)}</b>:\n"<i>${escapeHTML(note)}</i>"`);
   } catch (e) {

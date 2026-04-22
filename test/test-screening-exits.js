@@ -126,6 +126,8 @@ function condensePool(p) {
 describe("getTopCandidates — exit filters", () => {
 
   beforeEach(() => {
+    if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+    if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
     _injectDiscovery(null);
     _injectPositionsCache(null);
     _resetPositionsCache();
