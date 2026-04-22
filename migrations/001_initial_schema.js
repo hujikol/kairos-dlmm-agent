@@ -521,7 +521,10 @@ export function migrate(db) {
     // Fresh DB — create all tables
     createAllTables(db);
   } else {
-    // Existing DB — run migrations only, don't recreate existing tables
+    // Existing DB — ensure all core tables exist (CREATE IF NOT EXISTS is idempotent)
+    // This catches DBs that pre-date the migration system or have partial schemas
+    createAllTables(db);
+    // Run migrations for schema changes that go beyond CREATE TABLE
     migrateExisting(db, tables);
   }
 }
