@@ -43,9 +43,9 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
       ]);
 
   const stateSummary = getStateSummary();
-  const lessons = getLessonsForPrompt({ agentType });
-  const perfSummary = getPerformanceSummary();
-  let systemPrompt = buildSystemPrompt(agentType, portfolio, positions, stateSummary, lessons, perfSummary);
+  const lessons = await getLessonsForPrompt({ agentType });
+  const perfSummary = await getPerformanceSummary();
+  let systemPrompt = await buildSystemPrompt(agentType, portfolio, positions, stateSummary, lessons, perfSummary);
   let goalText = goal;
 
   // Caveman compression — always on

@@ -269,7 +269,7 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
 
     if (input === "/evolve") {
       await runBusy(async () => {
-        const perf = getPerformanceSummary();
+        const perf = await getPerformanceSummary();
         if (!perf || perf.total_positions_closed < 5) {
           const needed = 5 - (perf?.total_positions_closed || 0);
           console.log(`\nNeed at least 5 closed positions to evolve. ${needed} more needed.\n`);

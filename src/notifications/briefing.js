@@ -2,7 +2,7 @@ import { getDB } from "../core/db.js";
 import { getPerformanceSummary } from "../core/lessons.js";
 
 export async function generateBriefing() {
-  const db = getDB();
+  const db = await getDB();
   const now = new Date();
   const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -18,7 +18,7 @@ export async function generateBriefing() {
   const totalFeesUsd = closedLast24h.reduce((sum, p) => sum + (p.fees_earned_usd || 0), 0);
 
   const openPositions = db.prepare('SELECT * FROM positions WHERE closed = 0').all();
-  const perfSummary = getPerformanceSummary();
+  const perfSummary = await getPerformanceSummary();
 
   const winRate24h = closedLast24h.length > 0
     ? Math.round((closedLast24h.filter(p => p.pnl_usd > 0).length / closedLast24h.length) * 100)

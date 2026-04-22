@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
 import { MIGRATIONS } from "../../migrations/index.js";
+import { createAllTables } from "../../migrations/001_initial_schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.KAIROS_DB_PATH
@@ -205,6 +206,10 @@ export function migrate(db) {
   const applied = new Set(
     _all("SELECT version FROM _schema_versions").map(r => r.version)
   );
+
+  // Ensure all core tables exist — catches DBs that pre-date the migration
+  // system or have partial schemas. CREATE TABLE IF NOT EXISTS is idempotent.
+  createAllTables(db);
 
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.id)) continue;

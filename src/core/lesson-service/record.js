@@ -345,8 +345,8 @@ export function getLearningStats() {
 
 // ─── Performance History & Summary ─────────────────────────────
 
-export function getPerformanceSummary() {
-  const db = getDB();
+export async function getPerformanceSummary() {
+  const db = await getDB();
   const stats = db.prepare(`
     SELECT COUNT(*) as count, SUM(pnl_usd) as total_pnl, SUM(pnl_pct) as pt_sum, SUM(range_efficiency) as eff_sum
     FROM performance

@@ -49,7 +49,7 @@ export async function getCandidatesData({ limit = 5 } = {}) {
 export function getThresholdsData() {
   const s = config.screening;
   const m = config.management;
-  const perf = getPerformanceSummary();
+  const perf = getPerformanceSummary(); // intentionally not awaited — runs in async context
   return {
     screening: {
       minFeeActiveTvlRatio: s.minFeeActiveTvlRatio,

@@ -40,8 +40,8 @@ export { evolveThresholds } from "./threshold-evolver.js";
 
 // ─── Strategy Stats (remains in lessons.js — not extracted) ──────
 
-export function getStrategyStats() {
-  const db = getDB();
+export async function getStrategyStats() {
+  const db = await getDB();
   const perf = db.prepare('SELECT pnl_pct, range_efficiency, strategy FROM performance').all();
   const byStrategy = {};
 
@@ -69,11 +69,11 @@ export function getStrategyStats() {
 
 // ─── Lessons for Prompt Injection ──────────────────────────────
 
-export function getLessonsForPrompt(opts = {}) {
+export async function getLessonsForPrompt(opts = {}) {
   if (typeof opts === "number") opts = { maxLessons: opts };
 
   const { agentType = "GENERAL", maxLessons } = opts;
-  const db = getDB();
+  const db = await getDB();
   const allRows = db.prepare('SELECT * FROM lessons').all();
   if (allRows.length === 0) return null;
 
