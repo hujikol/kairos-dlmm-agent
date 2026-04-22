@@ -126,7 +126,7 @@ Decision types: `deploy` | `close` | `skip` | `claim` | `learn`.
 
 | File | Purpose |
 |------|---------|
-| `react.js` | Core loop: MAX_REACT_DEPTH=6, MAX_TOOL_CALLS_PER_STEP=10, caveman compression, once-per-session tool blocking, rate-limit retry, 120s wall-clock timeout |
+| `react.js` | Core loop: MAX_REACT_DEPTH=10, MAX_TOOL_CALLS_PER_STEP=10, caveman compression, once-per-session tool blocking, rate-limit retry, 120s wall-clock timeout |
 | `intent.js` | 16 intent patterns → tool subsets for GENERAL role; DEFAULT_MODEL / FALLBACK_MODEL |
 | `fallback.js` | OpenAI client (OpenRouter/LM Studio), `callWithRetry` — 3 retries, falls back to FALLBACK_MODEL on 502/503/529 |
 | `tools.js` | `MANAGER_TOOLS`, `SCREENER_TOOLS`, `getToolsForRole()` — strict schema enforcement |

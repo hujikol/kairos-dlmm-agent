@@ -5,68 +5,29 @@ import { studyTopLPers } from "../integrations/lpagent.js";
 import { validateAndCoerce } from "../core/config-validator.js";
 import {
   addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword,
-  getPerformanceHistory, pinLesson, unpinLesson, listLessons,
-} from "../core/lessons.js";
+  pinLesson, unpinLesson, listLessons,
+} from "../core/lesson-repo.js";
+import { getPerformanceHistory } from "../core/lesson-service.js";
 import {
   addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy,
 } from "../core/strategy-library.js";
-import { config, USER_CONFIG_PATH } from "../config.js";
+import { config, USER_CONFIG_PATH, SECTION_MAP } from "../config.js";
 import { log } from "../core/logger.js";
 import { runManagementCycle } from "../core/cycles.js";
 
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }
 
-const CONFIG_MAP = {
-  minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
-  minTvl: ["screening", "minTvl"],
-  maxTvl: ["screening", "maxTvl"],
-  minVolume: ["screening", "minVolume"],
-  minOrganic: ["screening", "minOrganic"],
-  minHolders: ["screening", "minHolders"],
-  minMcap: ["screening", "minMcap"],
-  maxMcap: ["screening", "maxMcap"],
-  minBinStep: ["screening", "minBinStep"],
-  maxBinStep: ["screening", "maxBinStep"],
-  timeframe: ["screening", "timeframe"],
-  category: ["screening", "category"],
-  minTokenFeesSol: ["screening", "minTokenFeesSol"],
-  maxBundlePct:     ["screening", "maxBundlePct"],
-  maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
-  maxTop10Pct: ["screening", "maxTop10Pct"],
-  minTokenAgeHours: ["screening", "minTokenAgeHours"],
-  maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
-  athFilterPct:     ["screening", "athFilterPct"],
-  minFeePerTvl24h: ["management", "minFeePerTvl24h"],
-  minClaimAmount: ["management", "minClaimAmount"],
-  autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
-  autoSwapAfterClose: ["management", "autoSwapAfterClose"],
-  outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
-  outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
-  minVolumeToRebalance: ["management", "minVolumeToRebalance"],
-  stopLossPct: ["management", "stopLossPct"],
-  takeProfitFeePct: ["management", "takeProfitFeePct"],
-  trailingTakeProfit: ["management", "trailingTakeProfit"],
-  trailingTriggerPct: ["management", "trailingTriggerPct"],
-  trailingDropPct: ["management", "trailingDropPct"],
-  solMode: ["management", "solMode"],
-  minSolToOpen: ["management", "minSolToOpen"],
-  baseDeployAmount: ["management", "baseDeployAmount"],
-  gasReserve: ["management", "gasReserve"],
-  maxDeployAmount: ["management", "maxDeployAmount"],
-  lossStreakEnabled: ["management", "lossStreakEnabled"],
-  lossStreakThreshold: ["management", "lossStreakThreshold"],
-  lossStreakMinPnlPct: ["management", "lossStreakMinPnlPct"],
-  lossStreakMinPositionAgeCycles: ["management", "lossStreakMinPositionAgeCycles"],
-  maxPositions: ["risk", "maxPositions"],
-  managementIntervalMin: ["schedule", "managementIntervalMin"],
-  screeningIntervalMin: ["schedule", "screeningIntervalMin"],
-  managementModel: ["llm", "managementModel"],
-  screeningModel: ["llm", "screeningModel"],
-  generalModel: ["llm", "generalModel"],
-  binsBelow: ["strategy", "binsBelow"],
-  cavemanEnabled: ["cavemanEnabled", null], // root-level key — special-cased below
-};
+// Derive CONFIG_MAP by inverting SECTION_MAP at module load time.
+// Each key maps to [section, field] where field is the key itself.
+// cavemanEnabled is a root-level key — special-cased below.
+const CONFIG_MAP = {};
+for (const [section, keys] of Object.entries(SECTION_MAP)) {
+  for (const key of keys) {
+    CONFIG_MAP[key] = [section, key];
+  }
+}
+CONFIG_MAP.cavemanEnabled = ["cavemanEnabled", null];
 
 export function registerAdmin(registerTool) {
   registerTool("run_management_cycle", async () => {

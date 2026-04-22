@@ -1,6 +1,9 @@
 /**
  * LLM client and model fallback chain.
  * Supports OpenRouter (default) or any OpenAI-compatible local server (e.g. LM Studio).
+ *
+ * NOTE: This module uses its own LLM-specific retry with model fallback (callWithRetry).
+ * The shared retry utility is in src/core/retry.js — prefer that for non-LLM retry use cases.
  */
 
 import OpenAI from "openai";

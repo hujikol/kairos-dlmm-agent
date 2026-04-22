@@ -98,7 +98,7 @@ export async function runStartupFetch() {
     console.log(`Top pools (${total_eligible} eligible from ${total_screened} screened):\n`);
     console.log(formatCandidates(candidates));
   } catch (_e) {
-    try { (await import("./instrument.js")).captureError(_e, { phase: "startup" }).catch(_err => log("warn", "startup", `Sentry capture failed: ${_err?.message || _err}`)); } catch {}
+    try { (await import("./instrument.js")).captureError(_e, { phase: "startup" }).catch(_err => log("warn", "startup", `Sentry capture failed: ${_err?.message || _err}`)); } catch (_err2) { log("warn", "startup", `startup fetch failed: ${_err2?.message || _err2}`); }
     console.error(`Startup fetch failed: ${_e.message}`);
   } finally {
     _telegramBusy._count--;

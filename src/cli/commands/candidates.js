@@ -1,4 +1,5 @@
 import { out, COMMAND_DEFAULTS } from "../utils.js";
+import { CANDIDATES_RATE_LIMIT_DELAY_MS } from "../../core/constants.js";
 import { getTopCandidates } from "../../screening/discovery.js";
 import { getActiveBin } from "../../integrations/meteora.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "../../integrations/jupiter.js";
@@ -54,7 +55,7 @@ export async function candidatesCmd(argv, flags) {
       narrative: narrative.status === "fulfilled" ? narrative.value?.narrative : null,
       pool_memory: recallForPool(pool.pool) || null,
     });
-    await new Promise(r => setTimeout(r, 150)); // avoid 429s
+    await new Promise(r => setTimeout(r, CANDIDATES_RATE_LIMIT_DELAY_MS)); // avoid 429s
   }
 
   out({ candidates: enriched, total_screened: raw.total_screened });

@@ -59,7 +59,8 @@ const SCHEMA = {
   screeningModel:        { type: "string", nullable: true },
   generalModel:          { type: "string", nullable: true },
   // ─── Strategy ────────────────────────────
-  binsBelow:              { type: "number", min: 1,                 coerce: true },
+  binsBelow:              { type: "number", min: 1,    max: 1400,    coerce: true },
+  binsAbove:             { type: "number", min: 0,    max: 1400,    coerce: true },
   // ─── Behavior ─────────────────────────────
   cavemanEnabled:         { type: "boolean" },
 };

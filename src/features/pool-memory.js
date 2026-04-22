@@ -11,6 +11,31 @@ import { getDB, runTransaction } from "../core/db.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
 
+// ─── Shared helpers ──────────────────────────────────────────────
+
+/**
+ * Ensures a pool_memory row exists for the given address.
+ * If not present, inserts a default row with empty aggregates and an empty notes array.
+ * Returns the existing or newly-inserted row.
+ */
+function ensurePoolMemoryExists(poolAddress, name) {
+  const db = getDB();
+  let row = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+  if (!row) {
+    db.prepare(`
+      INSERT INTO pool_memory (
+        pool_address, name, base_mint, total_deploys, avg_pnl_pct, win_rate,
+        last_deployed_at, last_outcome, notes, cooldown_until
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      poolAddress, name || addrShort(poolAddress), null,
+      0, 0, 0, null, null, '[]', null
+    );
+    row = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+  }
+  return row;
+}
+
 // ─── Write ─────────────────────────────────────────────────────
 
 /**
@@ -23,17 +48,14 @@ export function recordPoolDeploy(poolAddress, deployData) {
 
   runTransaction(() => {
     // 1. Ensure pool_memory exists
-    const existing = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
-    if (!existing) {
-      db.prepare(`
-        INSERT INTO pool_memory (
-          pool_address, name, base_mint, total_deploys, avg_pnl_pct, win_rate,
-          last_deployed_at, last_outcome, notes, cooldown_until
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        poolAddress, deployData.pool_name || addrShort(poolAddress), deployData.base_mint || null,
-        0, 0, 0, null, null, '[]', null
-      );
+    const name = deployData.pool_name || addrShort(poolAddress);
+    const inputBaseMint = deployData.base_mint || null;
+    ensurePoolMemoryExists(poolAddress, name);
+    if (inputBaseMint) {
+      const cur = db.prepare('SELECT base_mint FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+      if (cur && !cur.base_mint) {
+        db.prepare('UPDATE pool_memory SET base_mint = ? WHERE pool_address = ?').run(inputBaseMint, poolAddress);
+      }
     }
 
     // 2. Insert the deploy
@@ -99,8 +121,8 @@ export function recordPoolDeploy(poolAddress, deployData) {
       cooldownUntil = new Date(Date.now() + cooldownHours * 60 * 60 * 1000).toISOString();
     }
 
-    let baseMint = poolState.base_mint;
-    if (deployData.base_mint && !baseMint) baseMint = deployData.base_mint;
+    let finalBaseMint = poolState.base_mint;
+    if (inputBaseMint && !finalBaseMint) finalBaseMint = inputBaseMint;
 
     db.prepare(`
       UPDATE pool_memory SET
@@ -108,7 +130,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
         last_deployed_at = ?, last_outcome = ?, notes = ?, cooldown_until = ?
       WHERE pool_address = ?
     `).run(
-      baseMint, totalDeploys, avgPnl, winRate, closed_at, lastOutcome,
+      finalBaseMint, totalDeploys, avgPnl, winRate, closed_at, lastOutcome,
       JSON.stringify(notes), cooldownUntil, poolAddress
     );
 
@@ -182,7 +204,7 @@ export function getPoolMemory({ pool_address }) {
     last_deployed_at: entry.last_deployed_at,
     last_outcome: entry.last_outcome,
     notes,
-    history: history.reverse(), // chronologically ordered (oldest first among the 10)
+    history: [...history].reverse(), // chronologically ordered (oldest first among the 10)
   };
 }
 
@@ -196,18 +218,7 @@ export function recordPositionSnapshot(poolAddress, snapshot) {
 
   runTransaction(() => {
     // 1. Ensure pool_memory exists
-    const existing = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
-    if (!existing) {
-      db.prepare(`
-        INSERT INTO pool_memory (
-          pool_address, name, base_mint, total_deploys, avg_pnl_pct, win_rate,
-          last_deployed_at, last_outcome, notes, cooldown_until
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        poolAddress, snapshot.pair || addrShort(poolAddress), null,
-        0, 0, 0, null, null, '[]', null
-      );
-    }
+    ensurePoolMemoryExists(poolAddress, snapshot.pair || addrShort(poolAddress));
 
     db.prepare(`
       INSERT INTO pool_snapshots (
@@ -280,18 +291,7 @@ export function addPoolNote({ pool_address, note }) {
   const db = getDB();
 
   runTransaction(() => {
-    let entry = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(pool_address);
-    if (!entry) {
-      db.prepare(`
-        INSERT INTO pool_memory (
-          pool_address, name, base_mint, total_deploys, avg_pnl_pct, win_rate,
-          last_deployed_at, last_outcome, notes, cooldown_until
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        pool_address, addrShort(pool_address), null, 0, 0, 0, null, null, '[]', null
-      );
-      entry = { notes: '[]' };
-    }
+    const entry = ensurePoolMemoryExists(pool_address, addrShort(pool_address));
 
     let notes = [];
     try { notes = JSON.parse(entry.notes || '[]'); } catch (e) { log("warn", "pool-memory", `Failed to parse entry notes: ${e?.message}`); notes = []; }

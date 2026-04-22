@@ -14,9 +14,11 @@
  */
 
 import crypto from "crypto";
+import fs from "fs";
 import { getDB, runTransaction } from "../db.js";
 import { log } from "../logger.js";
 import { MIN_EVOLVE_POSITIONS } from "../threshold-evolver.js";
+import { USER_CONFIG_PATH } from "../../config.js";
 
 export const PERFORMANCE_ARCHIVE_THRESHOLD = 200;
 export const PERFORMANCE_KEEP = 100;
@@ -32,10 +34,14 @@ export const NEAR_MISS_MAX_DAYS = 90;
 export async function recordPerformance(perf) {
   const db = await getDB();
 
+  // Sanitize: SQLite cannot bind undefined — convert to null
+  const sani = (v) => (v === undefined ? null : v);
+  const num  = (v) => (v == null || !Number.isFinite(v) ? null : Number(v));
+
   const isDataCorrupt =
-    (Number.isFinite(perf.final_value_usd) && perf.final_value_usd <= 0) ||
-    (Number.isFinite(perf.initial_value_usd) && perf.initial_value_usd <= 0) ||
-    (Number.isFinite(perf.final_value_usd) && Number.isFinite(perf.initial_value_usd)
+    (num(perf.final_value_usd) !== null && perf.final_value_usd <= 0) ||
+    (num(perf.initial_value_usd) !== null && perf.initial_value_usd <= 0) ||
+    (num(perf.final_value_usd) !== null && num(perf.initial_value_usd) !== null
       && perf.final_value_usd > perf.initial_value_usd * 100);
 
   if (isDataCorrupt) {
@@ -43,19 +49,40 @@ export async function recordPerformance(perf) {
     return;
   }
 
-  const pnl_usd = (perf.final_value_usd + perf.fees_earned_usd) - perf.initial_value_usd;
-  const pnl_pct = perf.initial_value_usd > 0
-    ? (pnl_usd / perf.initial_value_usd) * 100
-    : 0;
-  const range_efficiency = perf.minutes_held > 0
-    ? Math.min(100, (perf.minutes_in_range / perf.minutes_held) * 100)
-    : 0;
+  const iv = num(perf.initial_value_usd) ?? 0;
+  const fv = num(perf.final_value_usd) ?? 0;
+  const fe = num(perf.fees_earned_usd) ?? 0;
+  const mh = num(perf.minutes_held) ?? 0;
+  const mir = num(perf.minutes_in_range) ?? 0;
+
+  const pnl_usd = (fv + fe) - iv;
+  const pnl_pct = iv > 0 ? (pnl_usd / iv) * 100 : 0;
+  const range_efficiency = mh > 0 ? Math.min(100, (mir / mh) * 100) : 0;
 
   const entry = {
-    ...perf,
+    position: sani(perf.position),
+    pool: sani(perf.pool),
+    pool_name: sani(perf.pool_name),
+    strategy: sani(perf.strategy),
+    bin_range: perf.bin_range ?? null,
+    bin_step: num(perf.bin_step),
+    volatility: num(perf.volatility),
+    fee_tvl_ratio: num(perf.fee_tvl_ratio),
+    organic_score: num(perf.organic_score),
+    amount_sol: num(perf.amount_sol),
+    fees_earned_usd: fe,
+    final_value_usd: fv,
+    initial_value_usd: iv,
+    minutes_in_range: mir,
+    minutes_held: mh,
+    close_reason: sani(perf.close_reason),
     pnl_usd: Math.round(pnl_usd * 100) / 100,
     pnl_pct: Math.round(pnl_pct * 100) / 100,
     range_efficiency: Math.round(range_efficiency * 10) / 10,
+    signal_snapshot: perf.signal_snapshot ?? null,
+    base_mint: sani(perf.base_mint),
+    deployed_at: sani(perf.deployed_at),
+    closed_at: sani(perf.closed_at),
     recorded_at: new Date().toISOString(),
   };
 

@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 
 // ─── v1 → v2 migration ─────────────────────────────────────────────────────
-const SECTION_MAP = {
+export const SECTION_MAP = {
   screening: [
     "minFeeActiveTvlRatio", "minOrganic", "minHolders", "minMcap", "maxMcap",
     "minTvl", "maxTvl", "minVolume", "minBinStep", "maxBinStep", "timeframe",

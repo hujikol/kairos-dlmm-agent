@@ -11,15 +11,8 @@
 
 import { getDB } from "./db.js";
 import { ageWeight, ROLE_TAGS } from "./lesson-repo.js";
-import {
-  addLesson, pinLesson, unpinLesson, listLessons,
-  removeLesson, removeLessonsByKeyword, clearAllLessons, clearPerformance,
-  rateLesson, pinLessonById, unpinLessonById,
-  getRelevantLessons,
-} from "./lesson-repo.js";
 
-// Re-export lesson-repo (callers that import from lessons.js)
-export { addLesson, pinLesson, unpinLesson, listLessons, removeLesson, removeLessonsByKeyword, clearAllLessons, clearPerformance, rateLesson, pinLessonById, unpinLessonById, getRelevantLessons, ROLE_TAGS, ageWeight };
+// Canonical definition is in lesson-repo.js:158 — not re-exported here to avoid duplication.
 
 // Re-export from lesson-service
 export {

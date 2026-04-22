@@ -11,7 +11,7 @@ import { syncOpenPositions } from "./core/state/sync.js";
 import { log } from './core/logger.js';
 import { captureAlert } from './instrument.js';
 import { runManagementCycle } from './core/cycles.js';
-import { WATCHDOG_POLL_INTERVAL_MS } from './core/constants.js';
+import { WATCHDOG_POLL_INTERVAL_MS, SOFT_LOSS_TRIGGER_PCT } from './core/constants.js';
 
 // Track healer cycle state to prevent overlapping unscheduled runs
 let _healerRunning = false;
@@ -130,7 +130,7 @@ export async function startWatchdog(config) {
 
         // Soft warning — trigger unscheduled healer/management cycle
         // Atomic check-and-set to avoid TOCTOU race between concurrent iterations
-        if (live.pnl_pct != null && live.pnl_pct <= -4) {
+        if (live.pnl_pct != null && live.pnl_pct <= SOFT_LOSS_TRIGGER_PCT) {
           if (_healerRunning) {
             log("debug", "watchdog", `Soft loss detected but healer already running — skipping for ${pos.pool_name}`);
           } else {

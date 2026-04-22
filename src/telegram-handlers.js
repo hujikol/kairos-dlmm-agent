@@ -1,13 +1,8 @@
 import { log } from "./core/logger.js";
 import { closePosition } from "./integrations/meteora.js";
 import { escapeHTMLLocal as escapeHTML } from "./core/cycles.js";
-import {
-  getLearningStats,
-  pinLesson,
-  unpinLesson,
-  rateLesson,
-  listLessons,
-} from "./core/lessons.js";
+import { pinLesson, unpinLesson, rateLesson, listLessons } from "./core/lesson-repo.js";
+import { getLearningStats } from "./core/lesson-service/record.js";
 import { config } from "./config.js";
 import { agentLoop } from "./agent/index.js";
 import { stripThink } from "./tools/caveman.js";

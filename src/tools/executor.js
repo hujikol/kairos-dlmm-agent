@@ -90,6 +90,9 @@ export async function executeTool(name, args) {
       log("warn", "safety_block", `${name} blocked: ${safetyCheck.reason}`);
       return { blocked: true, reason: safetyCheck.reason };
     }
+    if (safetyCheck.sanitizedArgs) {
+      args = safetyCheck.sanitizedArgs;
+    }
   }
 
   // ─── Execute (cached for read-only tools) ─────────────────────
@@ -186,12 +189,15 @@ async function runSafetyChecks(name, args) {
 
       // bid_ask is one-sided — bins_above must be 0 and amount_x must be 0
       const effectiveStrategy = args.strategy || config.strategy.strategy;
+      let sanitizedArgs = null;
       if (effectiveStrategy === "bid_ask") {
         if (args.bins_above != null && args.bins_above > 0) {
           return { pass: false, reason: `bid_ask strategy is one-sided — bins_above must be 0, got ${args.bins_above}.` };
         }
         // Token-only deploys can have amount_x > 0 (user explicitly requested token-side)
-        if (!isTokenOnly) args.amount_x = 0;
+        if (!isTokenOnly) {
+          sanitizedArgs = { ...args, amount_x: 0 };
+        }
       }
 
       // ─── Conviction Sizing Matrix ──────────────────────────────
@@ -205,8 +211,10 @@ async function runSafetyChecks(name, args) {
           return { pass: false, reason: sizingResult.error };
         }
         const amountY = sizingResult.amount;
-        args.amount_y = amountY;
-        if (args.amount_sol) args.amount_sol = amountY;
+        const updated = (sanitizedArgs != null ? sanitizedArgs : { ...args });
+        updated.amount_y = amountY;
+        if (args.amount_sol) updated.amount_sol = amountY;
+        sanitizedArgs = updated;
         log("info", "conviction_sizing", `Conviction: ${conviction} | Positions: ${positions.total_positions} | Deploy: ${amountY} SOL (wallet: ${balance.sol.toFixed(2)} SOL)`);
 
         const gasReserve = config.management.gasReserve;
@@ -216,7 +224,7 @@ async function runSafetyChecks(name, args) {
         }
       }
 
-      return { pass: true };
+      return { pass: true, sanitizedArgs };
     }
     default:
       return { pass: true };
