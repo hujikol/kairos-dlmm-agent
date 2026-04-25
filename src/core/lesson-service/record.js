@@ -159,7 +159,10 @@ export async function recordPerformance(perf) {
 
   // Push to Hive Mind — individual lesson + performance event
   const { pushHiveLesson, pushHivePerformanceEvent } = await import("../../features/hive-mind.js");
-  pushHiveLesson(lesson).catch(e => log("warn", "hivemind", `pushHiveLesson failed: ${e?.message}`));
+  // lesson is null for neutral outcomes — guard to prevent "lesson is not defined" errors
+  if (lesson) {
+    pushHiveLesson(lesson).catch(e => log("warn", "hivemind", `pushHiveLesson failed: ${e?.message}`));
+  }
   pushHivePerformanceEvent(entry).catch(e => log("warn", "hivemind", `pushHivePerformanceEvent failed: ${e?.message}`));
 
   // Record decision log entry for the close
