@@ -34,8 +34,20 @@ import { escapeHTMLLocal } from "./cycle-helpers.js";
 /**
  * Format a clean Telegram notification from screening results.
  * Shows candidates, hard-filter pass/fail, and the final decision.
+ * Overrides DEPLOYED text when toolFailed === "deploy_position" to prevent
+ * hallucinated success notifications from propagating to Telegram.
  */
-function formatScreeningNotification(screenReport, passing, activeBinResults, simulations, deployAmount) {
+function formatScreeningNotification(screenReport, passing, activeBinResults, simulations, deployAmount, toolFailed = null, partialResult = null) {
+  // Override hallucinated DEPLOYED text when deploy_position actually failed on-chain
+  let report = screenReport;
+  if (toolFailed === "deploy_position" && partialResult?.result) {
+    const r = partialResult.result;
+    const poolName = r.pool_name || r.pool || "unknown";
+    const errorMsg = r.error || "unknown";
+    log("warn", "screening", `deploy_position returned success=false — overriding notification: ${errorMsg}`);
+    report = `*Decision:* NO DEPLOY\n*analysis:* Deploy to ${poolName} failed on-chain. Error: ${errorMsg}. No position was opened.\n*rejected:* deploy tool returned { success: false, error: ${errorMsg}}`;
+  }
+
   const lines = [];
   lines.push("🔍 <b>Screening Results</b>");
 
@@ -48,7 +60,7 @@ function formatScreeningNotification(screenReport, passing, activeBinResults, si
     const rsiMatch = indicators?.match(/RSI=(\d+)/);
     const rsiStr = rsiMatch ? ` RSI=${rsiMatch[1]}` : "";
 
-    const decisionMatch = screenReport.match(/\*Decision:\*\s*(\S+)/);
+    const decisionMatch = report.match(/\*Decision:\*\s*(\S+)/);
     const decision = decisionMatch ? decisionMatch[1] : null;
     const emoji = decision === "NO" ? "➖" : sim.passes ? "✅" : "⚠️";
     lines.push(`${emoji} <code>${pool.name}</code> | fee_tvl=${pool.fee_active_tvl_ratio} | vol=$${pool.volume_window} | tvl=$${pool.active_tvl} | mcap=$${pool.mcap} | organic=${pool.organic_score}${rsiStr} | score=${score.score}/${score.max} (${score.label}) | sim: passes=${sim.passes ? "YES" : "NO"} (risk=${sim.risk_score}, conf=${sim.confidence})${activeBin != null ? ` | bin=${activeBin}` : ""}`);
@@ -58,12 +70,12 @@ function formatScreeningNotification(screenReport, passing, activeBinResults, si
   lines.push(`\n💰 Deploy amount: ${deployAmount} SOL`);
 
   // ── Decision block ───────────────────────────────────────────────────
-  if (/DEPLOYED/i.test(screenReport)) {
-    const poolMatch = screenReport.match(/\*pool:\*\s*([^\s*]+)\s*\|?\s*([^\n*]+)/);
-    const amountMatch = screenReport.match(/\*amount:\*\s*([^\n*]+)/);
-    const stratMatch = screenReport.match(/strategy[*=]([^\s\n*]+)/);
-    const simMatch = screenReport.match(/sim:\s*[^\n]+\|?\s*(risk=\d+\/100)?\s*[,]?\s*(confidence=\d+\/100)?/);
-    const reasonMatch = screenReport.match(/\*reason:\*\s*([^\n]+)/);
+  if (/DEPLOYED/i.test(report)) {
+    const poolMatch = report.match(/\*pool:\*\s*([^\s*]+)\s*\|?\s*([^\n*]+)/);
+    const amountMatch = report.match(/\*amount:\*\s*([^\n*]+)/);
+    const stratMatch = report.match(/strategy[*=]([^\s\n*]+)/);
+    const simMatch = report.match(/sim:\s*[^\n]+\|?\s*(risk=\d+\/100)?\s*[,]?\s*(confidence=\d+\/100)?/);
+    const reasonMatch = report.match(/\*reason:\*\s*([^\n]+)/);
 
     lines.push(`\n✅ <b>DEPLOYED</b>`);
     if (poolMatch) lines.push(`Pool: ${escapeHTMLLocal(poolMatch[1].trim())} | ${escapeHTMLLocal(poolMatch[2].trim())}`);
@@ -77,8 +89,8 @@ function formatScreeningNotification(screenReport, passing, activeBinResults, si
     }
     if (reasonMatch) lines.push(`Why: ${escapeHTMLLocal(reasonMatch[1].trim())}`);
   } else {
-    const analysisMatch = screenReport.match(/\*analysis:\*\s*([^\n]+(?:\n[^\n]+)?)/);
-    const rejectedMatch = screenReport.match(/\*rejected:\*\s*([^\n]+)/);
+    const analysisMatch = report.match(/\*analysis:\*\s*([^\n]+(?:\n[^\n]+)?)/);
+    const rejectedMatch = report.match(/\*rejected:\*\s*([^\n]+)/);
     lines.push(`\n➖ <b>NO DEPLOY</b>`);
     if (analysisMatch) lines.push(`${escapeHTMLLocal(analysisMatch[1].trim())}`);
     if (rejectedMatch) lines.push(`Rejected: ${escapeHTMLLocal(rejectedMatch[1].trim())}`);
@@ -132,6 +144,8 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
   let activeBinResults = [];
   let simulations = [];
   let deployAmount = 0;
+  let toolFailed = null;
+  let partialResult = null;
 
   // Daily PnL circuit breaker
   const pnl = await getDailyPnL();
@@ -219,7 +233,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     const hiveLessonsBlock = getSharedLessonsForPrompt({ agentType: "SCREENER", maxLessons: 6 });
 
     // ── Call LLM via agentGateway ─────────────────────────────────────
-    const { content, partialResult, toolFailed } = await gateway.runScreeningCycle({
+    const gatewayResult = await gateway.runScreeningCycle({
       candidateBlocks,
       passingCount: passing.length,
       currentBalance,
@@ -232,6 +246,9 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       hiveLessonsBlock,
       screeningMode,
     });
+    const content = gatewayResult.content;
+    partialResult = gatewayResult.partialResult;
+    toolFailed = gatewayResult.toolFailed;
 
     // Override hallucinated DEPLOYED text with actual on-chain result.
     // If deploy_position was called but returned success=false, the LLM may have
@@ -250,8 +267,10 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
   } finally {
     _busyState._screeningBusy = false;
     if (!silent && telegramEnabled()) {
-      if (screenReport && /DEPLOYED/i.test(screenReport)) {
-        const html = formatScreeningNotification(screenReport, passing, activeBinResults, simulations, deployAmount);
+      // Send notification for both successful deploys AND failed deploy attempts
+      // (toolFailed check needed because failed deploys override screenReport to "NO DEPLOY")
+      if (screenReport && (/DEPLOYED/i.test(screenReport) || toolFailed === "deploy_position")) {
+        const html = formatScreeningNotification(screenReport, passing, activeBinResults, simulations, deployAmount, toolFailed, partialResult);
         sendHTML(html).catch(() => { });
       }
     }
