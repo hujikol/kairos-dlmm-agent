@@ -174,7 +174,7 @@ STEPS:
       effectiveModel,
       2048,
       { portfolio: preBalance, positions: prePositions }
-    );
+    ).then(({ content, partialResult, toolFailed }) => ({ content, partialResult, toolFailed }));
   }
 }
 

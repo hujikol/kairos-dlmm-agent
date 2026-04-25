@@ -175,8 +175,13 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
           const result = await executeTool(functionName, args);
 
           // Track meaningful on-chain results so MAX_REACT_DEPTH break still returns useful info.
+          // Capture BOTH success and failure — failed deploy/close is still meaningful signal
+          // for the caller to override the LLM's hallucinated text with the real result.
           const isMeaningfulClose = functionName === "close_position" && result?.already_closed === true;
           if (result?.success === true || isMeaningfulClose) {
+            lastMeaningfulResult = { functionName, result };
+          } else if (functionName === "deploy_position" || functionName === "close_position") {
+            // Track failed write ops so caller can detect LLM hallucination
             lastMeaningfulResult = { functionName, result };
           }
 
@@ -239,15 +244,21 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
   }
 
   log("info", "agent", "Max steps reached without final answer");
-  // Prioritize meaningful on-chain results over generic timeout message
+  // Return meaningful on-chain results even if LLM text output doesn't match reality.
+  // For write ops (deploy/close), the tool result overrides whatever the LLM reported in text.
   if (lastMeaningfulResult) {
     const { functionName, result } = lastMeaningfulResult;
-    log("info", "agent", `Returning partial result: ${functionName} succeeded (${JSON.stringify(result).slice(0, 100)})`);
+    const isWriteOp = functionName === "deploy_position" || functionName === "close_position";
+    const failedWriteOp = isWriteOp && result?.success === false;
+    log("info", "agent", `${failedWriteOp ? "WRITE OP FAILED" : "Returning partial result"}: ${functionName} → ${JSON.stringify(result).slice(0, 150)}`);
     return {
-      content: `${functionName} completed successfully. Result: ${JSON.stringify(result, null, 2)}`,
+      // On failed write ops, return a placeholder text that the caller should replace
+      // with actual result content — prevents hallucinated DEPLOYED text from propagating
+      content: failedWriteOp ? "[tool-failed-see-partial-result]" : content,
       userMessage: goal,
       partialResult: lastMeaningfulResult,
+      toolFailed: failedWriteOp ? functionName : null,
     };
   }
-  return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
+  return { content, userMessage: goal };
 }
