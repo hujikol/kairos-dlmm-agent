@@ -13,9 +13,10 @@ import { getDB } from "../db.js";
 import { log } from "../logger.js";
 import { markOutOfRange, markInRange } from "./oor.js";
 import { getTrackedPosition } from "./registry.js";
+import { checkBbExits as _checkBbExits } from "../bb-strategy.js";
 
 // ─── Volatility-adaptive constants ───────────────────────────────────────────
-// These multiply the base outOfRangeWaitMinutes from mgmtConfig.
+// These multiply the base outOfRangeWaitMinutes from config.management.
 
 /** Volatility >= 7: OOR wait multiplier (50%) */
 const OOR_WAIT_MULT_HIGH     = 0.5;
@@ -25,7 +26,7 @@ const OOR_WAIT_MULT_MEDIUM   = 0.75;
 const TRAILING_DROP_MULT_HIGH = 1.5;
 
 /**
- * Check all exit conditions for a position (trailing TP, stop loss, OOR, low yield).
+ * Check all exit conditions for a position (trailing TP, stop loss, OOR, low yield, BB).
  * Updates peak_pnl_pct, trailing_active, prev_pnl_pct in the SQLite registry.
  * OOR state is updated via markOutOfRange / markInRange (single source of truth).
  * @param {string} position_address - On-chain position address
@@ -34,10 +35,10 @@ const TRAILING_DROP_MULT_HIGH = 1.5;
  * @param {boolean} positionData.in_range - Whether position is currently in range
  * @param {number} [positionData.fee_per_tvl_24h] - 24h fee per TVL percentage
  * @param {number} [positionData.age_minutes] - Position age in minutes
- * @param {Object} mgmtConfig - Management config from config.js
- * @returns {Object|null} { action: "STOP_LOSS"|"TRAILING_TP"|"OUT_OF_RANGE"|"LOW_YIELD", reason: string } or null
+ * @param {Object} config - Management config from config.js (used for BB checks)
+ * @returns {Promise<Object|null>} { action: "STOP_LOSS"|"TRAILING_TP"|"OUT_OF_RANGE"|"LOW_YIELD"|"BB_EXIT", reason: string } or null
  */
-export function updatePnlAndCheckExits(position_address, positionData, mgmtConfig) {
+export async function updatePnlAndCheckExits(position_address, positionData, config) {
   const { pnl_pct: currentPnlPct, in_range, fee_per_tvl_24h } = positionData;
   const pos = getTrackedPosition(position_address);
 
@@ -61,7 +62,7 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   }
 
   // Activate trailing TP once trigger threshold is reached
-  if (mgmtConfig.trailingTakeProfit && !pos.trailing_active && currentPnlPct >= mgmtConfig.trailingTriggerPct) {
+  if (config.management.trailingTakeProfit && !pos.trailing_active && currentPnlPct >= config.management.trailingTriggerPct) {
     updates.trailing_active = 1;
     pos.trailing_active = true;
     changed = true;
@@ -96,20 +97,20 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   // ── Volatility-adaptive adjustments ─────────────────────────────────────
   const vol = pos.volatility ?? 3;
   const oorWait = vol >= 7
-    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * OOR_WAIT_MULT_HIGH)
+    ? Math.round(config.management.outOfRangeWaitMinutes * OOR_WAIT_MULT_HIGH)
     : vol >= 4
-    ? Math.round(mgmtConfig.outOfRangeWaitMinutes * OOR_WAIT_MULT_MEDIUM)
-    : mgmtConfig.outOfRangeWaitMinutes;
+    ? Math.round(config.management.outOfRangeWaitMinutes * OOR_WAIT_MULT_MEDIUM)
+    : config.management.outOfRangeWaitMinutes;
 
   const adaptiveTrailingDrop = vol >= 7
-    ? mgmtConfig.trailingDropPct * TRAILING_DROP_MULT_HIGH
-    : mgmtConfig.trailingDropPct;
+    ? config.management.trailingDropPct * TRAILING_DROP_MULT_HIGH
+    : config.management.trailingDropPct;
 
   // ── Stop loss ──────────────────────────────────────────────────────────────
-  if (currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
+  if (currentPnlPct != null && config.management.stopLossPct != null && currentPnlPct <= config.management.stopLossPct) {
     return {
       action: "STOP_LOSS",
-      reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${mgmtConfig.stopLossPct}%`,
+      reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${config.management.stopLossPct}%`,
     };
   }
 
@@ -130,23 +131,34 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     if (minutesOOR >= oorWait) {
       return {
         action: "OUT_OF_RANGE",
-        reason: `Out of range for ${minutesOOR}m (limit: ${oorWait}m${vol >= 4 ? ` [vol-adaptive from ${mgmtConfig.outOfRangeWaitMinutes}m]` : ""})`,
+        reason: `Out of range for ${minutesOOR}m (limit: ${oorWait}m${vol >= 4 ? ` [vol-adaptive from ${config.management.outOfRangeWaitMinutes}m]` : ""})`,
       };
     }
   }
 
   // ── Low yield (only after position has had time to accumulate fees) ──────────
   const { age_minutes } = positionData;
-  const minAgeForYieldCheck = mgmtConfig.minAgeBeforeYieldCheck ?? 60;
+  const minAgeForYieldCheck = config.management.minAgeBeforeYieldCheck ?? 60;
   if (
     fee_per_tvl_24h != null &&
-    mgmtConfig.minFeePerTvl24h != null &&
-    fee_per_tvl_24h < mgmtConfig.minFeePerTvl24h &&
+    config.management.minFeePerTvl24h != null &&
+    fee_per_tvl_24h < config.management.minFeePerTvl24h &&
     (age_minutes != null && age_minutes >= minAgeForYieldCheck)
   ) {
     return {
       action: "LOW_YIELD",
-      reason: `Low yield: fee/TVL ${fee_per_tvl_24h.toFixed(2)}% < min ${mgmtConfig.minFeePerTvl24h}% (age: ${age_minutes ?? "?"}m)`,
+      reason: `Low yield: fee/TVL ${fee_per_tvl_24h.toFixed(2)}% < min ${config.management.minFeePerTvl24h}% (age: ${age_minutes ?? "?"}m)`,
+    };
+  }
+
+  // ── BB exit (5th signal) ────────────────────────────────────────────────────
+  const bbExits = await checkBbExits([positionData], config.management);
+  const bbExit = bbExits.get(position_address);
+  if (bbExit) {
+    return {
+      action: "BB_EXIT",
+      reason: bbExit.reason,
+      details: { signal: bbExit.signal },
     };
   }
 

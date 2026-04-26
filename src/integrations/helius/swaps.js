@@ -11,6 +11,24 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ─── swapWithRollback ─────────────────────────────────────────────
+/**
+ * Executes a swap function and, if it succeeds, rolls back on downstream failure.
+ * Pattern: attempt swap → if swap succeeds but later step fails → call rollbackFn.
+ * @param {Function} swapFn - Async function that performs the swap
+ * @param {Function} rollbackFn - Async function that reverses the swap
+ */
+export async function swapWithRollback(swapFn, rollbackFn) {
+  let swapped = false;
+  try {
+    await swapFn();
+    swapped = true;
+  } catch (err) {
+    if (swapped) await rollbackFn();
+    throw err;
+  }
+}
+
 // ─── swapWithRetry ────────────────────────────────────────────────
 export async function swapWithRetry(swapFn, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

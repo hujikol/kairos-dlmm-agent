@@ -26,6 +26,8 @@ import {
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { METEORA_POSITIONS_CACHE_TTL_MS } from "../../core/constants.js";
+import { getMintBalance } from "../helius/balances.js";
+import { swapWithRetry, swapToken } from "../helius/swaps.js";
 
 // ─── Constants ───────────────────────────────────────────────────
 /** Default slippage in basis points (10 bps = 0.1%) */
@@ -109,6 +111,59 @@ export async function deployPosition({
   if (isPoolOnCooldown(pool_address)) {
     log("debug", "deploy", `Pool ${addrShort(pool_address)} is on cooldown (closed for low yield) — skipping`);
     return { success: false, error: "Pool on cooldown — was recently closed for low yield. Try a different pool." };
+  }
+
+  // ─── Dual-pool rebalance ─────────────────────────────────────────
+  if (config.management?.dualPool?.enabled && amount_x > 0 && amount_y > 0) {
+    const threshold = config.management.dualPool.imbalanceThreshold ?? 0.01;
+    const pool = await getPool(pool_address);
+    const tokenXMint = pool.lbPair.tokenXMint.toString();
+    const tokenYMint = pool.lbPair.tokenYMint.toString();
+
+    const balanceX = await getMintBalance(tokenXMint);
+    const balanceY = await getMintBalance(tokenYMint);
+
+    const totalX = balanceX + amount_x;
+    const totalY = balanceY + amount_y;
+    const currentRatio = totalX > 0 ? totalY / totalX : 0;
+    const targetRatio = amount_y / amount_x;
+    const imbalance = Math.abs(currentRatio - targetRatio) / targetRatio;
+
+    log("debug", "deploy", `Dual-pool: ratio=${currentRatio.toFixed(4)} vs target=${targetRatio.toFixed(4)}, imbalance=${(imbalance * 100).toFixed(2)}%`);
+
+    if (imbalance > threshold) {
+      // Swap whichever token is over-weighted to bring ratio back to target
+      const swapX = balanceX / totalX; // fraction of tokenX in portfolio
+      const swapY = balanceY / totalY; // fraction of tokenY in portfolio
+      let swapAmount, swapDirection;
+
+      if (swapX > swapY) {
+        // More X than target — sell X for Y
+        swapAmount = balanceX - (totalX * targetRatio / (1 + targetRatio));
+        swapDirection = { input_mint: tokenXMint, output_mint: tokenYMint };
+      } else {
+        // More Y than target — sell Y for X
+        swapAmount = balanceY - (totalY * 1 / (1 + targetRatio));
+        swapDirection = { input_mint: tokenYMint, output_mint: tokenXMint };
+      }
+
+      if (swapAmount > 0.0001) {
+        log("info", "deploy", `Dual-pool rebalance: swapping ${swapAmount.toFixed(4)} of ${swapDirection.input_mint} → ${swapDirection.output_mint}`);
+        try {
+          const swapResult = await swapWithRetry(
+            () => swapToken({ ...swapDirection, amount: swapAmount }),
+            config.management.dualPool.maxRetries ?? 3,
+          );
+          if (!swapResult.success && swapResult.error) {
+            log("error", "deploy", `Dual-pool rebalance swap failed: ${swapResult.error}`);
+            return { success: false, reason: "Dual-pool rebalance failed" };
+          }
+        } catch (err) {
+          log("error", "deploy", `Dual-pool swapWithRetry threw: ${err.message}`);
+          return { success: false, reason: "Dual-pool rebalance failed" };
+        }
+      }
+    }
   }
 
   if (isDryRun()) {

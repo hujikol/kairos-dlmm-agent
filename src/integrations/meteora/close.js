@@ -14,6 +14,8 @@ import { positionsCache, poolCache } from "../../core/cache-manager.js";
 import { retryWithFixedDelay } from "../../core/retry.js";
 import { claimAndSweepSol } from "../solana/close-accounts.js";
 import { isFlagEnabled } from "../../core/feature-flags.js";
+import { swapToken } from "../helius/swaps.js";
+import { swapWithRetry } from "../helius/swaps.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
 
@@ -480,6 +482,47 @@ export async function closePosition({ position_address, reason }) {
       if (sweepResult.success && sweepResult.amount > 0) {
         log("info", "close", `Auto-claimed ${sweepResult.amount} lamports SOL rent from ${position_address.slice(0, 8)}`);
         result.claimed_sol_rent = sweepResult.amount;
+      }
+    }
+
+    // ─── Zap-out: swap received tokens to SOL ──────────────────────
+    if (result.success && config.management?.zapOutToSol) {
+      const receivedTokens = [];
+      // Collect non-SOL tokens received (from close txs)
+      // We use the pool's tokenX/Y mints as the received tokens
+      const tokenXMint = pool.lbPair.tokenXMint.toString();
+      const tokenYMint = pool.lbPair.tokenYMint.toString();
+      const SOL_MINT = config.tokens.SOL;
+
+      for (const mint of [tokenXMint, tokenYMint]) {
+        if (mint === SOL_MINT) continue;
+        const balance = await (async () => {
+          try {
+            const connection = getConnection();
+            const walletPubKey = wallet.publicKey;
+            const accounts = await connection.getParsedTokenAccountsByOwner(walletPubKey, { mint: new PublicKey(mint) });
+            if (!accounts.value || accounts.value.length === 0) return 0;
+            return accounts.value.reduce((sum, acc) => sum + (acc.account.data.parsed.info.tokenAmount.uiAmount || 0), 0);
+          } catch { return 0; }
+        })();
+        if (balance > 0.0001) receivedTokens.push({ mint, balance });
+      }
+
+      const maxRetries = config.management.zapOutMaxRetries ?? 3;
+      for (const { mint, balance } of receivedTokens) {
+        try {
+          const swapResult = await swapWithRetry(
+            () => swapToken({ input_mint: mint, output_mint: SOL_MINT, amount: balance }),
+            maxRetries,
+          );
+          if (swapResult.success) {
+            log("info", "close", `Zap-out: swapped ${balance.toFixed(4)} ${addrShort(mint)} → SOL`);
+          } else {
+            log("warn", "close", `Zap-out swap failed for ${addrShort(mint)}: ${swapResult.error}`);
+          }
+        } catch (err) {
+          log("warn", "close", `Zap-out swapWithRetry threw for ${addrShort(mint)}: ${err.message} — continuing with close`);
+        }
       }
     }
 
