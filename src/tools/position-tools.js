@@ -211,4 +211,27 @@ Pass null or empty string to clear an existing instruction.`,
       }
     }
   },
+
+  {
+    type: "function",
+    function: {
+      name: "claim_position_rent",
+      description: `Sweep residual SOL (rent deposit refund) from a closed DLMM position account to the main wallet.
+Use this after a position has been closed to reclaim the lamports that were deposited
+when the position account was created. Most position accounts hold ~0.001 SOL (1000000 lamports)
+as a rent reserve.
+
+This is a no-op if the position account has already been reclaimed or has zero balance.`,
+      parameters: {
+        type: "object",
+        properties: {
+          position_address: {
+            type: "string",
+            description: "The closed position public key to reclaim SOL rent from"
+          }
+        },
+        required: ["position_address"]
+      }
+    }
+  },
 ];

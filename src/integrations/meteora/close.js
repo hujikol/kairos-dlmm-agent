@@ -12,6 +12,8 @@ import { fetchDlmmPnlForPool } from "./pnl.js";
 import { invalidatePositionsCache } from "./positions.js";
 import { positionsCache, poolCache } from "../../core/cache-manager.js";
 import { retryWithFixedDelay } from "../../core/retry.js";
+import { claimAndSweepSol } from "../solana/close-accounts.js";
+import { isFlagEnabled } from "../../core/feature-flags.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
 
@@ -471,6 +473,15 @@ export async function closePosition({ position_address, reason }) {
     const { result } = await closeVerifyAndRecord(
       ctx, { claimTxHashes, closeTxHashes }, reason,
     );
+
+    // Auto-claim SOL rent from closed position account
+    if (result.success && isFlagEnabled("auto_claim_sol_enabled")) {
+      const sweepResult = await claimAndSweepSol(position_address);
+      if (sweepResult.success && sweepResult.amount > 0) {
+        log("info", "close", `Auto-claimed ${sweepResult.amount} lamports SOL rent from ${position_address.slice(0, 8)}`);
+        result.claimed_sol_rent = sweepResult.amount;
+      }
+    }
 
     return result;
   } catch (error) {

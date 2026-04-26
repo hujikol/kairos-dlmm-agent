@@ -39,7 +39,7 @@ export {
 export { getLastBriefingDate, setLastBriefingDate } from "./registry.js";
 
 // oor
-export { markOutOfRange, markInRange, minutesOutOfRange } from "./oor.js";
+export { markOutOfRange, markInRange, minutesOutOfRange, minutesUntilOor } from "./oor.js";
 
 // events
 export { pushEvent, getRecentEvents } from "./events.js";
