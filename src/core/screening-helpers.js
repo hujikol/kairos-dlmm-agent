@@ -80,8 +80,12 @@ export function applyHardFilters(allCandidates, config, prePositions) {
 
 /**
  * Build compact text blocks for each candidate, for injection into the LLM prompt.
+ * @param {Array} passing - candidates with optional binSuggestion
+ * @param {Array} activeBinResults
+ * @param {Array} simulations
+ * @param {*} _ - unused (was binHint, kept for signature compatibility)
  */
-export function buildCandidateBlocks(passing, activeBinResults, simulations) {
+export function buildCandidateBlocks(passing, activeBinResults, simulations, _ = null) {
   return passing.map(({ pool, sw, n, ti, mem, phase, score, indicators }, i) => {
     const botPct = ti?.audit?.bot_holders_pct ?? "?";
     const top10Pct = ti?.audit?.top_holders_pct ?? "?";
@@ -125,6 +129,7 @@ export function buildCandidateBlocks(passing, activeBinResults, simulations) {
       n?.narrative ? `  narrative: ${n.narrative.slice(0, 500)}` : `  narrative: none`,
       mem ? `  memory: ${mem}` : null,
       indicators ? `${indicators}` : null,
+      passing[i]?.binSuggestion ? `  bin_suggestion: lower=${passing[i].binSuggestion.lowerBin}-${passing[i].binSuggestion.upperBin} (${passing[i].binSuggestion.totalBins} bins from ${passing[i].binSuggestion.sampleSize} winners)` : null,
     ].filter(Boolean).join("\n");
 
     return block;

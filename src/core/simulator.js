@@ -7,9 +7,22 @@ import {
   GAS_COST_PER_TX_SOL,
 } from "./constants.js";
 
-export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
+export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd, binHint) {
   if (!pool) throw new Error("simulatePoolDeploy: pool is required");
   const { volume_24h, fee_pct, active_tvl, volatility, age_hours } = pool;
+
+  // Apply bin hint to adjust IL estimate if provided
+  let ilMultiplier = 1;
+  if (binHint) {
+    const suggested = binHint.totalBins;
+    if (suggested > 0) {
+      // Normalize to a reasonable range — wider bins → less IL per unit
+      // A typical range is ~35 bins; scale il proportionally
+      const refBins = 35;
+      ilMultiplier = refBins / Math.max(suggested, 1);
+      log("debug", "simulator", `Bin hint applied: ${binHint.lower_bin}-${binHint.upper_bin} (${suggested} bins, il_multiplier=${ilMultiplier.toFixed(2)})`);
+    }
+  }
 
   // Expected daily fees: volume x fee_tier x your_liquidity_share
   const liquidityShare = (deployAmountSol * solPriceUsd) / (active_tvl || 1);
@@ -17,7 +30,7 @@ export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
 
   // IL risk model: based on volatility and bin range
   const ilRisk = volatility > VOL_BREAK_HIGH ? IL_RISK_HIGH : volatility > VOL_BREAK_MED ? IL_RISK_MED : IL_RISK_LOW;
-  const expectedIL = deployAmountSol * solPriceUsd * ilRisk;
+  const expectedIL = deployAmountSol * solPriceUsd * ilRisk * ilMultiplier;
 
   // Gas cost estimate
   const gasCost = GAS_COST_PER_TX_SOL * solPriceUsd;

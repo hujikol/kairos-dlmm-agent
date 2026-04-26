@@ -28,6 +28,8 @@ import {
 } from "./management-helpers.js";
 import { SCREENING_COOLDOWN_MS } from "./constants.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
+import { checkBbExits } from "./bb-strategy.js";
+import { persistBbState } from "./state/registry.js";
 
 export async function runManagementCycle({ silent = false, gateway = agentGateway } = {}) {
   const cycleStart = Date.now();
@@ -97,6 +99,12 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       } else {
         resetStreak(p.position);
       }
+    }
+
+    // ── BB exit check ─────────────────────────────────────────────
+    const bbExits = await checkBbExits(positionData, config.management);
+    for (const [addr, exit] of bbExits) {
+      exitMap.set(addr, exit);
     }
 
     // ── Deterministic rule engine ─────────────────────────────────────
@@ -269,6 +277,13 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (report sent)`);
     } else {
       log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (silent or telegram disabled)`);
+    }
+
+    // Persist BB state for positions that have bb_params
+    for (const p of positionData) {
+      if (p?.position && p?.signal_snapshot?.bb_params) {
+        persistBbState(p.position, p.signal_snapshot);
+      }
     }
   }
   return mgmtReport;

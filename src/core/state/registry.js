@@ -40,6 +40,25 @@ export function appendNote(position_address, note, db) {
   updatePosition(position_address, { notes: JSON.stringify(notes) }, db);
 }
 
+/**
+ * Persist BB state to a position's signal_snapshot column.
+ * Called at the end of each management cycle for positions with bb_params.
+ * @param {string} position_address - On-chain position address
+ * @param {Object} bbState - BB state to persist (e.g. { bb_params, current_bb, last_signal })
+ */
+export function persistBbState(position_address, bbState) {
+  if (!position_address || !bbState) return;
+  const db = getDB();
+  const pos = db.prepare("SELECT signal_snapshot FROM positions WHERE position = ?").get(position_address);
+  if (!pos) return;
+
+  let existing = null;
+  try { existing = JSON.parse(pos.signal_snapshot || "null"); } catch { existing = null; }
+
+  const updated = existing ? { ...existing, ...bbState } : bbState;
+  updatePosition(position_address, { signal_snapshot: JSON.stringify(updated) });
+}
+
 function rowToPos(row) {
   return {
     ...row,
@@ -111,6 +130,18 @@ export function trackPosition({
 }) {
   const db = getDB();
 
+  // Extract bb_params for bollinger_band strategy — persist in signal_snapshot
+  let finalSignalSnapshot = signal_snapshot;
+  if (strategy === "bollinger_band" && !signal_snapshot) {
+    finalSignalSnapshot = {
+      bb_params: {
+        period: 20,
+        stdDev: 2.0,
+        position_side: amount_x > 0 && amount_sol === 0 ? "long" : "short",
+      },
+    };
+  }
+
   runTransaction(() => {
     db.prepare(`
       INSERT OR REPLACE INTO positions (
@@ -125,7 +156,7 @@ export function trackPosition({
     `).run(
       position, pool, pool_name, strategy, JSON.stringify(bin_range), amount_sol, amount_x,
       active_bin, bin_step, volatility, fee_tvl_ratio,
-      organic_score, initial_value_usd, JSON.stringify(signal_snapshot || null), base_mint, new Date().toISOString(),
+      organic_score, initial_value_usd, JSON.stringify(finalSignalSnapshot || null), base_mint, new Date().toISOString(),
       null, null, 0, 0,
       0, null, "[]", 0, null, 0, null, "pending", market_phase, strategy_id,
     );

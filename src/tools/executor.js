@@ -149,6 +149,7 @@ async function runSafetyChecks(name, args) {
       const { config } = await import("../config.js");
       const { getMyPositions } = await import("../integrations/meteora.js");
       const { getWalletBalances, getBalanceCacheAgeMs, getCachedBalance } = await import("../integrations/helius.js");
+      const { getBinSuggestion } = await import("../features/pool-memory.js");
 
       const minStep = config.screening.minBinStep;
       const maxStep = config.screening.maxBinStep;
@@ -221,6 +222,20 @@ async function runSafetyChecks(name, args) {
         const minRequired = amountY + gasReserve;
         if (balance.sol < minRequired) {
           return { pass: false, reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).` };
+        }
+      }
+
+      // ─── Bin deviation warning ─────────────────────────────────
+      // Warn if the LLM's chosen bin range is >2x wider than the historical winner median.
+      // This fires before deploy so the operator sees the warning in logs.
+      const binSuggestion = getBinSuggestion(args.pool_address);
+      if (binSuggestion && binSuggestion.totalBins > 0) {
+        const chosenBins = args.total_bins;
+        if (chosenBins != null && chosenBins > 0) {
+          const ratio = chosenBins / binSuggestion.totalBins;
+          if (ratio > 2) {
+            log("warn", "safety_block", `Bin range deviation: LLM chose ${chosenBins} bins vs ${binSuggestion.totalBins} median from ${binSuggestion.sampleSize} winners (${ratio.toFixed(1)}x wider). Consider tightening the range.`);
+          }
         }
       }
 

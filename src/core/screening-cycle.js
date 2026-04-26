@@ -32,6 +32,7 @@ import { defaultGateway as agentGateway } from "./agent-gateway.js";
 import { getSharedLessonsForPrompt } from "../features/hive-mind.js";
 import { recordDecision } from "./decision-log.js";
 import { escapeHTMLLocal } from "./cycle-helpers.js";
+import { getBinSuggestion } from "../features/pool-memory.js";
 
 /**
  * Format a clean Telegram notification from screening results.
@@ -245,11 +246,23 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? "config-default"} | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}\n${phaseBlock}`
       : `No active strategy — use default bid_ask, bins_above: ${config.strategy.binsAbove} (from config), SOL only.\n${phaseBlock}`;
 
-    // Run simulator for all passing candidates
-    simulations = passing.map(({ pool }) => simulatePoolDeploy(pool, deployAmount, preBalance.usd ?? 0));
+    // Inject bin suggestions from historical winners before simulation
+    for (const c of passing) {
+      const poolAddress = c.pool.pool;
+      const binSuggestion = getBinSuggestion(poolAddress);
+      if (binSuggestion) {
+        log("info", "screening", `Bin suggestion for ${poolAddress}: ${binSuggestion.lower_bin}-${binSuggestion.upper_bin} (${binSuggestion.totalBins} bins, ${binSuggestion.sampleSize} deploys)`);
+        c.binSuggestion = binSuggestion;
+      }
+    }
+
+    // Run simulator for all passing candidates (with bin hint for IL adjustment)
+    simulations = passing.map(({ pool, binSuggestion }) =>
+      simulatePoolDeploy(pool, deployAmount, preBalance.usd ?? 0, binSuggestion ?? null)
+    );
 
     // Build compact candidate blocks
-    const candidateBlocks = buildCandidateBlocks(passing, activeBinResults, simulations);
+    const candidateBlocks = buildCandidateBlocks(passing, activeBinResults, simulations, null);
 
     // ── Hive Mind lessons for prompt injection ─────────────────────────
     const hiveLessonsBlock = getSharedLessonsForPrompt({ agentType: "SCREENER", maxLessons: 6 });
