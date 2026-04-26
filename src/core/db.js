@@ -54,13 +54,16 @@ export function getDB() {
 
 // Raw prepare function captured before db.prepare is overridden
 let _rawPrepare = null;
-// Raw Database.run method captured before _db.run is overridden
+// Raw Database.run — stored as direct reference (not bound) to avoid WASM bind issues
 let _rawRun = null;
+// Raw Database.getRowsModified — used for statement run() return value
+let _rawGetRowsModified = null;
 
 function _setRawPrepare() {
   if (_isSqlJs) {
     _rawPrepare = _db.prepare.bind(_db);
-    _rawRun = _db.run.bind(_db);
+    // Store direct reference to raw run — NOT bound — to avoid WASM bind context issues
+    _rawRun = _db.run;
   }
 }
 
@@ -94,8 +97,9 @@ function _get(sql, ...bindParams) {
 /** Run a statement (INSERT/UPDATE/DELETE) and return changes info */
 function _run(sql, ...bindParams) {
   if (_isSqlJs) {
-    _rawRun(sql, bindParams);
-    return { changes: _db.getRowsModified(), lastInsertRowid: 0 };
+    // Use _db._db.run directly to avoid wrapper's spread behavior
+    _db._db.run(sql, bindParams);
+    return { changes: _rawGetRowsModified(), lastInsertRowid: 0 };
   } else {
     _db.prepare(sql).run(...bindParams);
     return { changes: 1, lastInsertRowid: 0 };
@@ -149,7 +153,7 @@ function _makePreparedStatement(sql) {
       if (bindParams.length > 0) stmt.bind(bindParams);
       stmt.step();
       stmt.free();
-      return { changes: _isSqlJs ? _db.getRowsModified() : 1, lastInsertRowid: 0 };
+      return { changes: _rawGetRowsModified(), lastInsertRowid: 0 };
     },
     _stmt: stmt,
   };
@@ -180,8 +184,10 @@ export function _injectDB(db) {
   // Detect engine: sql.js Database has ._db property, better-sqlite3 does not
   _isSqlJs = !!db._db;
   if (_isSqlJs) {
-    _rawRun = db._db.run.bind(db._db);
+    // Store direct references (not bound) to avoid WASM bind context issues
+    _rawRun = db._db.run;
     _rawPrepare = db._db.prepare.bind(db._db);
+    _rawGetRowsModified = db._db.getRowsModified.bind(db._db);
   } else {
     // better-sqlite3: use db.exec for raw statements, prepare().run/get/all natively
     _rawRun = null; // not used — better-sqlite3 uses db.exec

@@ -4,6 +4,12 @@ Autonomous DLMM LP agent for Meteora pools on Solana. Forked from Meridian.
 
 ---
 
+## README Maintenance
+
+**When important features or architectural changes are committed, update `README.md` accordingly.** Feature tables, configuration tables, and feature sections must reflect the current state of the codebase. This is a living document — out-of-date documentation is considered technical debt.
+
+---
+
 ## Quick Reference
 
 ```

@@ -16,13 +16,29 @@
 
 | | Core | Experimental |
 |---|------|-------------|
-| **Screening** | Meteora Pool Discovery, token scoring, pool simulation, market phase detection | Technical indicators (RSI, Bollinger, Supertrend, Fibonacci) |
-| **Risk Filters** | Bot holders, launchpad blocklist, toxic token memory, bundle detection | — |
-| **Management** | Trailing TP, stop-loss, OOR detection, fee auto-swap, circuit breaker | — |
-| **Intelligence** | Lessons system, threshold evolution, caveman mode | Hive Mind (collective), Agent Meridian relay |
-| **Persistence** | SQLite decision log, performance history, event log | — |
-| **Interfaces** | Telegram (10 commands), CLI (20+ subcommands), REPL, health endpoint | — |
-| **Reliability** | Busy-state guards, once-per-session blocks, rate-limit retry, JSON repair | — |
+| **Screening** | Meteora Pool Discovery, token scoring, pool simulation, market phase detection, bin-config learning | Technical indicators (RSI, Bollinger, Supertrend, Fibonacci) |
+| **Risk Filters** | Bot holders, launchpad blocklist, toxic token memory, bundle detection, pre-deploy token security gate | — |
+| **Management** | Trailing TP, stop-loss, OOR detection (volatility-adaptive wait), loss-streak auto-close, fee auto-swap, circuit breaker | Bollinger Band exit signals |
+| **Intelligence** | Lessons system, threshold evolution, caveman mode, bin-config learning from deploy history | Hive Mind (collective), Agent Meridian relay, GMGN fallback |
+| **Persistence** | SQLite decision log, performance history, event log, per-pool deploy memory | — |
+| **Interfaces** | Telegram (14 commands), CLI (25 subcommands), REPL, health endpoint | — |
+| **Reliability** | Busy-state guards, once-per-session blocks, rate-limit retry, JSON repair, auto-claim SOL rent from closed positions | — |
+
+### v2.1 — Memory Safety & Token Security
+- **ITEM-0 Memory Safety**: queue cap 200, wallet cache cap 500, tool cache cap 1000, pending cap 500
+- **Auto-Claim SOL Rent**: automatically claims SOL rent from closed DLMM positions
+- **Token Security Module**: `isTokenSafe()` pre-deploy gate — blocks tokens flagged as unsafe
+- **Dynamic OOR Wait**: `minutesUntilOor()` — volatility-adaptive wait before OOR close (3–20 min)
+- **Loss Streak Auto-Close**: `loss-streak.js` — auto-closes positions during extended drawdown streaks
+
+### v2.2 — Bin Learning & Dual-Pool
+- **Bin Config Learning**: `getBinSuggestion()` queries median bin config from top 3 winning deploys per pool; `getBinStatsByVolatility()` groups by volatility bucket
+- **Dual-Pool Auto-Swap**: `swapWithRetry()` with exponential backoff for dual-pool configurations; `swapWithRollback()` for failed swap recovery
+- **GMGN Module Foundation**: `src/integrations/gmgn.js` — all functions return null until auth configured; 3rd portfolio fallback (Meteora → Agent Meridian → GMGN)
+- **BB Strategy**: Bollinger Band exit signals (`detectBBCross`, `checkBbExits`) — oversold bounce, overbought rejection, band hit; wired as 5th exit signal in management cycle
+
+### v2.3 — GMGN Integration (in progress)
+- GMGN TTL cache layer, portfolio fallback chain, bulk PnL polling, swap routing
 
 ---
 
