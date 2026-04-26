@@ -92,16 +92,17 @@ export async function recordPerformance(perf) {
         position, pool, pool_name, strategy, bin_range, bin_step, volatility,
         fee_tvl_ratio, organic_score, amount_sol, fees_earned_usd, final_value_usd,
         initial_value_usd, minutes_in_range, minutes_held, close_reason, pnl_usd,
-        pnl_pct, range_efficiency, deployed_at, closed_at, recorded_at, base_mint
+        pnl_pct, range_efficiency, deployed_at, closed_at, recorded_at, base_mint,
+        signal_snapshot
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       entry.position, entry.pool, entry.pool_name, entry.strategy, JSON.stringify(entry.bin_range),
       entry.bin_step, entry.volatility, entry.fee_tvl_ratio, entry.organic_score, entry.amount_sol,
       entry.fees_earned_usd, entry.final_value_usd, entry.initial_value_usd, entry.minutes_in_range,
       entry.minutes_held, entry.close_reason, entry.pnl_usd, entry.pnl_pct, entry.range_efficiency,
-      entry.deployed_at, entry.closed_at, entry.recorded_at, entry.base_mint
+      entry.deployed_at, entry.closed_at, entry.recorded_at, entry.base_mint, entry.signal_snapshot
     );
 
     const lesson = derivLesson(entry);
