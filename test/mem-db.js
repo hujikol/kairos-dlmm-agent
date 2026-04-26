@@ -36,7 +36,7 @@ export async function makeMemDB() {
           _runArgs: null,
           bind(...vals) { this._runArgs = vals; return stmt; },
           step() { return false; },
-          run(...vals) { db.run(sql, vals.length ? vals : this._runArgs || []); },
+          run(...vals) { db.run(sql, ...vals); },
           get() { return null; },
           free() {},
           reset() {},

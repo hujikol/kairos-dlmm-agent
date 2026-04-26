@@ -83,7 +83,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     // JS trailing TP check and Loss Streak Tracking
     const exitMap = new Map();
     for (const p of positionData) {
-      const exit = updatePnlAndCheckExits(p.position, p, config.management);
+      const exit = await updatePnlAndCheckExits(p.position, p, config);
       if (exit) {
         exitMap.set(p.position, exit.reason);
         log("info", "state", `Exit alert for ${p.pair}: ${exit.reason}`);

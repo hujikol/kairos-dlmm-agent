@@ -5,91 +5,18 @@
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
-import initSqlJs from "sql.js";
+import { makeMemDB } from "./mem-db.js";
+import { _injectDB } from "../src/core/db.js";
+import { _resetPositionsCache } from "../src/integrations/meteora/positions.js";
 
-// Inject in-memory DB before importing pool-memory
-const { _injectDB } = await import("../src/core/db.js");
-const { _resetPositionsCache } = await import("../src/integrations/meteora/positions.js");
-
-// ─── In-memory DB with pool-memory schema ─────────────────────────
-
+/**
+ * Create pool-memory schema on top of a blank mem DB.
+ */
 async function makePoolMemoryDB() {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
-
-  const wrapper = {
-    transaction(fn) {
-      return () => {
-        db.run("BEGIN TRANSACTION");
-        try {
-          fn.call(wrapper);
-          db.run("COMMIT");
-        } catch (e) {
-          db.run("ROLLBACK");
-          throw e;
-        }
-      };
-    },
-
-    prepare(sql) {
-      const upper = sql.trim().toUpperCase();
-
-      if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE")) {
-        const stmt = {
-          _runArgs: null,
-          bind(...vals) { this._runArgs = vals; return stmt; },
-          step() { return false; },
-          run(..._vals) {
-            // Use bound args (from .bind()) or positional args passed to run()
-            const args = this._runArgs || _vals;
-            db.run(sql, args.length > 0 ? args : undefined);
-          },
-          get() { return null; },
-          free() {},
-          reset() {},
-          getRowsModified: () => db._db.getRowsModified(),
-        };
-        return stmt;
-      }
-
-      if (upper.startsWith("SELECT")) {
-        const rawStmt = db.prepare(sql);
-        const tableMatch = sql.match(/FROM\s+(\w+)/i);
-        const _tableName = tableMatch ? tableMatch[1] : null;
-
-        return {
-          bind(...vals) { rawStmt.bind(vals); return this; },
-          step() { return rawStmt.step(); },
-          get() { return rawStmt.step() ? rawStmt.getAsObject() : null; },
-          free() { rawStmt.free(); },
-          reset() { rawStmt.reset(); },
-          getAsObject() { return rawStmt.getAsObject(); },
-          _raw: rawStmt,
-        };
-      }
-
-      // DDL / other
-      const stmt = {
-        bind() { return stmt; },
-        step() { return false; },
-        run() { db.run(sql); },
-        get() { return null; },
-        free() {},
-        reset() {},
-      };
-      return stmt;
-    },
-
-    exec(sql) { db.run(sql); },
-    run(sql, ...vals) { db.run(sql, ...vals); },
-    close() {},
-    export() { return db.export(); },
-    _db: db,
-  };
-
-  // Create pool-memory schema (migrate() will run fresh on empty _schema_versions)
-  db.run(`
-    CREATE TABLE IF NOT EXISTS pool_memory (
+  const db = await makeMemDB();
+  // Create pool-memory tables (migrations will skip since we seed _schema_versions)
+  db.exec(`
+    CREATE TABLE pool_memory (
       pool_address TEXT PRIMARY KEY,
       name TEXT,
       base_mint TEXT,
@@ -102,8 +29,8 @@ async function makePoolMemoryDB() {
       cooldown_until TEXT
     )
   `);
-  db.run(`
-    CREATE TABLE IF NOT EXISTS pool_deploys (
+  db.exec(`
+    CREATE TABLE pool_deploys (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pool_address TEXT NOT NULL,
       deployed_at TEXT,
@@ -120,17 +47,18 @@ async function makePoolMemoryDB() {
       total_bins INTEGER
     )
   `);
-  // Seed schema versions so migrate() skips all migrations
-  db.run(`
-    CREATE TABLE IF NOT EXISTS _schema_versions (version INTEGER PRIMARY KEY, applied_at TEXT)
+  db.exec(`
+    CREATE TABLE _schema_versions (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT
+    )
   `);
-  db.run(`INSERT INTO _schema_versions VALUES (1, '2026-01-01T00:00:00.000Z')`);
-  db.run(`INSERT INTO _schema_versions VALUES (2, '2026-01-01T00:00:00.000Z')`);
-  db.run(`INSERT INTO _schema_versions VALUES (3, '2026-01-01T00:00:00.000Z')`);
-  db.run(`INSERT INTO _schema_versions VALUES (4, '2026-01-01T00:00:00.000Z')`);
-  db.run(`INSERT INTO _schema_versions VALUES (5, '2026-01-01T00:00:00.000Z')`);
-
-  return wrapper;
+  db.exec(`INSERT INTO _schema_versions VALUES (1, '2026-01-01T00:00:00.000Z')`);
+  db.exec(`INSERT INTO _schema_versions VALUES (2, '2026-01-01T00:00:00.000Z')`);
+  db.exec(`INSERT INTO _schema_versions VALUES (3, '2026-01-01T00:00:00.000Z')`);
+  db.exec(`INSERT INTO _schema_versions VALUES (4, '2026-01-01T00:00:00.000Z')`);
+  db.exec(`INSERT INTO _schema_versions VALUES (5, '2026-01-01T00:00:00.000Z')`);
+  return db;
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -148,7 +76,6 @@ describe("FEATURE-BINLEARN-01 bin learning", () => {
     it("returns null for pools with fewer than 2 winning deploys", async () => {
       const { getBinSuggestion } = await import("../src/features/pool-memory.js");
 
-      // Insert a pool with only 1 winning deploy
       db.prepare(`
         INSERT INTO pool_memory (pool_address, name) VALUES ('Pool1', 'Pool1')
       `).run();

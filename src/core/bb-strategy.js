@@ -34,13 +34,14 @@ export function detectBBCross(currentPrice, currentBB, prevBB, positionSide) {
   // Long position signals
   if (positionSide === "long") {
     // Oversold bounce: price crosses above lower band from below
+    // (was below prev lower band, now at or above current lower band)
     if (prevBB && prevBB.lower != null) {
       if (currentPrice >= lower && prevBB.lower > currentPrice) {
         return { signal: "oversold_bounce", priceAtCross: lower };
       }
     }
 
-    // Band hit: price touches lower band
+    // Band hit: price at or below lower band
     if (currentPrice <= lower) {
       return { signal: "band_hit", priceAtCross: lower };
     }
@@ -49,13 +50,14 @@ export function detectBBCross(currentPrice, currentBB, prevBB, positionSide) {
   // Short position signals
   if (positionSide === "short") {
     // Overbought rejection: price crosses below upper band from above
+    // (was above prev upper band, now at or below current upper band)
     if (prevBB && prevBB.upper != null) {
-      if (currentPrice <= upper && prevBB.upper < currentPrice) {
+      if (currentPrice <= upper && prevBB.upper > currentPrice) {
         return { signal: "overbought_rejection", priceAtCross: upper };
       }
     }
 
-    // Band hit: price touches upper band
+    // Band hit: price at or above upper band
     if (currentPrice >= upper) {
       return { signal: "band_hit", priceAtCross: upper };
     }
