@@ -1,5 +1,6 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { agentMeridianPositions } from "../../tools/agent-meridian.js";
+import { getPortfolio as gmgnGetPortfolio } from "../gmgn.js";
 import BN from "bn.js";
 import {
   trackPosition,
@@ -402,8 +403,26 @@ async function _fetchPositionsFromMeteora({ walletAddress, force: _force, silent
     }
   }
 
+  // 3. GMGN fallback — last resort after Meteora + relay failures
   if (pools.length === 0) {
-    log("info", "positions", "No open positions found (Meteora + relay)");
+    if (!silent) log("info", "positions", "Trying GMGN for open positions...");
+    try {
+      const gmgnPositions = await gmgnGetPortfolio(walletAddress);
+      if (gmgnPositions && gmgnPositions.length > 0) {
+        pools = gmgnPositions.map(p => ({
+          poolAddress: p.pool || p.poolAddress,
+          listPositions: [p.position || p.positionAddress],
+          outOfRange: p.isOutOfRange || p.outOfRange || false,
+        }));
+        log("info", "positions", `GMGN returned ${pools.length} pool(s) with open positions`);
+      }
+    } catch (e) {
+      log("warn", "positions", `GMGN fetch failed: ${e.message}`);
+    }
+  }
+
+  if (pools.length === 0) {
+    log("info", "positions", "No open positions found (Meteora + relay + GMGN)");
   }
 
   return { pools, walletAddress };

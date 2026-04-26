@@ -74,6 +74,28 @@ const DEFAULT_STRATEGIES = {
     exit: { take_profit_pct: 10, notes: "When total return >= 10% of deployed capital: withdraw_liquidity(bps=5000) to take 50% off. Remaining 50% keeps running. Repeat at next threshold." },
     best_for: "Locking in profits without fully exiting winning positions",
   },
+  bollinger_band: {
+    id: "bollinger_band",
+    name: "Bollinger Band Mean Reversion",
+    author: "kairos",
+    lp_strategy: "spot",
+    entry: {
+      condition: "Price crosses back above lower BB band from below (oversold bounce)",
+      single_side: "sol",
+      bb_mode: "mean_reversion",
+    },
+    range: {
+      type: "custom",
+      bins_below_pct: 60,
+      bins_above_pct: 40,
+    },
+    exit: {
+      bb_exit: true,
+      max_hold_minutes: 240,
+      take_profit_pct: null,
+    },
+    best_for: "Range-bound tokens with predictable price oscillations",
+  },
 };
 
 async function ensureDefaultStrategies() {

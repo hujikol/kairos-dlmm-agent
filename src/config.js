@@ -25,6 +25,9 @@ export const SECTION_MAP = {
     "yieldCheckMinAgeMs", "minLlmOutputLen", "maxLlmOutputDisplay",
     "telegramMaxMsgLen", "lossStreakEnabled", "lossStreakThreshold",
     "lossStreakMinPnlPct", "lossStreakMinPositionAgeCycles",
+    "dualPool.enabled", "dualPool.autoDetectRatio", "dualPool.imbalanceThreshold",
+    "dualPool.maxRetries", "dualPool.gasBuffer",
+    "zapOutToSol", "zapOutMaxRetries",
   ],
   risk: [
     "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
@@ -190,6 +193,15 @@ const _rawConfig = {
     lossStreakThreshold:    u.management?.lossStreakThreshold    ?? u.lossStreakThreshold    ?? 3,
     lossStreakMinPnlPct:    u.management?.lossStreakMinPnlPct    ?? u.lossStreakMinPnlPct    ?? -1.0,
     lossStreakMinPositionAgeCycles: u.management?.lossStreakMinPositionAgeCycles ?? u.lossStreakMinPositionAgeCycles ?? 2,
+    dualPool: {
+      enabled:            u.management?.dualPool?.enabled            ?? false,
+      autoDetectRatio:    u.management?.dualPool?.autoDetectRatio    ?? true,
+      imbalanceThreshold: u.management?.dualPool?.imbalanceThreshold ?? 0.01,
+      maxRetries:         u.management?.dualPool?.maxRetries         ?? 3,
+      gasBuffer:          u.management?.dualPool?.gasBuffer          ?? 0.05,
+    },
+    zapOutToSol:          u.management?.zapOutToSol          ?? false,
+    zapOutMaxRetries:     u.management?.zapOutMaxRetries       ?? 3,
   },
 
   // ─── OKX ────────────────────────────────

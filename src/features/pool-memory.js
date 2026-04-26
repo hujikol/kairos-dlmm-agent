@@ -40,9 +40,11 @@ function ensurePoolMemoryExists(poolAddress, name) {
 
 /**
  * Record a closed deploy into the database.
- * Called automatically from recordPerformance() in lessons.js.
+ * @param {string} poolAddress
+ * @param {Object} deployData
+ * @param {Object|null} binConfig - { lower_bin, upper_bin, total_bins }
  */
-export function recordPoolDeploy(poolAddress, deployData) {
+export function recordPoolDeploy(poolAddress, deployData, binConfig) {
   if (!poolAddress) return;
   const db = getDB();
 
@@ -64,13 +66,17 @@ export function recordPoolDeploy(poolAddress, deployData) {
     db.prepare(`
       INSERT INTO pool_deploys (
         pool_address, deployed_at, closed_at, pnl_pct, pnl_usd, range_efficiency,
-        minutes_held, close_reason, strategy, volatility_at_deploy
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        minutes_held, close_reason, strategy, volatility_at_deploy,
+        lower_bin, upper_bin, total_bins
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         poolAddress, deployData.deployed_at || null, closed_at, pnl_pct,
         deployData.pnl_usd ?? null, deployData.range_efficiency ?? null,
         deployData.minutes_held ?? null, deployData.close_reason || null,
-        deployData.strategy || null, deployData.volatility ?? null
+        deployData.strategy || null, deployData.volatility ?? null,
+        binConfig?.lower_bin ?? null,
+        binConfig?.upper_bin ?? null,
+        binConfig?.total_bins ?? null
     );
 
     // 3. Update pool_memory aggregates
@@ -303,4 +309,88 @@ export function addPoolNote({ pool_address, note }) {
 
   log("info", "pool-memory", `Note added to ${addrShort(pool_address)}: ${note}`);
   return { saved: true, pool_address, note };
+}
+
+// ─── Bin Learning Queries ────────────────────────────────────────
+
+/**
+ * Suggest bin configuration for a pool based on historical winners.
+ * Returns null for new pools with no history.
+ * @param {string} poolAddress
+ * @returns {{ lower_bin: number, upper_bin: number, total_bins: number, sample_size: number } | null}
+ */
+export function getBinSuggestion(poolAddress) {
+  if (!poolAddress) return null;
+  const db = getDB();
+
+  // Get top performers (pnl_pct >= 5) for this pool with bin data
+  const winners = db.prepare(`
+    SELECT lower_bin, upper_bin, total_bins, pnl_pct, range_efficiency
+    FROM pool_deploys
+    WHERE pool_address = ?
+      AND pnl_pct IS NOT NULL
+      AND pnl_pct >= 5
+      AND lower_bin IS NOT NULL
+      AND upper_bin IS NOT NULL
+    ORDER BY pnl_pct DESC
+    LIMIT 10
+  `).all(poolAddress);
+
+  if (winners.length === 0) return null;
+
+  // Use median of winner configs
+  const lowerBins = winners.map(w => w.lower_bin).filter(v => v != null).sort((a, b) => a - b);
+  const upperBins = winners.map(w => w.upper_bin).filter(v => v != null).sort((a, b) => a - b);
+  const totalBins = winners.map(w => w.total_bins).filter(v => v != null).sort((a, b) => a - b);
+
+  if (lowerBins.length === 0 || upperBins.length === 0 || totalBins.length === 0) return null;
+
+  const mid = (arr) => {
+    const len = arr.length;
+    return len % 2 === 0 ? Math.round((arr[len / 2 - 1] + arr[len / 2]) / 2) : arr[Math.floor(len / 2)];
+  };
+
+  return {
+    lower_bin: mid(lowerBins),
+    upper_bin: mid(upperBins),
+    total_bins: mid(totalBins),
+    sample_size: winners.length,
+  };
+}
+
+/**
+ * Get bin stats grouped by volatility bucket from historical winners.
+ * Used to correlate volatility levels with successful bin widths.
+ * @param {number} volatility - Volatility value (0-10 typical)
+ * @returns {{ avg_lower_bin: number, avg_upper_bin: number, avg_total_bins: number, win_rate_at_vol: number }}
+ */
+export function getBinStatsByVolatility(volatility) {
+  if (volatility == null) return null;
+  const db = getDB();
+
+  // Bucket volatility into 0.5 increments
+  const volBucket = Math.round(volatility * 2) / 2;
+
+  const stats = db.prepare(`
+    SELECT
+      AVG(lower_bin) as avg_lower_bin,
+      AVG(upper_bin) as avg_upper_bin,
+      AVG(total_bins) as avg_total_bins,
+      COUNT(*) as sample_size,
+      SUM(CASE WHEN pnl_pct >= 0 THEN 1 ELSE 0 END) as wins
+    FROM pool_deploys
+    WHERE volatility_at_deploy IS NOT NULL
+      AND lower_bin IS NOT NULL
+      AND ROUND(volatility_at_deploy * 2) / 2 = ?
+  `).get(volBucket);
+
+  if (!stats || stats.sample_size === 0) return null;
+
+  return {
+    avg_lower_bin: Math.round(stats.avg_lower_bin || 0),
+    avg_upper_bin: Math.round(stats.avg_upper_bin || 0),
+    avg_total_bins: Math.round(stats.avg_total_bins || 0),
+    win_rate_at_vol: Math.round((stats.wins / stats.sample_size) * 100),
+    sample_size: stats.sample_size,
+  };
 }

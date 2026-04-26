@@ -37,6 +37,12 @@ export function listSmartWallets() {
 // Cache wallet positions for 5 minutes to avoid hammering RPC
 const _cache = new Map(); // address -> { positions, fetchedAt }
 const CACHE_TTL = 5 * 60 * 1000;
+const MAX_WALLET_CACHE = 500;
+
+function evictOldest() {
+  const firstKey = _cache.keys().next().value;
+  _cache.delete(firstKey);
+}
 
 export async function checkSmartWalletsOnPool({ pool_address }) {
   const allWallets = listSmartWallets().wallets;
@@ -60,6 +66,9 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
           return { wallet, positions: cached.positions };
         }
         const { positions } = await getWalletPositions({ wallet_address: wallet.address });
+        if (_cache.size >= MAX_WALLET_CACHE) {
+          evictOldest();
+        }
         _cache.set(wallet.address, { positions: positions || [], fetchedAt: Date.now() });
         return { wallet, positions: positions || [] };
       } catch (e) { log("warn", "smart-wallets", `Failed to get positions for ${wallet}: ${e?.message}`); return { wallet, positions: [] }; }

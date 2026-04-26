@@ -47,6 +47,7 @@ export async function cachedTool(name, key, fn, ttlOverride) {
 
   // Compute and cache
   const promise = fn().then((value) => {
+    maybeEvict();
     CACHE.set(cacheKey, { value, exp: now + (ttlOverride ?? TTL_MAP[name] ?? 120) * 1000 });
     PENDING.delete(cacheKey);
     return value;
@@ -56,6 +57,9 @@ export async function cachedTool(name, key, fn, ttlOverride) {
   });
 
   PENDING.set(cacheKey, promise);
+  if (PENDING.size > PENDING_MAX) {
+    for (const [k] of PENDING) { PENDING.delete(k); break; }
+  }
   return promise;
 }
 
@@ -76,6 +80,16 @@ export function clearCache() {
     if (typeof p.cancel === "function") p.cancel();
   }
   PENDING.clear();
+}
+
+const CACHE_MAX = 1000;
+const PENDING_MAX = 500;
+
+function maybeEvict() {
+  if (CACHE.size >= CACHE_MAX) {
+    const firstKey = CACHE.keys().next().value;
+    CACHE.delete(firstKey);
+  }
 }
 
 // Evict expired entries every 60s (skip in test env to prevent spurious timers)

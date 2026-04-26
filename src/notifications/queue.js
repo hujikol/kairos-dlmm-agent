@@ -5,11 +5,16 @@
 
 let _queue = [];
 
+const MAX_QUEUE = 200; // same as Telegram outbound queue cap
+
 /**
  * Push a notification onto the queue.
  * Types: "deploy", "close", "swap", "oor", "claim"
  */
 export function pushNotification(note) {
+  if (_queue.length >= MAX_QUEUE) {
+    _queue.shift(); // drop oldest when full
+  }
   _queue.push(note);
 }
 

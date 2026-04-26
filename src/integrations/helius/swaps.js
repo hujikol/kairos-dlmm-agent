@@ -6,6 +6,23 @@ import { normalizeMint } from "./normalize.js";
 import { getConnection } from "../solana.js";
 import { SLIPPAGE_BPS as DEFAULT_SLIPPAGE_BPS } from "../../core/constants.js";
 
+// ─── sleep ─────────────────────────────────────────────────────────
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ─── swapWithRetry ────────────────────────────────────────────────
+export async function swapWithRetry(swapFn, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await swapFn();
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+      await sleep(1000 * (2 ** (attempt - 1))); // 1s, 2s, 4s backoff
+    }
+  }
+}
+
 // ─── Magic numbers / API defaults ────────────────────────────────
 export const JUPITER_DATAPI_BASE_URL = process.env.JUPITER_DATAPI_BASE_URL || "https://api.jup.ag/price/v3";
 export const JUPITER_ULTRA_API        = process.env.JUPITER_ULTRA_API_URL || "https://api.jup.ag/ultra/v1";
