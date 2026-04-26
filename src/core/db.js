@@ -231,6 +231,7 @@ export function migrate(db) {
     "dynamic_sizing_enabled",
     "auto_shift_bins_enabled",
     "auto_claim_sol_enabled",
+    "dynamic_oor_wait_enabled",
     "token_security_enabled",
   ];
   for (const flag of PLANNED_FLAGS) {
