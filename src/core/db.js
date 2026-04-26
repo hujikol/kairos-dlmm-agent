@@ -221,6 +221,25 @@ export function migrate(db) {
     );
     log("info", "db", `Applied migration #${migration.id} (${migration.name})`);
   }
+
+  // Initialize feature flags to "false" on first run if not already present
+  const FLAG_PREFIX = "flag_";
+  const PLANNED_FLAGS = [
+    "gmgn_holders_enabled",
+    "gmgn_price_enabled",
+    "bb_strategy_enabled",
+    "dynamic_sizing_enabled",
+    "auto_shift_bins_enabled",
+    "auto_claim_sol_enabled",
+    "token_security_enabled",
+  ];
+  for (const flag of PLANNED_FLAGS) {
+    const key = FLAG_PREFIX + flag;
+    const existing = db.prepare(`SELECT key FROM kv_store WHERE key = ?`).get(key);
+    if (!existing) {
+      db.prepare(`INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)`).run(key, "false");
+    }
+  }
 }
 
 // ─── Utility: Check if a column exists in a table ─────────────────────────────

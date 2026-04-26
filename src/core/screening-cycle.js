@@ -26,6 +26,8 @@ import {
   applyHardFilters,
   buildCandidateBlocks,
 } from "./screening-helpers.js";
+import { isFlagEnabled } from "./feature-flags.js";
+import { isTokenSafe } from "../features/token-security.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
 import { getSharedLessonsForPrompt } from "../features/hive-mind.js";
 import { recordDecision } from "./decision-log.js";
@@ -182,6 +184,26 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     const reconStart = Date.now();
     const allCandidates = await fetchAndReconCandidates(candidates);
     log("info", "cron", `[TIMING] fetchAndReconCandidates: ${Date.now() - reconStart}ms`);
+
+    // Pre-deploy token security gate — skip candidates with unsafe tokens
+    if (isFlagEnabled("token_security_enabled")) {
+      const securityStart = Date.now();
+      const securityChecked = [];
+      for (const c of allCandidates) {
+        const mint = c.pool.base?.mint;
+        if (!mint) { securityChecked.push(c); continue; }
+        const { safe, reason } = await isTokenSafe(mint);
+        if (!safe) {
+          log("warn", "token-security", `Skipping ${c.pool.name} — token unsafe: ${reason}`);
+        } else {
+          securityChecked.push(c);
+        }
+      }
+      // Replace allCandidates with the filtered list
+      allCandidates.length = 0;
+      allCandidates.push(...securityChecked);
+      log("info", "cron", `[TIMING] token security check: ${Date.now() - securityStart}ms`);
+    }
 
     // Hard filters after token recon — block launchpads, excessive bots, and toxic tokens
     passing = applyHardFilters(allCandidates, config, prePositions);
