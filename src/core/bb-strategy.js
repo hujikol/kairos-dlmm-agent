@@ -1,7 +1,5 @@
 import { computeBollingerBands } from "../tools/chart-indicators.js";
-
-// GMGN import stub — will be wired when GMGN module provides getCandles
-// import { gmgn } from "../integrations/gmgn.js";
+import { getCandles as gmgnGetCandles } from "../integrations/gmgn.js";
 
 /**
  * Get candles from GMGN and compute Bollinger Bands.
@@ -12,8 +10,15 @@ import { computeBollingerBands } from "../tools/chart-indicators.js";
  * @param {number} stdDev - Standard deviation multiplier (default 2.0)
  * @returns {Promise<{bb: {upper: number, middle: number, lower: number}, candles: number[]}|null>}
  */
-export async function computeBBFromGMGN(_mint, _interval, _period = 20, _stdDev = 2.0) {
-  return null; // stub until GMGN module provides getCandles
+export async function computeBBFromGMGN(mint, interval, period = 20, stdDev = 2.0) {
+  const candles = await gmgnGetCandles(mint, interval);
+  if (!candles || candles.length < period) return null;
+
+  const closes = candles.map(c => typeof c.close === "number" ? c.close : c.closePrice ?? c.price ?? 0);
+  if (closes.length < period) return null;
+
+  const bb = computeBollingerBands(closes, period, stdDev);
+  return { bb, closes };
 }
 
 /**
@@ -80,27 +85,47 @@ export async function checkBbExits(positions, _config) {
     const bbParams = pos.bb_params || pos.signal_snapshot?.bb_params;
     if (!bbParams) continue;
 
-    // Skip if no current price available
-    const currentPrice = pos.current_price || pos.price;
+    const mint = pos.base_mint || pos.mint;
+    if (!mint) continue;
+
+    const interval = bbParams.timeframe || "15m";
+    const period = bbParams.period || 20;
+    const stdDev = bbParams.stdDev || 2.0;
+
+    const result = await computeBBFromGMGN(mint, interval, period, stdDev);
+    if (!result) continue;
+
+    const { bb: currentBB, closes } = result;
+    const currentPrice = closes[closes.length - 1];
     if (currentPrice == null) continue;
 
-    // Determine position side from entry direction
-    const positionSide = bbParams.position_side || (pos.amount_x > 0 && pos.amount_y === 0 ? "long" : "short");
+    // Previous BB from prior candle slice
+    const prevCloses = closes.slice(0, -1);
+    const prevBB = prevCloses.length >= period
+      ? computeBollingerBands(prevCloses, period, stdDev)
+      : null;
 
-    // Compute BB if we have price history
-    const prices = pos.price_history || [];
-    if (prices.length < 20) continue; // Need at least period data points
-
-    const currentBB = computeBollingerBands(prices, bbParams.period || 20, bbParams.stdDev || 2.0);
-    const prevPrices = prices.length > 1 ? prices.slice(0, -1) : null;
-    const prevBB = prevPrices ? computeBollingerBands(prevPrices, bbParams.period || 20, bbParams.stdDev || 2.0) : null;
-
+    const positionSide = bbParams.position_side || "long";
     const { signal, priceAtCross } = detectBBCross(currentPrice, currentBB, prevBB, positionSide);
 
-    if (signal) {
+    // Time stop check
+    const entryTime = pos.signal_snapshot?.bb?.entry_time;
+    const maxHoldMinutes = bbParams.max_hold_minutes ?? 240;
+    let timeStopSignal = null;
+    if (entryTime && bbParams.enable_time_stop) {
+      const elapsedMin = (Date.now() - new Date(entryTime).getTime()) / 60_000;
+      if (elapsedMin >= maxHoldMinutes) {
+        timeStopSignal = "BB_TIME_STOP";
+      }
+    }
+
+    if (signal || timeStopSignal) {
+      const reason = timeStopSignal
+        ? `BB time stop: held ${Math.round((Date.now() - new Date(entryTime).getTime()) / 60000)}min (max ${maxHoldMinutes})`
+        : `BB ${signal}: price ${currentPrice.toFixed(6)} at band ${priceAtCross?.toFixed(6)}`;
       exitMap.set(pos.position, {
-        action: "BB_SIGNAL",
-        reason: `BB ${signal}: price ${currentPrice.toFixed(6)} at ${signal.replace("_", " ")} (band: ${priceAtCross?.toFixed(6)})`,
+        action: signal ? "BB_SIGNAL" : "BB_TIME_STOP",
+        reason,
       });
     }
   }

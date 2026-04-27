@@ -6,6 +6,9 @@
  * share a single in-flight computation rather than each triggering their own fetch.
  */
 
+const CACHE_MAX = 1000;
+const PENDING_MAX = 500;
+
 const CACHE = new Map(); // cacheKey → { exp, value }
 const PENDING = new Map(); // cacheKey → pending Promise
 
@@ -81,9 +84,6 @@ export function clearCache() {
   }
   PENDING.clear();
 }
-
-const CACHE_MAX = 1000;
-const PENDING_MAX = 500;
 
 function maybeEvict() {
   if (CACHE.size >= CACHE_MAX) {

@@ -30,6 +30,7 @@ import { SCREENING_COOLDOWN_MS } from "./constants.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
 import { checkBbExits } from "./bb-strategy.js";
 import { persistBbState } from "./state/registry.js";
+import { computeBollingerBands } from "../tools/chart-indicators.js";
 
 export async function runManagementCycle({ silent = false, gateway = agentGateway } = {}) {
   const cycleStart = Date.now();
@@ -105,6 +106,23 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     const bbExits = await checkBbExits(positionData, config.management);
     for (const [addr, exit] of bbExits) {
       exitMap.set(addr, exit);
+      // Persist BB state after each cycle for continuity
+      const pos = positionData.find(p => p.position === addr);
+      if (pos) {
+        const bbParams = pos.signal_snapshot?.bb_params;
+        if (bbParams) {
+          const prevCloses = exit._prevCloses;
+          if (prevCloses && prevCloses.length > 1) {
+            const prevBB = computeBollingerBands(prevCloses.slice(0, -1), bbParams.period || 20, bbParams.stdDev || 2.0);
+            persistBbState(addr, {
+              prev_bb: prevBB,
+              entry_price: pos.signal_snapshot?.bb?.entry_price ?? pos.price,
+              entry_time: pos.signal_snapshot?.bb?.entry_time,
+              entry_signal: pos.signal_snapshot?.bb?.entry_signal,
+            });
+          }
+        }
+      }
     }
 
     // ── Deterministic rule engine ─────────────────────────────────────

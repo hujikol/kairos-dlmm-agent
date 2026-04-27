@@ -29,7 +29,7 @@ export function formatCountdown(seconds) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
-export const _cronState = { tasks: [], _pnlPollInterval: null };
+export const _cronState = { tasks: [], _pnlPollInterval: null, _rssTimer: null };
 
 // ═══════════════════════════════════════════
 //  BRIEFING CRON FUNCTIONS
@@ -72,6 +72,7 @@ export async function maybeRunMissedBriefing() {
 export function stopCronJobs() {
   for (const task of _cronState.tasks) task.stop();
   if (_cronState._pnlPollInterval) clearInterval(_cronState._pnlPollInterval);
+  if (_cronState._rssTimer) clearInterval(_cronState._rssTimer);
   _cronState.tasks = [];
 }
 
@@ -168,5 +169,14 @@ export async function startCronJobs() {
 
   _cronState.tasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
   _cronState._pnlPollInterval = pnlPollInterval;
+
+  // RSS memory logging every 30 minutes
+  const MB = 1024 * 1024;
+  const _rssTimer = setInterval(() => {
+    const usage = process.memoryUsage();
+    log("info", "memory", `RSS: ${(usage.rss / MB).toFixed(1)}MB, Heap: ${(usage.heapUsed / MB).toFixed(1)}MB`);
+    if (global.gc && process.env.FORCE_GC === "true") global.gc();
+  }, 30 * 60 * 1000);
+
   log("info", "cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
 }

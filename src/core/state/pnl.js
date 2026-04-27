@@ -158,7 +158,6 @@ export async function updatePnlAndCheckExits(position_address, positionData, con
     return {
       action: "BB_EXIT",
       reason: bbExit.reason,
-      details: { signal: bbExit.signal },
     };
   }
 

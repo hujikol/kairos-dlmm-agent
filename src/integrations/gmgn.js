@@ -6,6 +6,33 @@
 
 const GMGN_BASE_URL = "https://api.gmgn.ai";
 
+// ─── TTL Cache ─────────────────────────────────────────────────────────
+const _gmgnCache = new Map(); // key → { exp, value }
+const GMGN_TTL_MS = {
+  portfolio: 12_000,  // 12s — half poll interval
+  price:      300_000, // 5min
+  holders:    300_000, // 5min
+  candles:     60_000, // 1min
+  swapQuote:   30_000, // 30s
+  swapStatus:  10_000, // 10s
+};
+const GMGN_CACHE_MAX = 500;
+
+function _gmgnCacheGet(key) {
+  const e = _gmgnCache.get(key);
+  if (e && e.exp > Date.now()) return e.value;
+  _gmgnCache.delete(key);
+  return null;
+}
+
+function _gmgnCacheSet(key, value, ttlMs) {
+  if (_gmgnCache.size >= GMGN_CACHE_MAX) {
+    const firstKey = _gmgnCache.keys().next().value;
+    _gmgnCache.delete(firstKey);
+  }
+  _gmgnCache.set(key, { value, exp: Date.now() + ttlMs });
+}
+
 function gmgnAuthConfigured() {
   const key = process.env.GMGN_API_KEY;
   return key != null && key !== "";
@@ -27,13 +54,18 @@ function gmgnHeaders() {
 
 export async function getPortfolio(walletAddress) {
   if (!gmgnAuthConfigured()) return null;
+  const cacheKey = `portfolio:${walletAddress}`;
+  const cached = _gmgnCacheGet(cacheKey);
+  if (cached !== null) return cached;
   try {
     const res = await fetch(`${GMGN_BASE_URL}/v1/portfolio/${walletAddress}`, {
       headers: gmgnHeaders(),
     });
     if (!res.ok) return null;
     const json = await res.json();
-    return json.data?.positions ?? null;
+    const data = json.data?.positions ?? null;
+    _gmgnCacheSet(cacheKey, data, GMGN_TTL_MS.portfolio);
+    return data;
   } catch {
     return null;
   }
@@ -46,13 +78,18 @@ export async function getPortfolio(walletAddress) {
  */
 export async function getTokenHolders(mint) {
   if (!gmgnAuthConfigured()) return null;
+  const cacheKey = `holders:${mint}`;
+  const cached = _gmgnCacheGet(cacheKey);
+  if (cached !== null) return cached;
   try {
     const res = await fetch(`${GMGN_BASE_URL}/v1/token/${mint}/holders`, {
       headers: gmgnHeaders(),
     });
     if (!res.ok) return null;
     const json = await res.json();
-    return json.data?.holders ?? null;
+    const data = json.data?.holders ?? null;
+    _gmgnCacheSet(cacheKey, data, GMGN_TTL_MS.holders);
+    return data;
   } catch {
     return null;
   }
@@ -65,13 +102,18 @@ export async function getTokenHolders(mint) {
  */
 export async function getTokenPrice(mint) {
   if (!gmgnAuthConfigured()) return null;
+  const cacheKey = `price:${mint}`;
+  const cached = _gmgnCacheGet(cacheKey);
+  if (cached !== null) return cached;
   try {
     const res = await fetch(`${GMGN_BASE_URL}/v1/token/${mint}/price`, {
       headers: gmgnHeaders(),
     });
     if (!res.ok) return null;
     const json = await res.json();
-    return json.data?.price ?? null;
+    const data = json.data?.price ?? null;
+    _gmgnCacheSet(cacheKey, data, GMGN_TTL_MS.price);
+    return data;
   } catch {
     return null;
   }
@@ -85,6 +127,9 @@ export async function getTokenPrice(mint) {
  */
 export async function getCandles(mint, interval) {
   if (!gmgnAuthConfigured()) return null;
+  const cacheKey = `candles:${mint}:${interval}`;
+  const cached = _gmgnCacheGet(cacheKey);
+  if (cached !== null) return cached;
   try {
     const res = await fetch(
       `${GMGN_BASE_URL}/v1/token/${mint}/candles?interval=${encodeURIComponent(interval)}`,
@@ -92,7 +137,9 @@ export async function getCandles(mint, interval) {
     );
     if (!res.ok) return null;
     const json = await res.json();
-    return json.data?.candles ?? null;
+    const data = json.data?.candles ?? null;
+    _gmgnCacheSet(cacheKey, data, GMGN_TTL_MS.candles);
+    return data;
   } catch {
     return null;
   }
@@ -108,6 +155,9 @@ export async function getCandles(mint, interval) {
  */
 export async function getSwapQuote(inputMint, outputMint, amount, slippage) {
   if (!gmgnAuthConfigured()) return null;
+  const cacheKey = `swapquote:${inputMint}:${outputMint}:${amount}:${slippage}`;
+  const cached = _gmgnCacheGet(cacheKey);
+  if (cached !== null) return cached;
   try {
     const res = await fetch(`${GMGN_BASE_URL}/v1/swap/quote`, {
       method: "POST",
@@ -115,7 +165,9 @@ export async function getSwapQuote(inputMint, outputMint, amount, slippage) {
       body: JSON.stringify({ inputMint, outputMint, amount, slippage }),
     });
     if (!res.ok) return null;
-    return await res.json();
+    const data = await res.json();
+    _gmgnCacheSet(cacheKey, data, GMGN_TTL_MS.swapQuote);
+    return data;
   } catch {
     return null;
   }
