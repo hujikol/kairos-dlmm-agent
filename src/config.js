@@ -28,6 +28,8 @@ export const SECTION_MAP = {
     "dualPool.enabled", "dualPool.autoDetectRatio", "dualPool.imbalanceThreshold",
     "dualPool.maxRetries", "dualPool.gasBuffer",
     "zapOutToSol", "zapOutMaxRetries",
+    "autoClaimSolAccounts", "autoClaimMinRentSol", "autoClaimMaxAccountsPerTx",
+    "autoClaimOnSwapAll", "autoClaimOnZapOut",
   ],
   risk: [
     "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
@@ -202,6 +204,11 @@ const _rawConfig = {
     },
     zapOutToSol:          u.management?.zapOutToSol          ?? false,
     zapOutMaxRetries:     u.management?.zapOutMaxRetries       ?? 3,
+    autoClaimSolAccounts:  u.management?.autoClaimSolAccounts  ?? false,
+    autoClaimMinRentSol:   u.management?.autoClaimMinRentSol    ?? 0.001,
+    autoClaimMaxAccountsPerTx: u.management?.autoClaimMaxAccountsPerTx ?? 20,
+    autoClaimOnSwapAll:   u.management?.autoClaimOnSwapAll     ?? true,
+    autoClaimOnZapOut:    u.management?.autoClaimOnZapOut      ?? true,
   },
 
   // ─── OKX ────────────────────────────────

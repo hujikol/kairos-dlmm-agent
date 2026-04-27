@@ -15,7 +15,7 @@ import {
   MAX_HTML_MSG_LEN,
   PRICE_FORMAT_THRESHOLD,
 } from "./constants.js";
-import { autoSwapRewardFees } from "../integrations/helius.js";
+import { autoSwapRewardFeesWithClaim } from "../integrations/helius.js";
 import { pushNotification, flushNotifications } from "../notifications/queue.js";
 import { sendHTML } from "../notifications/telegram.js";
 import { stripThink } from "../tools/caveman.js";
@@ -153,12 +153,12 @@ export function buildManagementReport(positionData, actionMap, positions, config
 // ─── Post-trade: auto-swap reward tokens to SOL ───────────────────────────────
 
 /**
- * Post-trade: auto-swap reward tokens to SOL and push notifications.
+ * Post-trade: auto-swap reward tokens to SOL, reclaim rent from empty accounts, and push notifications.
  */
 export async function autoSwapAndNotify(executedActions) {
   if (executedActions.length === 0) return;
   log("info", "post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
-  const swapResult = await autoSwapRewardFees(null, { forceRefresh: true });
+  const swapResult = await autoSwapRewardFeesWithClaim(null, { forceRefresh: true });
   if (swapResult.swapped && swapResult.swapped.length > 0) {
     log("info", "post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
     for (const swap of swapResult.swapped) {

@@ -2,8 +2,9 @@ import { getWalletBalances, swapToken, swapAllTokensToSol } from "../integration
 import { pushNotification } from "../notifications/queue.js";
 import { SOL_MINT } from "../constants.js";
 import { addrShort } from "./addrShort.js";
+import { getClaimableRent, closeEmptyAccounts } from "../integrations/helius/closeAccounts.js";
 
-export const walletWriteTools = new Set(["swap_token"]);
+export const walletWriteTools = new Set(["swap_token", "claim_sol_accounts"]);
 
 const SWAP_SOL_ADDRESS = SOL_MINT;
 
@@ -27,4 +28,12 @@ export function registerWallet(registerTool) {
   });
 
   registerTool("swap_all_to_sol", swapAllTokensToSol);
+
+  registerTool("get_claimable_rent", async () => {
+    return await getClaimableRent();
+  });
+
+  registerTool("claim_sol_accounts", async ({ dry_run = false } = {}) => {
+    return await closeEmptyAccounts({ dryRun: dry_run });
+  });
 }

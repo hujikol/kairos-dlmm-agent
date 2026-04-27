@@ -52,4 +52,37 @@ WARNING: This executes a real on-chain transaction.`,
       }
     }
   },
+
+  {
+    type: "function",
+    function: {
+      name: "get_claimable_rent",
+      description: `Returns count and list of empty token accounts eligible for rent reclamation.
+Each empty account holds ~0.002 SOL of rent collateral when empty.
+Use before claiming to estimate potential SOL recovery.`,
+      parameters: {
+        type: "object",
+        properties: {}
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "claim_sol_accounts",
+      description: `Close empty token accounts to reclaim SOL rent.
+Only usable after swap_all or zap_out succeeds (accounts must be drained first).
+Closing an account with a non-zero balance will cause token loss.`,
+      parameters: {
+        type: "object",
+        properties: {
+          dry_run: {
+            type: "boolean",
+            description: "If true, list accounts without closing"
+          }
+        }
+      }
+    }
+  }
 ];

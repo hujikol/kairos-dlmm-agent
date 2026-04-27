@@ -15,5 +15,6 @@ export {
 } from "./balances.js";
 export {
   autoSwapRewardFees,
+  autoSwapRewardFeesWithClaim,
   swapAllTokensToSol,
 } from "./auto.js";

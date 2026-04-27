@@ -4,6 +4,7 @@ import { swapToken } from "./swaps.js";
 import { normalizeMint } from "./normalize.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
+import { autoClaimSolAccounts } from "./closeAccounts.js";
 
 /**
  * Automatically swap non-SOL tokens (fees or closed principal) to SOL.
@@ -75,6 +76,24 @@ export async function autoSwapRewardFees(mints = null, opts = {}) {
     log("error", "wallet", `Auto-swap failed: ${e.message}`);
     return { success: false, error: e.message };
   }
+}
+
+/**
+ * Same as autoSwapRewardFees but also closes empty token accounts after success.
+ * @param {string[]|null} [mints=null]
+ * @param {Object} [opts={}]
+ * @returns {Promise<Object>}
+ */
+export async function autoSwapRewardFeesWithClaim(mints = null, opts = {}) {
+  const result = await autoSwapRewardFees(mints, opts);
+  if (result.success && result.swapped?.length > 0) {
+    const claimResult = await autoClaimSolAccounts().catch(e => {
+      log("warn", "wallet", `autoClaimSolAccounts failed: ${e.message}`);
+      return { success: false, error: e.message };
+    });
+    result.claim = claimResult;
+  }
+  return result;
 }
 
 /**
