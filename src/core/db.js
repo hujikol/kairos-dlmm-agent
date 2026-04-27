@@ -31,6 +31,8 @@ async function _initDB() {
   _db.run("PRAGMA synchronous = NORMAL");
   _db.run("PRAGMA foreign_keys = ON");
 
+  _db._isWrapper = false;
+  _setRawPrepare();
   _extendDb();
   migrate(_db);
   initSchema(_db);
@@ -64,6 +66,7 @@ function _setRawPrepare() {
     _rawPrepare = _db.prepare.bind(_db);
     // Store direct reference to raw run — NOT bound — to avoid WASM bind context issues
     _rawRun = _db.run;
+    _rawGetRowsModified = _db.getRowsModified.bind(_db);
   }
 }
 
@@ -161,12 +164,12 @@ function _makePreparedStatement(sql) {
 // Attach helpers to _db so callers can use db.all() / db.get() / db.prepare()
 function _extendDb() {
   if (!_db) return;
-  _setRawPrepare();
   _db.all = _all;
   _db.get = _get;
   // Only override prepare() for sql.js (which returns raw stmt objects).
   // better-sqlite3's db.prepare() already returns stmts with .all/.get/.run.
-  if (_isSqlJs) {
+  // For injected wrapper DBs, skip override — helpers already set on wrapper.
+  if (_isSqlJs && !_db._isWrapper) {
     _db.prepare = _makePreparedStatement;
   }
 }
@@ -180,17 +183,17 @@ export function _injectDB(db) {
     try { _db.close(); } catch { log("warn", "db", "failed to close db"); }
   }
   _db = db;
+  _db._isWrapper = true;
   // Detect engine: sql.js Database has ._db property, better-sqlite3 does not
   _isSqlJs = !!db._db;
   if (_isSqlJs) {
-    // Store direct references (not bound) to avoid WASM bind context issues
-    _rawRun = db._db.run;
-    _rawPrepare = db._db.prepare.bind(db._db);
-    _rawGetRowsModified = db._db.getRowsModified.bind(db._db);
+    // Capture raw references BEFORE _extendDb() — use db._raw* if set (injected)
+    _rawRun = db._rawRun ?? db._db.run.bind(db._db);
+    _rawPrepare = db._rawPrepare ?? db._db.prepare.bind(db._db);
+    _rawGetRowsModified = db._rawGetRowsModified ?? db._db.getRowsModified.bind(db._db);
   } else {
-    // better-sqlite3: use db.exec for raw statements, prepare().run/get/all natively
-    _rawRun = null; // not used — better-sqlite3 uses db.exec
-    _rawPrepare = null; // not used — native prepare handles this
+    _rawRun = null;
+    _rawPrepare = null;
   }
   _extendDb();
   // Run migrations and schema init on the injected test DB
@@ -251,7 +254,8 @@ export function migrate(db) {
 // ─── Utility: Check if a column exists in a table ─────────────────────────────
 
 export function tableHasColumn(db, table, column) {
-  const info = _db.prepare(`PRAGMA table_info(${table})`).all();
+  const target = db ?? _db;
+  const info = target.prepare(`PRAGMA table_info(${table})`).all();
   return info.some(col => col.name === column);
 }
 

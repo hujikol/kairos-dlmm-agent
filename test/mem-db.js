@@ -32,15 +32,11 @@ export async function makeMemDB() {
       const upper = sql.trim().toUpperCase();
 
       if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE")) {
-        // Use real sql.js prepared statement so _makePreparedStatement wrapper works correctly
         const rawStmt = db.prepare(sql);
         return {
-          bind(...vals) { rawStmt.bind(vals); return this; },
-          step() {
-            rawStmt.step();
-            return false; // INSERT/UPDATE/DELETE always return false (no rows)
-          },
-          run(...vals) { db.run(sql, vals); },
+          bind(...vals) { rawStmt.bind(...vals); return this; },
+          step() { rawStmt.step(); return false; },
+          run(...vals) { rawStmt.bind(...vals); rawStmt.step(); rawStmt.free(); return { changes: db.getRowsModified(), lastInsertRowid: 0 }; },
           get() { return null; },
           free() { rawStmt.free(); },
           reset() { rawStmt.reset(); },
@@ -56,7 +52,7 @@ export async function makeMemDB() {
         const tableName = tableMatch ? tableMatch[1] : null;
 
         return {
-          bind(...vals) { rawStmt.bind(vals); return this; },
+          bind(...vals) { rawStmt.bind(...vals); return this; },
           step() {
             // Check overlay first for test data injection
             const overlay = wrapper._testRows.get(tableName);
@@ -74,6 +70,16 @@ export async function makeMemDB() {
             }
             return rawStmt.step() ? rawStmt.getAsObject() : null;
           },
+          all() {
+            const overlay = wrapper._testRows.get(tableName);
+            if (overlay && overlay.length > 0) {
+              return overlay;
+            }
+            const rows = [];
+            while (rawStmt.step()) rows.push(rawStmt.getAsObject());
+            rawStmt.free();
+            return rows;
+          },
           free() { rawStmt.free(); },
           reset() { wrapper._resultRow = 0; rawStmt.reset(); },
           getAsObject() { return rawStmt.getAsObject(); },
@@ -82,11 +88,12 @@ export async function makeMemDB() {
         };
       }
 
-      // DDL / other
+      // PRAGMA / DDL / other
       const stmt = {
         bind() { return stmt; },
         step() { return false; },
         run() { db.run(sql); },
+        all() { return []; },
         get() { return null; },
         free() {},
         reset() {},
@@ -103,7 +110,7 @@ export async function makeMemDB() {
     },
 
     close() {
-      // no-op for in-memory test wrapper
+      db.close();
     },
 
     export() {
