@@ -55,6 +55,11 @@
   "trailingTriggerPct": 3,
   "trailingDropPct": 1.5,
   "solMode": false,
+  "autoClaimSolAccounts": false,
+  "autoClaimMinRentSol": 0.001,
+  "autoClaimMaxAccountsPerTx": 20,
+  "autoClaimOnSwapAll": true,
+  "autoClaimOnZapOut": true,
 
   "─── Scheduling ────────────────────────────────────────────────": "",
   "managementIntervalMin": 10,
