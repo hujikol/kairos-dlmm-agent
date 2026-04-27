@@ -242,9 +242,17 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     // Build the strategy + phase prompt block (requires dominantPhase from candidates)
     const strategyNames = phaseStrategies.map(s => s.name).join(", ");
     const phaseBlock = `MARKET PHASE: ${dominantPhase} — ${phaseMeta.description}\nPhase-matched strategies: ${strategyNames}\nToken scores are included per candidate — prefer GOOD or EXCELLENT tokens.`;
-    const strategyBlock = activeStrategy
+    let strategyBlock = activeStrategy
       ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? "config-default"} | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}\n${phaseBlock}`
       : `No active strategy — use default bid_ask, bins_above: ${config.strategy.binsAbove} (from config), SOL only.\n${phaseBlock}`;
+
+    // Inject BB strategy context for volatile market phases
+    if (dominantPhase === "pump" || dominantPhase === "runner" || dominantPhase === "pullback") {
+      strategyBlock += "\nBB STRATEGY: For volatile phases (pump/runner/pullback), consider deploying with Bollinger Band monitoring (period=20, std=2). Activate by adding `strategy=bollinger_band` in deploy — exits on band crossover or band hit.";
+    }
+
+    // Historical bin-learn data available to guide bin selection
+    strategyBlock += "\nBin-learn data available per candidate — check `bin_suggestion` field for median bin configs from prior winning deploys.";
 
     // Inject bin suggestions from historical winners before simulation
     for (const c of passing) {

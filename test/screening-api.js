@@ -11,6 +11,13 @@
 if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
 if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
 
+// Inject test DB before discovery.js loads — prevents getDB() from starting
+// _initDB() which would race with test cleanup (causes unhandled rejections)
+import { makeSchemaDB } from "./mem-db.js";
+import { _injectDB } from "../src/core/db.js";
+const _testDb = await makeSchemaDB();
+_injectDB(_testDb);
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -27,7 +34,7 @@ describe("screening/discovery", () => {
     const { getTopCandidates } = await import("../src/screening/discovery.js");
     // Without valid API keys the call will likely fail/return empty,
     // but the function should accept the parameter without throwing a TypeError
-    assert.doesNotThrow(() => getTopCandidates({ limit: 1 }));
+    await getTopCandidates({ limit: 1 });
   });
 
   it("getPoolDetail requires pool_address parameter", async () => {

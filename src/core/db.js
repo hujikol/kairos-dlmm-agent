@@ -97,8 +97,7 @@ function _get(sql, ...bindParams) {
 /** Run a statement (INSERT/UPDATE/DELETE) and return changes info */
 function _run(sql, ...bindParams) {
   if (_isSqlJs) {
-    // Use _db._db.run directly to avoid wrapper's spread behavior
-    _db._db.run(sql, bindParams);
+    _rawRun(sql, ...bindParams);
     return { changes: _rawGetRowsModified(), lastInsertRowid: 0 };
   } else {
     _db.prepare(sql).run(...bindParams);

@@ -32,17 +32,21 @@ export async function makeMemDB() {
       const upper = sql.trim().toUpperCase();
 
       if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE")) {
-        const stmt = {
-          _runArgs: null,
-          bind(...vals) { this._runArgs = vals; return stmt; },
-          step() { return false; },
-          run(...vals) { db.run(sql, ...vals); },
+        // Use real sql.js prepared statement so _makePreparedStatement wrapper works correctly
+        const rawStmt = db.prepare(sql);
+        return {
+          bind(...vals) { rawStmt.bind(vals); return this; },
+          step() {
+            rawStmt.step();
+            return false; // INSERT/UPDATE/DELETE always return false (no rows)
+          },
+          run(...vals) { db.run(sql, vals); },
           get() { return null; },
-          free() {},
-          reset() {},
+          free() { rawStmt.free(); },
+          reset() { rawStmt.reset(); },
           getRowsModified: () => db.getRowsModified(),
+          _stmt: rawStmt,
         };
-        return stmt;
       }
 
       if (upper.startsWith("SELECT")) {
