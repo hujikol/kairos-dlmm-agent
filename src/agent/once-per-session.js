@@ -7,7 +7,10 @@
 const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_position"]);
 
 // These lock after first attempt regardless of outcome
-const NO_RETRY_TOOLS = new Set(["deploy_position"]);
+// deploy_position is intentionally excluded — failed calls should be retried
+// with corrected parameters (e.g., wrong strategy). The once-per-session block
+// still applies to successful deploys via ONCE_PER_SESSION above.
+const NO_RETRY_TOOLS = new Set([]);
 
 export { ONCE_PER_SESSION, NO_RETRY_TOOLS };
 

@@ -12,13 +12,15 @@
  */
 
 import { getTokenHolders as _getTokenHolders } from "../integrations/jupiter.js";
+import { getTokenSecurity as _gmgnTokenSecurity } from "../integrations/gmgn.js";
 import { isBlacklisted } from "./token-blacklist.js";
 import { isTokenToxic } from "./pool-memory.js";
 import { log } from "../core/logger.js";
+import { CacheManager } from "../core/cache-manager.js";
 
 // ─── Cache ────────────────────────────────────────────────────────
 
-const _cache = new Map();
+const _cache = new CacheManager();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // ─── Test injection for mocking ──────────────────────────────────────
@@ -53,14 +55,11 @@ export function clearTokenSecurityCache() {
 export async function isTokenSafe(tokenMint) {
   if (!tokenMint) return { safe: false, reason: "no mint provided" };
 
-  const now = Date.now();
   const cached = _cache.get(tokenMint);
-  if (cached && (now - cached.ts) < CACHE_TTL_MS) {
-    return cached.result;
-  }
+  if (cached !== undefined) return cached;
 
   const result = await _isTokenSafeImpl(tokenMint);
-  _cache.set(tokenMint, { result, ts: now });
+  _cache.set(tokenMint, result, CACHE_TTL_MS);
   return result;
 }
 
@@ -75,7 +74,28 @@ async function _isTokenSafeImpl(tokenMint) {
     return { safe: false, reason: "token has >66% loss rate in deploy history" };
   }
 
-  // 3. Holder concentration analysis
+  // 3. GMGN token security — honeypot + rug detection (fast, authoritative)
+  let gmgnSecurity = null;
+  try {
+    gmgnSecurity = await _gmgnTokenSecurity(tokenMint);
+  } catch (e) {
+    log("warn", "token-security", `GMGN security check failed for ${tokenMint}: ${e.message}`);
+  }
+
+  if (gmgnSecurity) {
+    if (gmgnSecurity.is_honeypot === true) {
+      return { safe: false, reason: "GMGN honeypot detected (cannot sell)" };
+    }
+    if (gmgnSecurity.rug_probability != null && gmgnSecurity.rug_probability >= 0.7) {
+      return { safe: false, reason: `GMGN rug probability ${(gmgnSecurity.rug_probability * 100).toFixed(0)}% exceeds 70% threshold` };
+    }
+    if (gmgnSecurity.is_mint_authority_revoked === false && gmgnSecurity.initial_mint_supply != null) {
+      // Dev retains mint authority on a fixed-supply token — potential covert mint
+      log("debug", "token-security", `${tokenMint}: mint authority active, checking supply mechanics`);
+    }
+  }
+
+  // 4. Holder concentration analysis
   let holders;
   try {
     if (_testHoldersFn) {

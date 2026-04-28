@@ -6,7 +6,7 @@
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
-import { getTopCandidates } from "../screening/discovery.js";
+import { getTopCandidates, detectOptimalTimeframe } from "../screening/discovery.js";
 import { getActiveBin } from "../integrations/meteora.js";
 import { config, computeDeployAmount, isDryRun } from "../config.js";
 import {
@@ -123,7 +123,9 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       _busyState._screeningBusy = false;
       return null;
     }
-    const minRequired = config.management.deployAmountSol + config.management.gasReserve;
+    const minRequired = config.management.dynamicSizing
+      ? config.management.gasReserve + 0.1
+      : config.management.deployAmountSol + config.management.gasReserve;
     if (preBalance.sol < minRequired && !isDryRun()) {
       log("debug", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
       _busyState._screeningBusy = false;
@@ -176,9 +178,15 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     // Load active strategy (phase info injected later after candidate recon)
     const activeStrategy = await getActiveStrategy();
 
+    // ── Dynamic timeframe detection (runs before pool discovery) ───────────
+    const effectiveTimeframe = await detectOptimalTimeframe();
+    if (effectiveTimeframe !== config.screening.timeframe) {
+      log("info", "cron", `Timeframe auto-detected: ${effectiveTimeframe} (mode: ${config.screening.timeframeMode})`);
+    }
+
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
     const candStart = Date.now();
-    const topCandidates = await getTopCandidates({ limit: 10 }).catch(e => { log("warn", "screening", `getTopCandidates failed: ${e?.message ?? e}`); return null; });
+    const topCandidates = await getTopCandidates({ limit: 10, timeframe: effectiveTimeframe }).catch(e => { log("warn", "screening", `getTopCandidates failed: ${e?.message ?? e}`); return null; });
     log("info", "cron", `[TIMING] getTopCandidates: ${Date.now() - candStart}ms`);
     const candidates = (topCandidates?.candidates || topCandidates?.pools || []).slice(0, 10);
 
@@ -301,6 +309,11 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       const poolName = r.pool_name || r.pool || "unknown";
       log("warn", "screening", `deploy_position returned success=false — overriding LLM text: ${r.error}`);
       screenReport = `*Decision:* NO DEPLOY\n*analysis:* Deploy to ${poolName} failed on-chain. Error: ${r.error || "unknown"}. No position was opened.\n*rejected:* deploy tool returned { success: false, error: ${r.error || "unknown" }}`;
+    } else if (/DEPLOYED/i.test(content) && !partialResult) {
+      // Hallucination guard: LLM wrote "DEPLOYED" but no deploy_position tool was called.
+      // This means the LLM skipped the tool and wrote the text directly — force NO DEPLOY.
+      log("warn", "screening", "LLM wrote DEPLOYED but no deploy_position tool was called — treating as NO DEPLOY");
+      screenReport = "*Decision:* NO DEPLOY\n*analysis:* LLM text claimed deploy but deploy_position was not called. No position was opened.\n*rejected:* hallucination guard triggered.";
     } else {
       screenReport = content;
     }
@@ -314,7 +327,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       // (toolFailed check needed because failed deploys override screenReport to "NO DEPLOY")
       if (screenReport && (/DEPLOYED/i.test(screenReport) || toolFailed === "deploy_position")) {
         const html = formatScreeningNotification(screenReport, passing, activeBinResults, simulations, deployAmount, toolFailed, partialResult);
-        sendHTML(html).catch(() => { });
+        sendHTML(html).catch(e => log("warn", "briefing", `Failed to send HTML: ${e?.message ?? e}`));
       }
     }
   }

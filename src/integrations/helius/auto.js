@@ -87,11 +87,14 @@ export async function autoSwapRewardFees(mints = null, opts = {}) {
 export async function autoSwapRewardFeesWithClaim(mints = null, opts = {}) {
   const result = await autoSwapRewardFees(mints, opts);
   if (result.success && result.swapped?.length > 0) {
-    const claimResult = await autoClaimSolAccounts().catch(e => {
-      log("warn", "wallet", `autoClaimSolAccounts failed: ${e.message}`);
-      return { success: false, error: e.message };
-    });
-    result.claim = claimResult;
+    const shouldClaim = config.management?.autoClaimOnSwapAll ?? true;
+    if (shouldClaim) {
+      const claimResult = await autoClaimSolAccounts().catch(e => {
+        log("warn", "wallet", `autoClaimSolAccounts failed: ${e.message}`);
+        return { success: false, error: e.message };
+      });
+      result.claim = claimResult;
+    }
   }
   return result;
 }

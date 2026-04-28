@@ -127,37 +127,34 @@ export async function recordDecision({
   const pnlUsd = pnl != null && typeof pnl === "object" ? pnl.usd : pnl;
   const pnlPct = pnl != null && typeof pnl === "object" ? pnl.pct : null;
 
-  db.prepare(`
-    INSERT INTO ${TABLE} (
-      timestamp, type, pool_address, pool_name, position_address,
-      amount_sol, pnl_usd, pnl_pct, reasoning, metadata,
-      initiated_by, bin_step, volatility, fee_tvl_ratio, organic_score, strategy
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    timestamp,
-    type,
-    poolAddress || null,
-    poolName || null,
-    position || null,
-    amount ?? null,
-    pnlUsd ?? null,
-    pnlPct ?? null,
-    reasoning || null,
-    JSON.stringify(metadata),
-    initiatedBy,
-    metadata.bin_step ?? null,
-    metadata.volatility ?? null,
-    metadata.fee_tvl_ratio ?? null,
-    metadata.organic_score ?? null,
-    metadata.strategy ?? null,
-  );
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO ${TABLE} (
+        timestamp, type, pool_address, pool_name, position_address,
+        amount_sol, pnl_usd, pnl_pct, reasoning, metadata,
+        initiated_by, bin_step, volatility, fee_tvl_ratio, organic_score, strategy
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      timestamp,
+      type,
+      poolAddress || null,
+      poolName || null,
+      position || null,
+      amount ?? null,
+      pnlUsd ?? null,
+      pnlPct ?? null,
+      reasoning || null,
+      JSON.stringify(metadata),
+      initiatedBy,
+      metadata.bin_step ?? null,
+      metadata.volatility ?? null,
+      metadata.fee_tvl_ratio ?? null,
+      metadata.organic_score ?? null,
+      metadata.strategy ?? null,
+    );
 
-  // Prune old records on every write
-  try {
     pruneOldRecords(db);
-  } catch (e) {
-    log("warn", "decision-log", `Prune failed: ${e.message}`);
-  }
+  })();
 }
 
 /**

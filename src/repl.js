@@ -16,7 +16,6 @@ import {
   getBalanceData,
   getCandidatesData,
   getThresholdsData,
-  triggerScreen,
   getSwapAllResult,
 } from "./core/shared-handlers.js";
 
@@ -34,6 +33,22 @@ export function launchCron() {
     startWatchdog(config).catch(e => log("error", "startup", `Watchdog failed to start: ${e?.message ?? String(e)}`));
     console.log("Autonomous cycles are now running.\n");
   }
+}
+
+// ─── Deploy result hallucination override ──────────────────────────
+// Detects when the LLM reports "DEPLOYED" but deploy_position actually failed.
+// Replaces hallucinated text with the real on-chain result.
+function detectAndOverrideDeployResult(result) {
+  const content = result.content || "";
+  const { partialResult, toolFailed } = result;
+  if (toolFailed === "deploy_position" && partialResult?.result) {
+    const r = partialResult.result;
+    const poolName = r.pool_name || r.pool || "unknown";
+    const errorMsg = r.error || "unknown";
+    log("warn", "repl", `deploy_position returned success=false — overriding LLM DEPLOYED text: ${errorMsg}`);
+    return `❌ DEPLOY FAILED\nPool: ${poolName}\nError: ${errorMsg}\nNo position was opened.`;
+  }
+  return content;
 }
 
 // ─── REPL busy guard ───────────────────────────────────────────────────────────
@@ -118,10 +133,12 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
       await runBusy(async () => {
         const pool = startupCandidates[pick - 1];
         console.log(`\nDeploying ${config.management.deployAmountSol} SOL into ${pool.name}...\n`);
-        const { content: reply } = await agentLoop(
+        const result = await agentLoop(
           `Deploy ${config.management.deployAmountSol} SOL into pool ${pool.pool} (${pool.name}). Call get_active_bin first then deploy_position. Report result.`,
           config.llm.maxSteps, [], "SCREENER", null, null, { requireTool: true }
         );
+        // Override hallucinated DEPLOYED text with real on-chain result
+        const reply = detectAndOverrideDeployResult(result);
         console.log(`\n${reply}\n`);
         launchCron();
       });
@@ -131,10 +148,11 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
     if (input.toLowerCase() === "auto") {
       await runBusy(async () => {
         console.log("\nAgent is picking and deploying...\n");
-        const { content: reply } = await agentLoop(
+        const result = await agentLoop(
           `get_top_candidates, pick the best one, get_active_bin, deploy_position with ${config.management.deployAmountSol} SOL. Execute now, don't ask.`,
           config.llm.maxSteps, [], "SCREENER", null, null, { requireTool: true }
         );
+        const reply = detectAndOverrideDeployResult(result);
         console.log(`\n${reply}\n`);
         launchCron();
       });
@@ -142,8 +160,10 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
     }
 
     if (input.toLowerCase() === "screen" || input.toLowerCase() === "/screen") {
-      triggerScreen();
-      console.log("\nManual screening cycle started.\n");
+      console.log("\nRunning screening cycle...\n");
+      const { runScreeningCycle } = await import("./core/cycles.js");
+      const result = await runScreeningCycle({ silent: false });
+      console.log(result ? `\n${result}\n` : "\nScreening complete.\n");
       rl.prompt();
       return;
     }
@@ -216,7 +236,7 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
     }
 
     if (input === "/thresholds") {
-      const { screening, performance } = getThresholdsData();
+      const { screening, performance } = await getThresholdsData();
       const s = screening;
       console.log("\nCurrent screening thresholds:");
       console.log(`  minFeeActiveTvlRatio: ${s.minFeeActiveTvlRatio}`);
@@ -230,6 +250,7 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
       console.log(`  maxBotHoldersPct:     ${s.maxBotHoldersPct}`);
       console.log(`  maxTop10Pct:          ${s.maxTop10Pct}`);
       console.log(`  timeframe:            ${s.timeframe}`);
+      console.log(`  timeframeMode:       ${s.timeframeMode || "fixed"}`);
       if (performance) {
         console.log(`\n  Based on ${performance.total_positions_closed} closed positions`);
         console.log(`  Win rate: ${performance.win_rate_pct}%  |  Avg PnL: ${performance.avg_pnl_pct}%`);

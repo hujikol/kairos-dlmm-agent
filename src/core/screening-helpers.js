@@ -129,7 +129,7 @@ export function buildCandidateBlocks(passing, activeBinResults, simulations, _ =
       n?.narrative ? `  narrative: ${n.narrative.slice(0, 500)}` : `  narrative: none`,
       mem ? `  memory: ${mem}` : null,
       indicators ? `${indicators}` : null,
-      passing[i]?.binSuggestion ? `  bin_suggestion: lower=${passing[i].binSuggestion.lowerBin}-${passing[i].binSuggestion.upperBin} (${passing[i].binSuggestion.totalBins} bins from ${passing[i].binSuggestion.sampleSize} winners)` : null,
+      passing[i]?.binSuggestion ? `  bin_suggestion: lower=${passing[i].binSuggestion.lower_bin}-${passing[i].binSuggestion.upper_bin} (${passing[i].binSuggestion.total_bins} bins from ${passing[i].binSuggestion.sample_size} winners)` : null,
     ].filter(Boolean).join("\n");
 
     return block;

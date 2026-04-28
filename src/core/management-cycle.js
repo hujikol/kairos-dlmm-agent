@@ -40,24 +40,40 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
   log("debug", "cron", "Starting management cycle");
   let mgmtReport = null;
   let positions = [];
+  let positionData = null;
 
   try {
     // Daily PnL circuit breaker
     const pnl = await getDailyPnL();
     const circuit = await checkDailyCircuitBreaker();
-    log("info", "daily-pnl", `Circuit breaker: ${circuit.action} (realized: ${pnl.realized?.toFixed(2) ?? "N/A"} USD, reason: ${circuit.reason || "normal"})`);
+    log("info", "daily-pnl", "Circuit breaker: " + circuit.action + " (realized: " + (pnl.realized?.toFixed(2) ?? "N/A") + " USD, reason: " + (circuit.reason || "normal") + ")");
     if (circuit.action === "halt") {
-      log("warn", "daily-pnl", `CIRCUIT BREAKER: daily loss limit hit — skipping new deployments this cycle`);
-      captureAlert(`CIRCUIT BREAKER HALT: daily loss limit hit (realized PnL: ${pnl.realized?.toFixed(2) ?? "N/A"} USD)`);
+      log("warn", "daily-pnl", "CIRCUIT BREAKER: daily loss limit hit — skipping new deployments this cycle");
+      captureAlert("CIRCUIT BREAKER HALT: daily loss limit hit (realized PnL: " + (pnl.realized?.toFixed(2) ?? "N/A") + " USD)");
       // Still manage existing positions (close/claim) in halt mode
     }
 
     const posStart = Date.now();
-    const [livePositions, currentBalance] = await Promise.all([
-      getMyPositions({ force: true }).catch(e => { log("warn", "cron", `getMyPositions failed: ${e?.message ?? e}`); return null; }),
-      getWalletBalances(),
+    const [posResult, balResult] = await Promise.all([
+      getMyPositions({ force: true }).catch(e => {
+        log("warn", "cron", "getMyPositions failed: " + (e?.message ?? e));
+        return { _failed: true, _error: e?.message ?? String(e) };
+      }),
+      getWalletBalances().catch(e => {
+        log("warn", "cron", "getWalletBalances failed: " + (e?.message ?? e));
+        return { _failed: true, _error: e?.message ?? String(e) };
+      }),
     ]);
-    log("info", "cron", `[TIMING] getMyPositions + getWalletBalances: ${Date.now() - posStart}ms`);
+    const livePositions = posResult?._failed ? null : posResult;
+    const currentBalance = balResult?._failed ? null : balResult;
+    if (posResult?._failed && balResult?._failed) {
+      throw new Error("Both positions and balance fetches failed: " + posResult._error + "; " + balResult._error);
+    } else if (posResult?._failed) {
+      log("warn", "cron", "Proceeding with null positions — balance fetch succeeded");
+    } else if (balResult?._failed) {
+      log("warn", "cron", "Proceeding with null balance — positions fetch succeeded");
+    }
+    log("info", "cron", "[TIMING] getMyPositions + getWalletBalances: " + (Date.now() - posStart) + "ms");
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
@@ -66,12 +82,12 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
         if (runScreeningCycle) {
           const p = runScreeningCycle();
           if (p && typeof p.catch === "function") {
-            p.catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+            p.catch((e) => { log("error", "cron", "Triggered screening failed: " + (e?.message ?? e)); });
           }
         } else {
           log("error", "cron", "Screening cycle module missing runScreeningCycle export");
         }
-      }).catch(e => log("error", "cron", `Failed to load screening cycle: ${e?.message ?? e}`));
+      }).catch(e => log("error", "cron", "Failed to load screening cycle: " + (e?.message ?? e)));
       return null;
     }
 
@@ -87,7 +103,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       const exit = await updatePnlAndCheckExits(p.position, p, config);
       if (exit) {
         exitMap.set(p.position, exit.reason);
-        log("info", "state", `Exit alert for ${p.pair}: ${exit.reason}`);
+        log("info", "state", "Exit alert for " + p.pair + ": " + exit.reason);
       }
 
       // Loss Streak tracking
@@ -96,7 +112,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
       if (!isOOR && isNegative) {
         incrementStreak(p.position);
-        log("debug", "loss-streak", `${p.pair}: streak ${getStreak(p.position)}`);
+        log("debug", "loss-streak", p.pair + ": streak " + getStreak(p.position));
       } else {
         resetStreak(p.position);
       }
@@ -151,7 +167,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     for (const p of closeActions) {
       const act = actionMap.get(p.position);
       const reason = act.reason || "agent decision";
-      log("info", "cron", `Direct CLOSE: ${p.pair} (${p.position}) — ${reason}`);
+      log("info", "cron", "Direct CLOSE: " + p.pair + " (" + p.position + ") — " + reason);
       try {
         const result = await closePosition({ position_address: p.position, reason });
         if (result.success !== false) {
@@ -162,21 +178,21 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
             pnlPct: result.pnl_pct ?? p.pnl_pct ?? 0,
             reason,
           });
-          mgmtReport += `\n✅ Closed ${p.pair}: ${reason} (PnL: ${result.pnl_pct ?? p.pnl_pct ?? "?"}%)`;
+          mgmtReport += "\n✅ Closed " + p.pair + ": " + reason + " (PnL: " + (result.pnl_pct ?? p.pnl_pct ?? "?") + "%)";
         } else {
-          log("error", "cron", `Direct CLOSE failed for ${p.pair}: ${result.error}`);
-          mgmtReport += `\n❌ Close failed ${p.pair}: ${result.error}`;
+          log("error", "cron", "Direct CLOSE failed for " + p.pair + ": " + result.error);
+          mgmtReport += "\n❌ Close failed " + p.pair + ": " + result.error;
         }
       } catch (e) {
         const errMsg = e?.message ?? String(e);
-        log("error", "cron", `Direct CLOSE error for ${p.pair}: ${errMsg}`);
-        mgmtReport += `\n❌ Close error ${p.pair}: ${errMsg}`;
+        log("error", "cron", "Direct CLOSE error for " + p.pair + ": " + errMsg);
+        mgmtReport += "\n❌ Close error " + p.pair + ": " + errMsg;
       }
     }
 
     // Direct claim execution — bypasses LLM entirely
     for (const p of claimActions) {
-      log("info", "cron", `Direct CLAIM: ${p.pair} (${p.position})`);
+      log("info", "cron", "Direct CLAIM: " + p.pair + " (" + p.position + ")");
       try {
         const result = await claimFees({ position_address: p.position });
         if (result.success !== false) {
@@ -185,30 +201,30 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
             pair: p.pair,
             usd: p.unclaimed_fees_usd ?? 0,
           });
-          mgmtReport += `\n💰 Claimed fees ${p.pair}: $${(p.unclaimed_fees_usd ?? 0).toFixed(2)}`;
+          mgmtReport += "\n💰 Claimed fees " + p.pair + ": $" + (p.unclaimed_fees_usd ?? 0).toFixed(2);
         } else {
-          log("warn", "cron", `Direct CLAIM failed for ${p.pair}: ${result.error}`);
+          log("warn", "cron", "Direct CLAIM failed for " + p.pair + ": " + result.error);
         }
       } catch (e) {
         const errMsg = e?.message ?? String(e);
-        log("error", "cron", `Direct CLAIM error for ${p.pair}: ${errMsg}`);
+        log("error", "cron", "Direct CLAIM error for " + p.pair + ": " + errMsg);
       }
     }
 
     // Only INSTRUCTION actions go to LLM (require interpretation)
     if (instructionActions.length > 0) {
-      log("debug", "cron", `Management: ${instructionActions.length} INSTRUCTION action(s) — invoking LLM`);
+      log("debug", "cron", "Management: " + instructionActions.length + " INSTRUCTION action(s) — invoking LLM");
 
       const cur = config.management.solMode ? "◎" : "$";
       const actionBlocks = instructionActions.map((p) => {
         const _act = actionMap.get(p.position);
         return [
-          `POSITION: ${p.pair} (${p.position})`,
-          `  pool: ${p.pool}`,
-          `  action: INSTRUCTION`,
-          `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd} | fee_per_tvl_24h: ${p.fee_per_tvl_24h ?? "?"}%`,
-          `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
-          `  instruction: "${p.instruction}"`,
+          "POSITION: " + p.pair + " (" + p.position + ")",
+          "  pool: " + p.pool,
+          "  action: INSTRUCTION",
+          "  pnl_pct: " + p.pnl_pct + "% | unclaimed_fees: " + cur + (p.unclaimed_fees_usd ?? "?") + " | value: " + cur + (p.total_value_usd ?? "?") + " | fee_per_tvl_24h: " + (p.fee_per_tvl_24h ?? "?") + "%",
+          "  bins: lower=" + p.lower_bin + " upper=" + p.upper_bin + " active=" + p.active_bin + " | oor_minutes: " + (p.minutes_out_of_range ?? 0),
+          "  instruction: \"" + (p.instruction ?? "") + "\"",
         ].filter(Boolean).join("\n");
       }).join("\n\n");
 
@@ -219,7 +235,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
         livePositions,
       });
 
-      mgmtReport += `\n\n${content}`;
+      mgmtReport += "\n\n" + content;
     } else if (closeActions.length === 0 && claimActions.length === 0) {
       log("debug", "cron", "Management: all positions STAY — skipping");
     }
@@ -242,32 +258,32 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       import("./screening-cycle.js").then(({ runScreeningCycle }) => {
         // Re-check to avoid race: if another call set _timersState.screeningLastTriggered while we were waiting for the lock
         if (_timersState.screeningLastTriggered !== lastTriggeredAt) {
-          log("debug", "cron", `Post-management screening skipped — already triggered by concurrent call`);
+          log("debug", "cron", "Post-management screening skipped — already triggered by concurrent call");
         } else if (runScreeningCycle) {
-          log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
+          log("info", "cron", "Post-management: " + afterCount + "/" + config.risk.maxPositions + " positions — triggering screening");
           const p = runScreeningCycle();
           if (p && typeof p.catch === "function") {
-            p.catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
+            p.catch((e) => { log("error", "cron", "Triggered screening failed: " + (e?.message ?? e)); });
           }
         } else {
           log("error", "cron", "Screening cycle module missing runScreeningCycle export");
         }
       }).catch(e => {
         _busyState._screeningBusy = false;
-        log("error", "cron", `Failed to import screening cycle: ${e?.message ?? String(e)}`);
+        log("error", "cron", "Failed to import screening cycle: " + (e?.message ?? String(e)));
       });
     }
 
   } catch (error) {
-    log("error", "cron", `Management cycle failed: ${error?.message ?? String(error)}`);
-    mgmtReport = `Management cycle failed: ${error?.message ?? String(error)}`;
+    log("error", "cron", "Management cycle failed: " + (error?.message ?? String(error)));
+    mgmtReport = "Management cycle failed: " + (error?.message ?? String(error));
   } finally {
     const finallyStart = Date.now();
-    log("info", "cron", `Management cycle finally block entered after ${finallyStart - cycleStart}ms`);
+    log("info", "cron", "Management cycle finally block entered after " + (finallyStart - cycleStart) + "ms");
     _busyState._managementBusy = false;
-    log("info", "cron", `Management cycle complete: ${finallyStart - cycleStart}ms total`);
-    // Drain queued Telegram commands after releasing the busy flag (fire-and-forget)
-    drainTelegramQueue();
+    log("info", "cron", "Management cycle complete: " + (finallyStart - cycleStart) + "ms total");
+    // Drain queued Telegram commands after releasing the busy flag
+    drainTelegramQueue().catch(e => { const m = e?.message ?? String(e); log("warn", "cron", "Telegram drain failed: " + m); });
     if (!silent && telegramIsEnabled()) {
       // Batch OOR positions
       const oorPositions = positions.filter(
@@ -292,13 +308,13 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       if (!isAllHealthy || mgmtReport) {
         buildAndSendConsolidatedReport({ mgmtReport, oorPositions, positions });
       }
-      log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (report sent)`);
+      log("info", "cron", "Management cycle finally complete: " + (Date.now() - finallyStart) + "ms (report sent)");
     } else {
-      log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (silent or telegram disabled)`);
+      log("info", "cron", "Management cycle finally complete: " + (Date.now() - finallyStart) + "ms (silent or telegram disabled)");
     }
 
     // Persist BB state for positions that have bb_params
-    for (const p of positionData) {
+    for (const p of positionData ?? []) {
       if (p?.position && p?.signal_snapshot?.bb_params) {
         persistBbState(p.position, p.signal_snapshot);
       }

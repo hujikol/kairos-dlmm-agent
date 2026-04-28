@@ -66,6 +66,8 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
   const loopStartedAt = Date.now();
   // Track meaningful on-chain results so we can return partial progress on MAX_REACT_DEPTH
   let lastMeaningfulResult = null;
+  // Holds final answer text from LLM — used in max-steps return paths
+  let content = null;
 
   for (let step = 0; step < effectiveMaxSteps; step++) {
     const elapsed = Date.now() - loopStartedAt;
@@ -137,6 +139,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         }
         log("info", "agent", "Final answer reached");
         log("info", "agent", msg.content);
+        content = msg.content;
         return { content: msg.content, userMessage: goal };
       }
       sawToolCall = true;

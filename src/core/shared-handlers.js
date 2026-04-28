@@ -9,7 +9,7 @@ import { config } from "../config.js";
 import { getPerformanceSummary } from "./lessons.js";
 import { generateBriefing } from "../notifications/briefing.js";
 import { runScreeningCycle } from "./cycles.js";
-import { swapAllTokensToSol } from "../integrations/helius.js";
+import { autoSwapRewardFeesWithClaim } from "../integrations/helius.js";
 
 // ─── /status ───────────────────────────────────────────────────────────────────
 export async function getStatusData() {
@@ -46,10 +46,10 @@ export async function getCandidatesData({ limit = 5 } = {}) {
 }
 
 // ─── /thresholds ───────────────────────────────────────────────────────────────
-export function getThresholdsData() {
+export async function getThresholdsData() {
   const s = config.screening;
   const m = config.management;
-  const perf = getPerformanceSummary(); // intentionally not awaited — runs in async context
+  const perf = await getPerformanceSummary();
   return {
     screening: {
       minFeeActiveTvlRatio: s.minFeeActiveTvlRatio,
@@ -58,11 +58,15 @@ export function getThresholdsData() {
       minTvl: s.minTvl,
       maxTvl: s.maxTvl,
       minVolume: s.minVolume,
+      minMcap: s.minMcap,
+      maxMcap: s.maxMcap,
       minTokenFeesSol: s.minTokenFeesSol,
       maxBundlePct: s.maxBundlePct,
       maxBotHoldersPct: s.maxBotHoldersPct,
       maxTop10Pct: s.maxTop10Pct,
+      minTokenAgeHours: s.minTokenAgeHours,
       timeframe: s.timeframe,
+      timeframeMode: s.timeframeMode,
     },
     management: {
       deployAmountSol: m.deployAmountSol,
@@ -76,6 +80,7 @@ export function getThresholdsData() {
       trailingTriggerPct: m.trailingTriggerPct,
       trailingDropPct: m.trailingDropPct,
       outOfRangeWaitMinutes: m.outOfRangeWaitMinutes,
+      dynamicSizing: m.dynamicSizing,
     },
     performance: perf,   // { total_positions_closed, win_rate_pct, avg_pnl_pct } or null
   };
@@ -94,7 +99,7 @@ export function triggerScreen() {
 
 // ─── /swap-all ─────────────────────────────────────────────────────────────────
 export async function getSwapAllResult() {
-  return swapAllTokensToSol();
+  return autoSwapRewardFeesWithClaim(null, { forceRefresh: true });
 }
 
 // ─── /positions (for Telegram) ─────────────────────────────────────────────────

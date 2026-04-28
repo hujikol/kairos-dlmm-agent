@@ -98,8 +98,13 @@ export async function startCronJobs() {
       try {
         await runManagementCycle();
       } catch (e) {
-        captureError(e, { phase: "management_cycle" });
-        log("error", "scheduler", `Management cycle error: ${e?.message ?? String(e)}`);
+        try {
+          captureError(e, { phase: "management_cycle" });
+        } catch (e1) {
+          console.error("Sentry capture failed: " + (e1?.message ?? String(e1)));
+        }
+        const msg = e?.message ?? String(e);
+        log("error", "scheduler", "Management cycle error: " + msg);
       }
     }
   );
@@ -111,8 +116,8 @@ export async function startCronJobs() {
       try {
         await runScreeningCycle();
       } catch (e) {
-        captureError(e, { phase: "screening_cycle" });
-        log("error", "scheduler", `Screening cycle error: ${e?.message ?? String(e)}`);
+        try { captureError(e, { phase: "screening_cycle" }); } catch (e1) { console.error("Sentry capture failed: " + (e1?.message ?? String(e1))); }
+        log("error", "scheduler", "Screening cycle error: " + (e?.message ?? String(e)));
       }
     }
   );

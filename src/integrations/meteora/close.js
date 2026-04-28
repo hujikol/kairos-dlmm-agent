@@ -10,12 +10,14 @@ import { normalizeMint } from "../helius/normalize.js";
 import { getPool, getWallet, getDLMM, getConnection, sendTx, lookupPoolForPosition } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { invalidatePositionsCache } from "./positions.js";
+import { positionPnlUrl } from "./url-helpers.js";
 import { positionsCache, poolCache } from "../../core/cache-manager.js";
 import { retryWithFixedDelay } from "../../core/retry.js";
 import { claimAndSweepSol } from "../solana/close-accounts.js";
 import { isFlagEnabled } from "../../core/feature-flags.js";
 import { swapToken } from "../helius/swaps.js";
 import { swapWithRetry } from "../helius/swaps.js";
+import { minutesAgo } from "../../core/time.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
 
@@ -225,7 +227,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
         },
       },
     );
-  } catch {}
+  } catch (e) { log("warn", "close", `step failed: ${e?.message ?? e}`); }
 
   if (!confirmed) {
     return {
@@ -239,7 +241,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
     };
   }
 
-  recordClose(position_address, reason || "agent decision");
+  await recordClose(position_address, reason || "agent decision");
 
   if (!tracked) {
     await recordPerformance({
@@ -271,13 +273,13 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   const minutesHeld = Math.floor((Date.now() - deployedAt) / 60000);
   let minutesOOR = 0;
   if (tracked.out_of_range_since) {
-    minutesOOR = Math.floor((Date.now() - new Date(tracked.out_of_range_since).getTime()) / 60000);
+    minutesOOR = minutesAgo(tracked.out_of_range_since);
   }
 
   let pnlUsd = 0, pnlPct = 0, finalValueUsd = 0, initialUsd = 0;
   let feesUsd = tracked.total_fees_claimed_usd || 0;
   try {
-    const closedUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
+    const closedUrl = positionPnlUrl(poolAddress, wallet.publicKey.toString(), "closed", 50, 1);
     const res = await fetch(closedUrl);
     if (res.ok) {
       const data = await res.json();
@@ -359,7 +361,8 @@ async function closePositionFresh(position_address, wallet, reason) {
     const myPos = allPositions.find(p => p.publicKey.toString() === position_address);
     if (!myPos) {
       log("warn", "close", `Fresh scan: position ${position_address} not found — already closed on-chain`);
-      recordClose(position_address, reason || "externally_closed");
+      log("warn", "close", `Fresh scan: position ${position_address} not found — already closed on-chain`);
+      await recordClose(position_address, reason || "externally_closed");
       // Record performance with zero values for externally closed positions
       const fallbackPool = tracked?.pool || null;
       await recordPerformance({
@@ -371,8 +374,7 @@ async function closePositionFresh(position_address, wallet, reason) {
         amount_sol: tracked?.amount_sol || 0, fees_earned_usd: tracked?.total_fees_claimed_usd || 0,
         final_value_usd: 0, initial_value_usd: tracked?.initial_value_usd || 0,
         minutes_in_range: 0,
-        minutes_held: tracked?.deployed_at
-          ? Math.floor((Date.now() - new Date(tracked.deployed_at).getTime()) / 60000) : 0,
+        minutes_held: tracked?.deployed_at ? minutesAgo(tracked.deployed_at) : 0,
         close_reason: reason || "externally_closed",
         signal_snapshot: tracked?.signal_snapshot || null,
         base_mint: tracked?.base_mint || null,
@@ -556,7 +558,7 @@ export async function closePosition({ position_address, reason }) {
       return await closePositionFresh(position_address, wallet, reason);
     }
 
-    recordClose(position_address, reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"));
+    await recordClose(position_address, reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"));
     // Record performance for verified externally closed positions
     const trackedVerify = getTrackedPosition(position_address);
     if (trackedVerify) {
@@ -569,7 +571,7 @@ export async function closePosition({ position_address, reason }) {
         amount_sol: trackedVerify.amount_sol ?? 0, fees_earned_usd: trackedVerify.total_fees_claimed_usd || 0,
         final_value_usd: 0, initial_value_usd: trackedVerify.initial_value_usd || 0,
         minutes_in_range: 0, minutes_held: trackedVerify.deployed_at
-          ? Math.floor((Date.now() - new Date(trackedVerify.deployed_at).getTime()) / 60000) : 0,
+          ? minutesAgo(trackedVerify.deployed_at) : 0,
         close_reason: reason || (actuallyClosed ? "externally_closed" : "close_failed_on_reverify"),
         signal_snapshot: trackedVerify.signal_snapshot || null,
         base_mint: trackedVerify.base_mint || null,

@@ -173,7 +173,7 @@ STEPS:
       "SCREENER",
       effectiveModel,
       2048,
-      { portfolio: preBalance, positions: prePositions }
+      { portfolio: preBalance, positions: prePositions, requireTool: true }
     ).then(({ content, partialResult, toolFailed }) => ({ content, partialResult, toolFailed }));
   }
 }

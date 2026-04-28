@@ -33,7 +33,10 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
   for (const p of positionData) {
     // Hard exit — highest priority
     if (exitMap.has(p.position)) {
-      actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
+      const rawExit = exitMap.get(p.position);
+      // exitMap stores: string (OOR reason) or object {action, reason, ...}
+      const reason = typeof rawExit === "string" ? rawExit : (rawExit?.reason ?? String(rawExit));
+      actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason });
       continue;
     }
 
@@ -158,7 +161,14 @@ export function buildManagementReport(positionData, actionMap, positions, config
 export async function autoSwapAndNotify(executedActions) {
   if (executedActions.length === 0) return;
   log("info", "post_trade", `${executedActions.length} action(s) executed — checking for fee tokens to swap`);
-  const swapResult = await autoSwapRewardFeesWithClaim(null, { forceRefresh: true });
+  // Extract unique mints from executed close/claim actions to swap only earned tokens
+  const earnedMints = [];
+  for (const a of executedActions) {
+    if (a.mint) earnedMints.push(a.mint);
+    if (a.quoteMint) earnedMints.push(a.quoteMint);
+  }
+  const uniqueMints = [...new Set(earnedMints.filter(Boolean))];
+  const swapResult = await autoSwapRewardFeesWithClaim(uniqueMints.length > 0 ? uniqueMints : null, { forceRefresh: true });
   if (swapResult.swapped && swapResult.swapped.length > 0) {
     log("info", "post_trade", `Swapped ${swapResult.swapped.length} token(s) to SOL`);
     for (const swap of swapResult.swapped) {
@@ -181,6 +191,15 @@ export async function autoSwapAndNotify(executedActions) {
       }
     }
   }
+  // Notify claim results (rent reclamation from empty token accounts)
+  if (swapResult.claim && swapResult.claim.totalRecovered > 0) {
+    pushNotification({
+      type: "claim_rent",
+      usd: swapResult.claim.totalRecovered,
+      closed: swapResult.claim.closed,
+      failed: swapResult.claim.failed,
+    });
+  }
 }
 
 // ─── Consolidated notification report ────────────────────────────────────────
@@ -193,7 +212,7 @@ export function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, posit
   const closes = notes.filter((n) => n.type === "close");
   const swaps = notes.filter((n) => n.type === "swap");
   const deploys = notes.filter((n) => n.type === "deploy");
-  const oors = notes.filter((n) => n.type === "oor");
+  const _oors = notes.filter((n) => n.type === "oor");
   const claims = notes.filter((n) => n.type === "claim");
 
   const now = new Date();
@@ -238,12 +257,12 @@ export function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, posit
     );
   }
 
-  // OOR alerts
-  const allOors = [...oors];
-  if (allOors.length > 0) {
-    const headerParts = [allOors.length === 1 ? "Out of Range" : `Out of Range — ${allOors.length} positions`];
+  // OOR alerts — use param (already queued) to avoid duplication with notes queue
+  const oorAlerts = (oorPositions ?? []).filter(Boolean);
+  if (oorAlerts.length > 0) {
+    const headerParts = [oorAlerts.length === 1 ? "Out of Range" : `Out of Range — ${oorAlerts.length} positions`];
     parts.push(`\n⚠️ <b>${headerParts}</b>`);
-    for (const o of allOors) {
+    for (const o of oorAlerts) {
       const feeStr = o.feeTvl != null ? ` | fee/TVL ${o.feeTvl}%` : "";
       parts.push(`  • ${escapeHTMLLocal(o.pair)} | OOR ${o.minutesOOR}m${feeStr}`);
     }
