@@ -134,7 +134,7 @@ export function getStrategyConfig() {
   return Object.freeze({
     strategy:  s.strategy  ?? "bid_ask",
     binsBelow: s.binsBelow ?? 69,
-    binsAbove: s.binsAbove ?? 5,
+    binsAbove: s.binsAbove ?? 0,
   });
 }
 

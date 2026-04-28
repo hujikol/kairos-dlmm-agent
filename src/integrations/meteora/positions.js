@@ -11,6 +11,7 @@ import {
   minutesOutOfRange,
   syncOpenPositions,
 } from "../../core/state/index.js";
+import { minutesAgo } from "../../core/time.js";
 import { config, isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
@@ -25,7 +26,7 @@ import {
   sendTx,
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
-import { METEORA_POSITIONS_CACHE_TTL_MS } from "../../core/constants.js";
+import { METEORA_POSITIONS_CACHE_TTL_MS, BB_DEFAULT_PERIOD, BB_DEFAULT_STDDEV } from "../../core/constants.js";
 import { getMintBalance } from "../helius/balances.js";
 import { swapWithRetry, swapToken } from "../helius/swaps.js";
 
@@ -34,6 +35,7 @@ import { swapWithRetry, swapToken } from "../helius/swaps.js";
 const DEFAULT_SLIPPAGE_BPS = 10;
 import { positionsCache } from "../../core/cache-manager.js";
 import { roundTo } from "../../utils/round.js";
+import { portfolioUrl } from "./url-helpers.js";
 
 // ─── Positions cache ──────────────────────────────────────────────
 export const POSITIONS_CACHE_TTL = METEORA_POSITIONS_CACHE_TTL_MS;
@@ -106,7 +108,7 @@ export async function deployPosition({
   const activeStrategy = strategy || config.strategy.strategy;
 
   const activeBinsBelow = Number(bins_below ?? config.strategy.binsBelow);
-  const activeBinsAbove = Number(bins_above ?? config.strategy.binsAbove ?? 5);
+  const activeBinsAbove = Number(bins_above ?? config.strategy.binsAbove ?? 0);
 
   if (isPoolOnCooldown(pool_address)) {
     log("debug", "deploy", `Pool ${addrShort(pool_address)} is on cooldown (closed for low yield) — skipping`);
@@ -171,6 +173,13 @@ export async function deployPosition({
     const finalAmountY = amount_y ?? amount_sol ?? 0;
     const finalAmountX = amount_x ?? 0;
     const fakePosition = "dry_" + addrShort(pool_address) + "_" + Date.now();
+    // BB strategy signal snapshot for dry-run tracking
+    let drySignalSnapshot = null;
+    if (strategy_id === "bollinger_band") {
+      drySignalSnapshot = {
+        bb_params: { period: BB_DEFAULT_PERIOD, stdDev: BB_DEFAULT_STDDEV, timeframe: "15m", entry_mode: "mean_reversion", max_hold_minutes: 240, enable_time_stop: true, position_side: "long" },
+      };
+    }
     trackPosition({
       position: fakePosition,
       pool: pool_address,
@@ -188,6 +197,7 @@ export async function deployPosition({
       base_mint,
       market_phase,
       strategy_id,
+      signal_snapshot: drySignalSnapshot,
     });
     updatePositionStatus(fakePosition, "active");
     return {
@@ -217,6 +227,13 @@ export async function deployPosition({
   // Sanity check: range must contain the active bin (prevent bearish setup on bullish intent)
   if (maxBinId <= activeBin.binId) {
     const errMsg = `Invalid bin range: maxBinId=${maxBinId} <= activeBin=${activeBin.binId} — range would be entirely below current price and go OOR immediately. Override by explicitly setting bins_above > 0.`;
+    log("error", "deploy", errMsg);
+    return { success: false, error: errMsg };
+  }
+
+  // bid_ask strategy requires bins_above=0 — reject early before DLMM call
+  if (activeStrategy === "bid_ask" && activeBinsAbove > 0) {
+    const errMsg = `bid_ask strategy requires bins_above=0 (range is entirely below active bin). For asymmetric ranges with bins above the current price, use strategy="spot" instead.`;
     log("error", "deploy", errMsg);
     return { success: false, error: errMsg };
   }
@@ -301,6 +318,22 @@ export async function deployPosition({
 
     positionsCache.delete("positions");
     const newPositionKey = newPosition.publicKey.toString();
+    // When deploying BB strategy, store bb_params in signal_snapshot
+      let signal_snapshot = null;
+      if (strategy_id === "bollinger_band") {
+        signal_snapshot = {
+          bb_params: {
+            period: BB_DEFAULT_PERIOD,
+            stdDev: BB_DEFAULT_STDDEV,
+            timeframe: "15m",
+            entry_mode: "mean_reversion",
+            max_hold_minutes: 240,
+            enable_time_stop: true,
+            position_side: "long",
+          },
+        };
+      }
+
     trackPosition({
       position: newPositionKey,
       pool: pool_address,
@@ -318,6 +351,7 @@ export async function deployPosition({
       base_mint,
       market_phase,
       strategy_id,
+      signal_snapshot,
     });
     updatePositionStatus(newPositionKey, "active");
 
@@ -418,8 +452,8 @@ async function _fetchPositionsFromMeteora({ walletAddress, force: _force, silent
   let _meteoraHadError = false;
   if (!silent) log("debug", "positions", "Fetching portfolio via Meteora portfolio API...");
   try {
-    const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
-    const res = await fetch(portfolioUrl);
+    const url = portfolioUrl(walletAddress);
+    const res = await fetch(url);
     if (res.ok) {
       const portfolio = await res.json();
       pools = portfolio.pools || [];
@@ -510,7 +544,7 @@ async function _enrichPositionsWithPnL(pools, { walletAddress, silent: _silent }
       const activeBin = binData?.poolActiveBinId  ?? tracked?.bin_range?.active ?? null;
 
       const ageFromState = tracked?.deployed_at
-        ? Math.floor((Date.now() - new Date(tracked.deployed_at).getTime()) / 60000)
+        ? minutesAgo(tracked.deployed_at)
         : null;
 
       positions.push({
@@ -548,7 +582,7 @@ async function _enrichPositionsWithPnL(pools, { walletAddress, silent: _silent }
           ? parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)
           : parseFloat(pool.unclaimedFees || 0)), 4),
         fee_per_tvl_24h:    roundTo(parseFloat(binData?.feePerTvl24h || pool.feePerTvl24h || 0), 2),
-        age_minutes:        binData?.createdAt ? Math.floor((Date.now() - binData.createdAt * 1000) / 60000) : ageFromState,
+        age_minutes:        binData?.createdAt ? minutesAgo(binData.createdAt * 1000) : ageFromState,
         minutes_out_of_range: minutesOutOfRange(positionAddress),
         instruction:        tracked?.instruction ?? null,
       });
@@ -574,6 +608,9 @@ async function _syncPositionsWithState(positions, { walletAddress }) {
 
 // ─── getMyPositions ─────────────────────────────────────────────────
 
+// Shared in-flight promise for call deduplication — must remain at module scope
+let _positionsInflight = null;
+
 /**
  * Get all open Meteora DLMM positions for the configured wallet.
  * Uses a 5-minute cache by default; pass force=true to bypass.
@@ -598,7 +635,8 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     }
   }
 
-  let inflight = null;
+  // Deduplication: return already-in-flight promise instead of spawning a new one
+  if (_positionsInflight) return _positionsInflight;
 
   let walletAddress;
   try {
@@ -608,11 +646,9 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     return { wallet: null, total_positions: 0, positions: [], error: "Wallet not configured" };
   }
 
-  if (inflight) return inflight;
-
   const ctx = { walletAddress, force, silent };
 
-  inflight = (async () => { try {
+  _positionsInflight = (async () => { try {
     // Step 1: fetch raw pools from Meteora API / relay fallback
     const { pools } = await _fetchPositionsFromMeteora(ctx);
 
@@ -625,10 +661,10 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     log("error", "positions", `Portfolio fetch failed: ${error.stack || error.message}`);
     return { wallet: walletAddress, total_positions: 0, positions: [], error: error.message };
   } finally {
-    inflight = null;
+    _positionsInflight = null;
   }
   })();
-  return inflight;
+  return _positionsInflight;
 }
 
 // ─── getWalletPositions ────────────────────────────────────────────
@@ -674,7 +710,7 @@ export async function getWalletPositions({ wallet_address }) {
         total_value_usd:    Math.round((p ? parseFloat(p.unrealizedPnl?.balances || 0) : 0) * 100) / 100,
         pnl_usd:            Math.round((p?.pnlUsd ?? 0) * 100) / 100,
         pnl_pct:            Math.round((p?.pnlPctChange ?? 0) * 100) / 100,
-        age_minutes:        p?.createdAt ? Math.floor((Date.now() - p.createdAt * 1000) / 60000) : null,
+        age_minutes:        p?.createdAt ? minutesAgo(p.createdAt * 1000) : null,
       };
     });
 

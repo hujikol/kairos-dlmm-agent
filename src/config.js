@@ -13,7 +13,7 @@ export const SECTION_MAP = {
     "minTvl", "maxTvl", "minVolume", "minBinStep", "maxBinStep", "timeframe",
     "category", "minTokenFeesSol", "maxBundlePct", "maxBotHoldersPct",
     "maxTop10Pct", "blockedLaunchpads", "minTokenAgeHours", "maxTokenAgeHours",
-    "athFilterPct", "slippageBps", "screeningCooldownMs", "balanceCacheTtlMs",
+    "athFilterPct", "slippageBps", "screeningCooldownMs", "balanceCacheTtlMs", "timeframeMode",
   ],
   management: [
     "minClaimAmount", "autoSwapAfterClaim", "autoSwapAfterClose",
@@ -29,7 +29,7 @@ export const SECTION_MAP = {
     "dualPool.maxRetries", "dualPool.gasBuffer",
     "zapOutToSol", "zapOutMaxRetries",
     "autoClaimSolAccounts", "autoClaimMinRentSol", "autoClaimMaxAccountsPerTx",
-    "autoClaimOnSwapAll", "autoClaimOnZapOut",
+    "autoClaimOnSwapAll", "autoClaimOnZapOut", "dynamicSizing",
   ],
   risk: [
     "maxPositions", "dailyProfitTarget", "dailyLossLimit", "maxPositionsPerToken",
@@ -105,6 +105,12 @@ if (u.llmApiKey)  process.env.LLM_API_KEY        ??= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN  ??= String(u.dryRun);
 if (u.publicApiKey)          process.env.PUBLIC_API_KEY           ??= u.publicApiKey;
 if (u.agentMeridianApiUrl)   process.env.AGENT_MERIDIAN_API_URL ??= u.agentMeridianApiUrl;
+	if (u.lpAgentRelayEnabled !== undefined) process.env.LPAGENT_RELAY_ENABLED ??= String(u.lpAgentRelayEnabled);
+
+	// Map AGENT_MERIDIAN_API_KEY → PUBLIC_API_KEY for backward compat
+	if (process.env.AGENT_MERIDIAN_API_KEY && !process.env.PUBLIC_API_KEY) {
+	  process.env.PUBLIC_API_KEY = process.env.AGENT_MERIDIAN_API_KEY;
+	}
 
 import { SOL_MINT, USDC_MINT, USDT_MINT } from "./constants.js";
 
@@ -162,6 +168,7 @@ const _rawConfig = {
     slippageBps:        u.screening?.slippageBps        ?? 300,
     screeningCooldownMs: u.screening?.screeningCooldownMs ?? 300_000,
     balanceCacheTtlMs:  u.screening?.balanceCacheTtlMs ?? 300_000,
+    timeframeMode:       u.screening?.timeframeMode       ?? "fixed", // "fixed" | "auto"
   },
 
   // ─── Position Management ────────────────
@@ -209,6 +216,7 @@ const _rawConfig = {
     autoClaimMaxAccountsPerTx: u.management?.autoClaimMaxAccountsPerTx ?? 20,
     autoClaimOnSwapAll:   u.management?.autoClaimOnSwapAll     ?? true,
     autoClaimOnZapOut:    u.management?.autoClaimOnZapOut      ?? true,
+    dynamicSizing:        u.management?.dynamicSizing          ?? true,
   },
 
   // ─── OKX ────────────────────────────────
@@ -237,7 +245,7 @@ const _rawConfig = {
   strategy: {
     strategy:  u.strategy?.strategy  ?? u.strategy  ?? "bid_ask",
     binsBelow: u.strategy?.binsBelow ?? u.binsBelow ?? 69,
-    binsAbove: u.strategy?.binsAbove ?? u.binsAbove ?? 5,
+    binsAbove: u.strategy?.binsAbove ?? u.binsAbove ?? 0,
   },
 
   // ─── Scheduling ─────────────────────────
@@ -267,16 +275,40 @@ const _rawConfig = {
     USDC: USDC_MINT,
     USDT: USDT_MINT,
   },
+
+  // ─── Centralized env-backed values ───
+  rpcUrl:              process.env.RPC_URL            || null,
+  walletPrivateKey:     process.env.WALLET_PRIVATE_KEY || null,
+  heliusApiKey:         process.env.HELIUS_API_KEY     || null,
+  jupiterDatapiBase:   process.env.JUPITER_DATAPI_BASE_URL     || null,
+  jupiterUltraApi:     process.env.JUPITER_ULTRA_API_URL       || null,
+  jupiterQuoteApi:     process.env.JUPITER_QUOTE_API_URL       || null,
+  poolDiscoveryApiBase: process.env.POOL_DISCOVERY_API_BASE   || null,
+  useDiscordSignals:   process.env.USE_DISCORD_SIGNALS        || null,
+  discordSignalMode:   process.env.DISCORD_SIGNAL_MODE       || null,
+  cavemanEnabled:      u.cavemanEnabled ?? false,
 };
+
+const KNOWN_INHERITED = new Set(["toJSON", "valueOf", "hasOwnProperty", "constructor", "prototype", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__", "__proto__"]);
 
 export const config = new Proxy(_rawConfig, {
   get(target, prop) {
     ensureValidated();
+    if (!Object.hasOwn(target, prop)) {
+      if (!KNOWN_INHERITED.has(String(prop))) {
+        log("warn", "config", `Accessing undefined config key: "${String(prop)}"`);
+      }
+      return undefined;
+    }
     const val = target[prop];
     if (val && typeof val === "object") {
       return new Proxy(val, {
         get(subTarget, subProp) {
           ensureValidated();
+          const subPropStr = String(subProp);
+          if (!Object.hasOwn(subTarget, subProp) && !KNOWN_INHERITED.has(subPropStr)) {
+            log("warn", "config", `Accessing undefined config key: "${String(prop)}.${subPropStr}"`);
+          }
           return subTarget[subProp];
         },
       });
@@ -299,22 +331,32 @@ export const config = new Proxy(_rawConfig, {
  * Amounts are clamped to wallet balance minus gasReserve.
  */
 const SIZING_MATRIX = {
-  very_high: { 0: 1.50, 1: 1.00, other: 1.00 },
-  high:      { 0: 1.00, 1: 1.00, other: 1.00 },
-  normal:    { any: 0.50 },
+  // Fractions of deployable SOL (walletSol - gasReserve)
+  // Used when dynamicSizing = true
+  very_high: { 0: 0.40, 1: 0.30, other: 0.25 },
+  high:      { 0: 0.30, 1: 0.25, other: 0.20 },
+  normal:    { any: 0.15 },
 };
 
 export function computeDeployAmount(walletSol, openPositions = 0, conviction = "normal") {
-  const reserve  = config.management.gasReserve  ?? 0.2;
+  const reserve    = config.management.gasReserve  ?? 0.2;
   const deployable = Math.max(0, walletSol - reserve);
   if (deployable <= 0) return { amount: 0, error: "Insufficient SOL after gas reserve" };
 
-  const level = SIZING_MATRIX[conviction] ?? SIZING_MATRIX.normal;
-  // For very_high: use 1.05 if 0 positions, otherwise 0.70
+  const level  = SIZING_MATRIX[conviction] ?? SIZING_MATRIX.normal;
   const target = level[openPositions] ?? level.other ?? level.any;
 
+  let amount;
+  if (config.management.dynamicSizing) {
+    // Fraction of deployable SOL
+    amount = Math.max(0.05, parseFloat((deployable * target).toFixed(2)));
+  } else {
+    // Legacy fixed-SOL sizing
+    amount = Math.min(target, deployable);
+  }
+
   const ceil = Math.min(config.management.maxDeployAmount, deployable);
-  const amount = Math.min(ceil, target);
+  amount = Math.min(ceil, amount);
   if (amount < 0.1) return { amount: 0, error: `Insufficient SOL: only ${deployable.toFixed(2)} SOL available after reserve` };
 
   return { amount: parseFloat(amount.toFixed(2)), error: null };
