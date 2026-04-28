@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 /**
  * Integration tests for concurrent cycle guards and positions cache deduplication.
  *
@@ -7,7 +9,7 @@
  * 3. _busyState flags are reset after a cycle completes
  * 4. getMyPositions() _positionsInflight deduplication - concurrent calls share one promise
  *
- * Run: WALLET_PRIVATE_KEY="[]" node --test test/concurrent-cycles.js
+ * Run: node --test test/concurrent-cycles.js
  */
 
 import { test, describe } from "node:test";

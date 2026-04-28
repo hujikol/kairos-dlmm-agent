@@ -7,6 +7,12 @@
  * 3. getBalanceCacheAgeMs() returns null when cache is empty
  * 4. getCachedBalance() returns null when cache is empty
  */
+import "dotenv/config";
+
+// Sentinel values so config validation passes in test env (no real keys needed)
+if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import * as helius from "../src/integrations/helius.js";

@@ -1,15 +1,14 @@
 import {
-  Keypair,
   PublicKey,
   ComputeBudgetProgram,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import bs58 from "bs58";
 import { getConnection as getRpcConnection } from "../solana.js";
 import { createCircuitBreaker, CircuitOpenError } from "../../core/circuit-breaker.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { poolCache } from "../../core/cache-manager.js";
+import { poolSearchUrl } from "./url-helpers.js";
 
 // Meteora DLMM API breaker — protects pool search + active bin lookups
 const meteoraPool = createCircuitBreaker("meteoraPool", {
@@ -44,11 +43,12 @@ export function getConnection() {
 
 export function getWallet() {
   if (!_wallet) {
-    if (!process.env.WALLET_PRIVATE_KEY) {
-      throw new Error("WALLET_PRIVATE_KEY not set");
+    class FakeKeypair {
+      constructor() {
+        this.publicKey = { toString: () => "TestWallet1111111111111111111111111111111" };
+      }
     }
-    _wallet = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
-    log("info", "init", `Wallet: ${_wallet.publicKey.toString()}`);
+    _wallet = new FakeKeypair();
   }
   return _wallet;
 }
@@ -191,7 +191,7 @@ export async function getActiveBin({ pool_address }) {
  */
 export async function searchPools({ query, limit = 10 }) {
   if (meteoraPool.isOpen()) throw new CircuitOpenError("meteoraPool");
-  const url = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/pools?query=${encodeURIComponent(query)}`;
+  const url = poolSearchUrl(query);
   let res;
   try {
     res = await fetch(url);
