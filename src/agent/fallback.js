@@ -30,7 +30,7 @@ export async function callWithRetry(client, model, messages, tools, options = {}
         model: usedModel,
         messages,
         tools,
-        tool_choice: options.toolChoice ?? "auto",
+        tool_choice: options.toolChoice ?? "required",
         temperature: options.temperature,
         max_tokens: options.maxTokens,
       });
