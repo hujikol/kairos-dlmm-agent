@@ -349,7 +349,7 @@ export function computeDeployAmount(walletSol, openPositions = 0, conviction = "
   let amount;
   if (config.management.dynamicSizing) {
     // Fraction of deployable SOL
-    amount = Math.max(0.05, parseFloat((deployable * target).toFixed(2)));
+    amount = Math.max(0.5, parseFloat((deployable * target).toFixed(2)));
   } else {
     // Legacy fixed-SOL sizing
     amount = Math.min(target, deployable);
