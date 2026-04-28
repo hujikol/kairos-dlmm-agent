@@ -283,7 +283,8 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     _busyState._managementBusy = false;
     log("info", "cron", "Management cycle complete: " + (finallyStart - cycleStart) + "ms total");
     // Drain queued Telegram commands after releasing the busy flag
-    drainTelegramQueue().catch(e => { const m = e?.message ?? String(e); log("warn", "cron", "Telegram drain failed: " + m); });
+    // drainTelegramQueue() is synchronous — no .catch() needed
+    try { drainTelegramQueue(); } catch(e) { log("warn", "cron", "Telegram drain failed: " + (e?.message ?? String(e))); }
     if (!silent && telegramIsEnabled()) {
       // Batch OOR positions
       const oorPositions = positions.filter(
