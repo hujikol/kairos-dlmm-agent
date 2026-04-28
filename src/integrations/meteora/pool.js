@@ -1,8 +1,10 @@
 import {
+  Keypair,
   PublicKey,
   ComputeBudgetProgram,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import bs58 from "bs58";
 import { getConnection as getRpcConnection } from "../solana.js";
 import { createCircuitBreaker, CircuitOpenError } from "../../core/circuit-breaker.js";
 import { log } from "../../core/logger.js";
@@ -40,9 +42,6 @@ let _wallet = null;
 export function getConnection() {
   return getRpcConnection("confirmed");
 }
-
-import { Keypair } from "@solana/web3.js";
-import bs58 from "bs58";
 
 export function getWallet() {
   if (!_wallet) {
