@@ -41,14 +41,16 @@ export function getConnection() {
   return getRpcConnection("confirmed");
 }
 
+import { Keypair } from "@solana/web3.js";
+import bs58 from "bs58";
+
 export function getWallet() {
   if (!_wallet) {
-    class FakeKeypair {
-      constructor() {
-        this.publicKey = { toString: () => "TestWallet1111111111111111111111111111111" };
-      }
+    if (!process.env.WALLET_PRIVATE_KEY) {
+      throw new Error("WALLET_PRIVATE_KEY not set");
     }
-    _wallet = new FakeKeypair();
+    _wallet = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
+    log("info", "init", `Wallet: ${_wallet.publicKey.toString()}`);
   }
   return _wallet;
 }
