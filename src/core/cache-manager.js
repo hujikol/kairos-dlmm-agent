@@ -1,7 +1,7 @@
 /**
  * Centralized TTL cache with named instances for positions, pools, and balances.
  */
-class CacheManager {
+export class CacheManager {
   #store = new Map();
 
   get(key) {

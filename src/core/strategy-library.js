@@ -98,6 +98,10 @@ const DEFAULT_STRATEGIES = {
   },
 };
 
+function jsonOrNull(value) {
+  return value === undefined ? null : JSON.stringify(value);
+}
+
 async function ensureDefaultStrategies() {
   let db;
   try { db = await getDB(); } catch { return; } // db not ready, skip
@@ -111,8 +115,8 @@ async function ensureDefaultStrategies() {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           id, s.name, s.author, s.lp_strategy,
-          JSON.stringify(s.token_criteria), JSON.stringify(s.entry),
-          JSON.stringify(s.range), JSON.stringify(s.exit),
+          jsonOrNull(s.token_criteria), jsonOrNull(s.entry),
+          jsonOrNull(s.range), jsonOrNull(s.exit),
           s.best_for, new Date().toISOString(), new Date().toISOString()
         );
       }

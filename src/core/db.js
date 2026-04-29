@@ -16,16 +16,24 @@ let _db = null;
 let _initPromise = null;
 let _transactionDepth = 0;
 let _isSqlJs = true; // true = sql.js, false = better-sqlite3
+let _dbGeneration = 0;
 
-async function _initDB() {
+async function _initDB(generation) {
   const SQL = await initSqlJs();
+  if (generation !== _dbGeneration || _db) return;
 
   let data;
   if (fsSync.existsSync(DB_PATH)) {
     data = fsSync.readFileSync(DB_PATH);
   }
 
-  _db = new SQL.Database(data);
+  const db = new SQL.Database(data);
+  if (generation !== _dbGeneration || _db) {
+    db.close();
+    return;
+  }
+
+  _db = db;
   _isSqlJs = true;
   _db.run("PRAGMA journal_mode = WAL");
   _db.run("PRAGMA synchronous = NORMAL");
@@ -47,7 +55,7 @@ async function _initDB() {
  */
 export function getDB() {
   if (_db) return _db;
-  if (!_initPromise) _initPromise = _initDB();
+  if (!_initPromise) _initPromise = _initDB(_dbGeneration);
   // Return unresolved promise — caller must await this specific call
   return _initPromise.then(() => _db);
 }
@@ -61,11 +69,14 @@ let _rawRun = null;
 // Raw Database.getRowsModified — used for statement run() return value
 let _rawGetRowsModified = null;
 
+function _normalizeBindParams(bindParams) {
+  return bindParams.map((value) => value === undefined ? null : value);
+}
+
 function _setRawPrepare() {
   if (_isSqlJs) {
     _rawPrepare = _db.prepare.bind(_db);
-    // Store direct reference to raw run — NOT bound — to avoid WASM bind context issues
-    _rawRun = _db.run;
+    _rawRun = _db.run.bind(_db);
     _rawGetRowsModified = _db.getRowsModified.bind(_db);
   }
 }
@@ -74,7 +85,7 @@ function _setRawPrepare() {
 function _all(sql, ...bindParams) {
   if (_isSqlJs) {
     const stmt = _rawPrepare(sql);
-    if (bindParams.length > 0) stmt.bind(bindParams);
+    if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
     const rows = [];
     while (stmt.step()) rows.push(stmt.getAsObject());
     stmt.free();
@@ -88,7 +99,7 @@ function _all(sql, ...bindParams) {
 function _get(sql, ...bindParams) {
   if (_isSqlJs) {
     const stmt = _rawPrepare(sql);
-    if (bindParams.length > 0) stmt.bind(bindParams);
+    if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
     const row = stmt.step() ? stmt.getAsObject() : null;
     stmt.free();
     return row;
@@ -100,7 +111,11 @@ function _get(sql, ...bindParams) {
 /** Run a statement (INSERT/UPDATE/DELETE) and return changes info */
 function _run(sql, ...bindParams) {
   if (_isSqlJs) {
-    _rawRun(sql, ...bindParams);
+    if (bindParams.length > 0) {
+      _rawRun(sql, _normalizeBindParams(bindParams));
+    } else {
+      _rawRun(sql);
+    }
     return { changes: _rawGetRowsModified(), lastInsertRowid: 0 };
   } else {
     _db.prepare(sql).run(...bindParams);
@@ -139,20 +154,20 @@ function _makePreparedStatement(sql) {
   const stmt = _rawPrepare(sql);
   return {
     all: (...bindParams) => {
-      if (bindParams.length > 0) stmt.bind(bindParams);
+      if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
       const rows = [];
       while (stmt.step()) rows.push(stmt.getAsObject());
       stmt.free();
       return rows;
     },
     get: (...bindParams) => {
-      if (bindParams.length > 0) stmt.bind(bindParams);
+      if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
       const row = stmt.step() ? stmt.getAsObject() : null;
       stmt.free();
       return row;
     },
     run: (...bindParams) => {
-      if (bindParams.length > 0) stmt.bind(bindParams);
+      if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
       stmt.step();
       stmt.free();
       return { changes: _rawGetRowsModified(), lastInsertRowid: 0 };
@@ -183,12 +198,14 @@ export function _injectDB(db) {
     try { _db.close(); } catch { log("warn", "db", "failed to close db"); }
   }
   _db = db;
+  _initPromise = null;
+  _dbGeneration++;
   _db._isWrapper = true;
   // Detect engine: sql.js Database has ._db property, better-sqlite3 does not
   _isSqlJs = !!db._db;
   if (_isSqlJs) {
     // Capture raw references BEFORE _extendDb() — use db._raw* if set (injected)
-    _rawRun = db._rawRun ?? db._db.run.bind(db._db);
+    _rawRun = db._rawRun ?? db._db?.run.bind(db._db) ?? db.run?.bind(db);
     _rawPrepare = db._rawPrepare ?? db._db.prepare.bind(db._db);
     _rawGetRowsModified = db._rawGetRowsModified ?? db._db.getRowsModified.bind(db._db);
   } else {
@@ -287,12 +304,35 @@ export function initSchema(db) {
  */
 export async function closeDB() {
   if (_db) {
-    if (_isSqlJs) {
-      fsSync.writeFileSync(DB_PATH, _db.export());
-    }
-    _db.close();
+    const db = _db;
     _db = null;
     _initPromise = null;
+    _dbGeneration++;
+    _rawPrepare = null;
+    _rawRun = null;
+    _rawGetRowsModified = null;
+    _transactionDepth = 0;
+
+    try {
+      if (_isSqlJs && typeof db.export === "function") {
+        fsSync.writeFileSync(DB_PATH, db.export());
+      }
+    } catch (e) {
+      const msg = e?.message ?? String(e);
+      if (!/database closed/i.test(msg)) {
+        throw e;
+      }
+      log("warn", "db", "Database was already closed; skipping final export");
+    }
+
+    try {
+      db.close();
+    } catch (e) {
+      const msg = e?.message ?? String(e);
+      if (!/database closed/i.test(msg)) {
+        throw e;
+      }
+    }
   }
 }
 

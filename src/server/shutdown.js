@@ -7,28 +7,38 @@ import { log } from "../core/logger.js";
 
 let _promptRefreshInterval = null;
 let _healthServer = null;
+let _shutdownPromise = null;
 
 async function shutdown(signal) {
-  log("info", "shutdown", `Received ${signal}. Shutting down...`);
-  clearInterval(_promptRefreshInterval);
-  stopCronJobs();
-  stopWatchdog();
-  if (_healthServer) _healthServer.close();
+  if (_shutdownPromise) return _shutdownPromise;
 
-  await Promise.race([
-    Promise.all([
-      stopPolling(),
-      getMyPositions().catch(() => []),
-    ]),
-    new Promise(r => setTimeout(r, 10_000)),
-  ]);
+  _shutdownPromise = (async () => {
+    log("info", "shutdown", `Received ${signal}. Shutting down...`);
+    clearInterval(_promptRefreshInterval);
+    stopCronJobs();
+    stopWatchdog();
+    if (_healthServer) _healthServer.close();
 
-  await closeDB();
-  process.exit(0);
+    await Promise.race([
+      Promise.all([
+        stopPolling(),
+        getMyPositions().catch(() => []),
+      ]),
+      new Promise(r => setTimeout(r, 10_000)),
+    ]);
+
+    await closeDB();
+    process.exit(0);
+  })().catch((e) => {
+    log("error", "shutdown", `Shutdown failed: ${e?.message ?? String(e)}`);
+    process.exit(1);
+  });
+
+  return _shutdownPromise;
 }
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => { shutdown("SIGINT").catch(() => {}); });
+process.on("SIGTERM", () => { shutdown("SIGTERM").catch(() => {}); });
 
 export function setHealthServer(server) {
   _healthServer = server;

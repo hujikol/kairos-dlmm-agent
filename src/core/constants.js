@@ -61,6 +61,10 @@ export const MS_PER_DAY = 86_400_000;
 // ─── Position Age & Yield ─────────────────────────────────────────
 export const MIN_POSITION_AGE_FOR_YIELD_CHECK_MS = 86_400_000; // 24 hours in ms
 
+// ─── Bollinger Bands ─────────────────────────────────────────────
+export const BB_DEFAULT_PERIOD = 20;
+export const BB_DEFAULT_STDDEV = 2.0;
+
 // ─── Screener ─────────────────────────────────────────────────────
 export const SCREENING_COOLDOWN_MS = 300_000; // 5-minute cooldown between scans
 export const CANDIDATES_RATE_LIMIT_DELAY_MS = 150; // ms delay between candidate fetches

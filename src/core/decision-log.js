@@ -8,7 +8,7 @@
  *   - Records older than 30 days on every write
  */
 
-import { getDB } from "./db.js";
+import { getDB, runTransaction } from "./db.js";
 import { log } from "./logger.js";
 
 const TABLE = "decision_log";
@@ -127,7 +127,7 @@ export async function recordDecision({
   const pnlUsd = pnl != null && typeof pnl === "object" ? pnl.usd : pnl;
   const pnlPct = pnl != null && typeof pnl === "object" ? pnl.pct : null;
 
-  db.transaction(() => {
+  runTransaction(() => {
     db.prepare(`
       INSERT INTO ${TABLE} (
         timestamp, type, pool_address, pool_name, position_address,
@@ -154,7 +154,7 @@ export async function recordDecision({
     );
 
     pruneOldRecords(db);
-  })();
+  });
 }
 
 /**

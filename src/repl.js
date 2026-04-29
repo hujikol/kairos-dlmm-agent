@@ -29,7 +29,10 @@ export let cronStarted = false;
 export function launchCron() {
   if (!cronStarted) {
     cronStarted = true;
-    startCronJobs();
+    startCronJobs().catch((e) => {
+      cronStarted = false;
+      log("error", "startup", `Cron failed to start: ${e?.message ?? String(e)}`);
+    });
     startWatchdog(config).catch(e => log("error", "startup", `Watchdog failed to start: ${e?.message ?? String(e)}`));
     console.log("Autonomous cycles are now running.\n");
   }
@@ -185,7 +188,7 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
       return;
     }
 
-    if (input === "/stop") { await shutdown("user command"); return; }
+    if (input === "/stop") { await _shutdown("user command"); return; }
 
     if (input === "/status") {
       await runBusy(async () => {
@@ -322,5 +325,5 @@ export function setupReplLineHandler(_buildPrompt, _shutdown, _runScreeningCycle
     });
   });
 
-  rl.on("close", () => shutdown("stdin closed"));
+  rl.on("close", () => { _shutdown("stdin closed").catch(() => {}); });
 }

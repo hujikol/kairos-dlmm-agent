@@ -17,24 +17,104 @@ export const client = new OpenAI({
   timeout: LLM_TIMEOUT_MS,
 });
 
+function contentToText(content) {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function foldSystemMessages(messages) {
+  const folded = [];
+  let pendingSystem = [];
+
+  for (const message of messages) {
+    if (message.role === "system") {
+      const text = contentToText(message.content);
+      if (text) pendingSystem.push(text);
+      continue;
+    }
+
+    if (pendingSystem.length > 0 && message.role === "user") {
+      folded.push({
+        ...message,
+        content: `[System instructions]\n${pendingSystem.join("\n\n")}\n\n[User]\n${contentToText(message.content)}`,
+      });
+      pendingSystem = [];
+      continue;
+    }
+
+    if (pendingSystem.length > 0) {
+      folded.push({
+        role: "user",
+        content: `[System instructions]\n${pendingSystem.join("\n\n")}`,
+      });
+      pendingSystem = [];
+    }
+    folded.push(message);
+  }
+
+  if (pendingSystem.length > 0) {
+    folded.push({
+      role: "user",
+      content: `[System instructions]\n${pendingSystem.join("\n\n")}`,
+    });
+  }
+
+  return folded;
+}
+
+function isSystemRoleError(err) {
+  const text = `${err?.message ?? err} ${err?.response?.data?.error?.message ?? ""}`;
+  return /invalid message role:\s*system|role:\s*system/i.test(text);
+}
+
+function shouldFoldSystemByDefault() {
+  if (process.env.LLM_SYSTEM_ROLE === "system") return false;
+  if (process.env.LLM_SYSTEM_ROLE === "user") return true;
+  return /minimax/i.test(process.env.LLM_BASE_URL || "") || /minimax/i.test(process.env.LLM_MODEL || "");
+}
+
+function isMiniMaxProvider() {
+  return /minimax/i.test(process.env.LLM_BASE_URL || "") || /minimax/i.test(process.env.LLM_MODEL || "");
+}
+
+function defaultToolChoice() {
+  return isMiniMaxProvider() ? "auto" : "required";
+}
+
 /**
  * Attempt an API call with up to 3 retries and model fallback on 502/503/529.
  * Returns { response, usedModel }.
  */
 export async function callWithRetry(client, model, messages, tools, options = {}) {
   let usedModel = model || DEFAULT_MODEL;
+  let foldSystem = shouldFoldSystemByDefault();
   for (let attempt = 0; attempt < 3; attempt++) {
     let response;
     try {
-      response = await client.chat.completions.create({
+      const payload = {
         model: usedModel,
-        messages,
-        tools,
-        tool_choice: options.toolChoice ?? "required",
+        messages: foldSystem ? foldSystemMessages(messages) : messages,
         temperature: options.temperature,
         max_tokens: options.maxTokens,
-      });
+      };
+      if (tools?.length) {
+        payload.tools = tools;
+        payload.tool_choice = options.toolChoice ?? defaultToolChoice();
+      }
+
+      response = await client.chat.completions.create(payload);
     } catch (err) {
+      if (!foldSystem && isSystemRoleError(err)) {
+        foldSystem = true;
+        log("warn", "agent", "LLM provider rejected system role; retrying with system instructions folded into user messages");
+        attempt--;
+        continue;
+      }
       // Network error, JSON parse failure, etc. — retry all of them
       log("warn", "agent", `LLM call attempt ${attempt + 1} failed: ${err?.message ?? err}. Retrying...`);
       if (attempt < 2) {
