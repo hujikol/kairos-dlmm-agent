@@ -21,7 +21,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { _injectDB } from "../src/core/db.js";
 
-import { clearPerformance } from "../src/core/lessons.js";
+import { clearPerformance } from "../src/core/lesson-repo.js";
 import { _injectTrackedPosition } from "../src/core/state/index.js";
 import { _injectPool, _injectSendTx } from "../src/integrations/meteora/pool.js";
 import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";

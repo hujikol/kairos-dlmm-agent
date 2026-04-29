@@ -9,6 +9,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+process.env.WALLET_PRIVATE_KEY = "dummy";
+process.env.RPC_URL = "http://localhost";
+
 // Discover internal filter logic by testing observable behavior
 describe("screening/discovery", () => {
   it("exports discoverPools, getTopCandidates, getPoolDetail", async () => {
@@ -19,10 +22,12 @@ describe("screening/discovery", () => {
   });
 
   it("getTopCandidates accepts limit parameter", async () => {
-    const { getTopCandidates } = await import("../src/screening/discovery.js");
-    // Without valid API keys the call will likely fail/return empty,
-    // but the function should accept the parameter without throwing a TypeError
-    assert.doesNotThrow(() => getTopCandidates({ limit: 1 }));
+    const { getTopCandidates, _injectDiscovery } = await import("../src/screening/discovery.js");
+    const { _injectPositionsCache } = await import("../src/integrations/meteora/positions.js");
+    _injectDiscovery({ pools: [] });
+    _injectPositionsCache({ wallet: "TestWallet", total_positions: 0, positions: [] });
+    const result = await getTopCandidates({ limit: 1 });
+    assert.ok(Array.isArray(result.candidates));
   });
 
   it("getPoolDetail requires pool_address parameter", async () => {

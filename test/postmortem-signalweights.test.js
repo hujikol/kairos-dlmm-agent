@@ -6,6 +6,7 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { getDB } from '../src/core/db.js';
+import { it } from 'node:test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,6 +19,7 @@ function _delay(ms) {
 // ─── Tests ─────────────────────────────────────────────────────────
 
 await it('postmortem.js can be imported without error', async () => {
+  await getDB();
   const pm = await import('../src/core/postmortem.js');
   if (typeof pm.analyzeClose !== 'function') throw new Error('analyzeClose not exported');
   if (typeof pm.getActiveRules !== 'function') throw new Error('getActiveRules not exported');
@@ -39,7 +41,7 @@ await it('loadRules() returns an array (empty or with rules)', async () => {
   clearRules();
 
   const { getActiveRules } = await import('../src/core/postmortem.js');
-  const rules = getActiveRules();
+  const rules = await getActiveRules();
   if (!Array.isArray(rules)) throw new Error(`loadRules() returned ${typeof rules}, expected array`);
 });
 
@@ -59,11 +61,11 @@ await it('loadWeights() returns an object with required keys', async () => {
 });
 
 await it('postmortem_rules table has correct schema', async () => {
-  const db = getDB();
+  const db = await getDB();
 
   // ensure the table exists by triggering loadRules
   const { getActiveRules } = await import('../src/core/postmortem.js');
-  getActiveRules();
+  await getActiveRules();
 
   const cols = db.prepare('PRAGMA table_info(postmortem_rules)').all();
   const colMap = Object.fromEntries(cols.map(c => [c.name, c]));
@@ -80,7 +82,7 @@ await it('postmortem_rules table has correct schema', async () => {
 });
 
 await it('signal_weights table has correct schema', async () => {
-  const db = getDB();
+  const db = await getDB();
 
   const cols = db.prepare('PRAGMA table_info(signal_weights)').all();
   const colMap = Object.fromEntries(cols.map(c => [c.name, c]));
@@ -94,7 +96,7 @@ await it('signal_weights table has correct schema', async () => {
 });
 
 await it('signal_weights_history table has correct schema', async () => {
-  const db = getDB();
+  const db = await getDB();
 
   const cols = db.prepare('PRAGMA table_info(signal_weights_history)').all();
   const colMap = Object.fromEntries(cols.map(c => [c.name, c]));
@@ -111,7 +113,7 @@ await it('saveRules() persists rules to DB and loadRules() retrieves them', asyn
   const { clearRules} = await import('../src/core/postmortem.js');
   clearRules();
 
-  const db = getDB();
+  const db = await getDB();
   db.prepare(`
     INSERT OR REPLACE INTO postmortem_rules
       (key, type, strategy, bin_step_range, volatility_range, hours_utc, evidence, severity, description, created_at)
@@ -129,7 +131,8 @@ await it('saveRules() persists rules to DB and loadRules() retrieves them', asyn
     new Date().toISOString()
   );
 
-  const rules = getActiveRules();
+  const { getActiveRules } = await import('../src/core/postmortem.js');
+  const rules = await getActiveRules();
   if (!Array.isArray(rules)) throw new Error(`expected array, got ${typeof rules}`);
   if (rules.length === 0) throw new Error('expected at least 1 rule after insert');
 
@@ -189,7 +192,7 @@ await it('matchesBlockedPattern() returns rule for blocked pattern or null', asy
   const { matchesBlockedPattern, clearRules } = await import('../src/core/postmortem.js');
   clearRules();
 
-  const db = getDB();
+  const db = await getDB();
   db.prepare(`
     INSERT OR REPLACE INTO postmortem_rules
       (key, type, strategy, bin_step_range, volatility_range, evidence, severity, description, created_at)
@@ -220,19 +223,21 @@ await it('MAX_RULES pruning is enforced (50 rule limit)', async () => {
   const { clearRules} = await import('../src/core/postmortem.js');
   clearRules();
 
-  const db = getDB();
+  const db = await getDB();
+  const c1 = db.prepare('SELECT COUNT(*) as cnt FROM postmortem_rules').get().cnt;
+  if (c1 !== 0) throw new Error(`clearRules failed! count is ${c1}`);
   // Insert 55 rules directly
-  const insert = db.prepare(`
-    INSERT OR REPLACE INTO postmortem_rules
-      (key, type, severity, description, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `);
   for (let i = 0; i < 55; i++) {
-    insert.run(`prune_test_${i}`, 'RECURRING_FAILURE', 'soft_penalty', `Rule ${i}`, new Date().toISOString());
+    const d = new Date(Date.now() + i * 1000).toISOString();
+    db.prepare(`
+      INSERT OR REPLACE INTO postmortem_rules
+        (key, type, severity, description, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(`prune_test_${i}`, 'RECURRING_FAILURE', 'soft_penalty', `Rule ${i}`, d);
   }
 
-  const { saveRules } = await import('../src/core/postmortem.js');
-  const allRules = db.prepare('SELECT * FROM postmortem_rules').all();
+  const { saveRules, getActiveRules } = await import('../src/core/postmortem.js');
+  const allRules = getActiveRules();
   saveRules(allRules);
 
   const remaining = db.prepare('SELECT COUNT(*) as cnt FROM postmortem_rules').get();
