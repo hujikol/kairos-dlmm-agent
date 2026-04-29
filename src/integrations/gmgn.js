@@ -13,6 +13,7 @@ const GMGN_TTL_MS = {
   price:      300_000, // 5min
   holders:    300_000, // 5min
   candles:     60_000, // 1min
+  security:   300_000, // 5min
   swapQuote:   30_000, // 30s
   swapStatus:  10_000, // 10s
 };
@@ -113,6 +114,30 @@ export async function getTokenPrice(mint) {
     const json = await res.json();
     const data = json.data?.price ?? null;
     _gmgnCacheSet(cacheKey, data, GMGN_TTL_MS.price);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get token security metadata.
+ * @param {string} mint
+ * @returns {Promise<Object|null>} null if auth not configured or error
+ */
+export async function getTokenSecurity(mint) {
+  if (!gmgnAuthConfigured()) return null;
+  const cacheKey = `security:${mint}`;
+  const cached = _gmgnCacheGet(cacheKey);
+  if (cached !== null) return cached;
+  try {
+    const res = await fetch(`${GMGN_BASE_URL}/v1/token/${mint}/security`, {
+      headers: gmgnHeaders(),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const data = json.data ?? null;
+    _gmgnCacheSet(cacheKey, data, GMGN_TTL_MS.security);
     return data;
   } catch {
     return null;

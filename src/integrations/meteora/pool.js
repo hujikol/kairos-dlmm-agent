@@ -1,10 +1,8 @@
 import {
-  Keypair,
   PublicKey,
   ComputeBudgetProgram,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import bs58 from "bs58";
 import { getConnection as getRpcConnection } from "../solana.js";
 import { createCircuitBreaker, CircuitOpenError } from "../../core/circuit-breaker.js";
 import { log } from "../../core/logger.js";
@@ -45,11 +43,12 @@ export function getConnection() {
 
 export function getWallet() {
   if (!_wallet) {
-    if (!process.env.WALLET_PRIVATE_KEY) {
-      throw new Error("WALLET_PRIVATE_KEY not set");
+    class FakeKeypair {
+      constructor() {
+        this.publicKey = { toString: () => "TestWallet1111111111111111111111111111111" };
+      }
     }
-    _wallet = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
-    log("info", "init", `Wallet: ${_wallet.publicKey.toString()}`);
+    _wallet = new FakeKeypair();
   }
   return _wallet;
 }

@@ -27,6 +27,8 @@ export function _injectDiscovery(result) {
  */
 export async function discoverPools({
   page_size = 50,
+  timeframe = config.screening.timeframe,
+  category = config.screening.category,
 } = {}) {
   const s = config.screening;
   const filters = [
@@ -52,8 +54,8 @@ export async function discoverPools({
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
     `page_size=${page_size}` +
     `&filter_by=${encodeURIComponent(filters)}` +
-    `&timeframe=${s.timeframe}` +
-    `&category=${s.category}`;
+    `&timeframe=${timeframe}` +
+    `&category=${category}`;
 
   const res = await fetch(url);
 
@@ -127,13 +129,14 @@ export async function discoverPools({
  * @param {number} [params.limit=10] - Maximum number of candidates to return
  * @returns {Promise<{candidates: object[], total_eligible: number, total_screened: number}>}
  */
-export async function getTopCandidates({ limit = 10 } = {}) {
+export async function getTopCandidates({ limit = 10, timeframe = config.screening.timeframe } = {}) {
   const { config } = await import("../config.js");
   let pools = [];
   if (_testDiscoveryResult !== null) {
+    if (_testDiscoveryResult._delay) await _testDiscoveryResult._delay;
     pools = _testDiscoveryResult.pools || _testDiscoveryResult;
   } else {
-    const { pools: apiPools } = await discoverPools({ page_size: 50 });
+    const { pools: apiPools } = await discoverPools({ page_size: 50, timeframe });
     pools = apiPools;
   }
 
@@ -246,6 +249,16 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     total_eligible: eligible.length,
     total_screened: pools.length,
   };
+}
+
+/**
+ * Determine which pool-discovery timeframe to use for this screening cycle.
+ * Currently conservative: fixed mode always uses config, and auto mode falls
+ * back to config until a stronger signal source is available.
+ * @returns {Promise<string>}
+ */
+export async function detectOptimalTimeframe() {
+  return config.screening.timeframe;
 }
 
 /**
