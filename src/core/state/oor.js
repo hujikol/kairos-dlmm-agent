@@ -49,6 +49,23 @@ export function minutesOutOfRange(position_address) {
   return Math.floor(ms / 60000);
 }
 
+/**
+ * How many minutes until a position goes out of range, given current volatility.
+ * Uses dynamic OOR wait config: max at vol=0, min at vol=4.
+ * @param {string} _position_address - Position address (unused, for signature compatibility)
+ * @param {number} poolVolatility - Pool volatility score 0-4
+ * @param {number|null} waitMinutes - Override wait time directly
+ * @returns {number} Minutes until OOR
+ */
+export function minutesUntilOor(_position_address, poolVolatility, waitMinutes = null) {
+  if (waitMinutes !== null) return waitMinutes;
+  const min = 3;
+  const max = 20;
+  const clampedVol = Math.min(Math.max(poolVolatility, 0), 4);
+  const wait = max - (clampedVol / 4) * (max - min);
+  return Math.round(wait);
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 function updateOORPosition(position_address, updates) {

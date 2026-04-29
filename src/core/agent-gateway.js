@@ -11,7 +11,10 @@
  */
 
 import { agentLoop } from "../agent/index.js";
-import { config } from "../config.js";
+import {
+  getLlmConfig,
+  getRiskConfig,
+} from "./config-facade.js";
 
 export class AgentGateway {
   /**
@@ -45,8 +48,8 @@ export class AgentGateway {
     model = null,
   }) {
     const effectiveMaxSteps =
-      maxSteps ?? config.llm.managerMaxSteps ?? Math.min(config.llm.maxSteps, 10);
-    const effectiveModel = model ?? this._modelName ?? config.llm.managementModel;
+      maxSteps ?? (getLlmConfig().managerMaxSteps ?? Math.min(getLlmConfig().maxSteps, 10));
+    const effectiveModel = model ?? this._modelName ?? getLlmConfig().managementModel;
 
     return agentLoop(
       `
@@ -100,13 +103,13 @@ After executing, write a brief one-line result per position.
     deployAmount,
     pnl,
     canDeploy,
-    screeningMode,
+    screeningMode: _screeningMode,
     hiveLessonsBlock = null,
     maxSteps = null,
     model = null,
   }) {
-    const effectiveMaxSteps = maxSteps ?? config.llm.screenerMaxSteps ?? 5;
-    const effectiveModel = model ?? this._modelName ?? config.llm.screeningModel;
+    const effectiveMaxSteps = maxSteps ?? (getLlmConfig().screenerMaxSteps ?? 5);
+    const effectiveModel = model ?? this._modelName ?? getLlmConfig().screeningModel;
 
     const modeNote =
       !canDeploy
@@ -120,7 +123,7 @@ After executing, write a brief one-line result per position.
     const goal = `
 SCREENING CYCLE${modeNote}
 ${strategyBlock}${hiveBlock}
-Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
+Positions: ${prePositions.total_positions}/${getRiskConfig().maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
 
 CONVICTION SIZING MATRIX (enforced by safety check):
 - very_high: LPers confirm + smart wallets present + strong fundamentals → ${prePositions.total_positions === 0 ? '1.05' : '0.70'} SOL
@@ -171,7 +174,7 @@ STEPS:
       effectiveModel,
       2048,
       { portfolio: preBalance, positions: prePositions }
-    );
+    ).then(({ content, partialResult, toolFailed }) => ({ content, partialResult, toolFailed }));
   }
 }
 

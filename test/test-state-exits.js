@@ -8,7 +8,7 @@ import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert";
 import { fileURLToPath } from "url";
 import path from "path";
-import { makeMemDB } from "./mem-db.js";
+import { _makeMemDB } from "./mem-db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +77,8 @@ function defaultMgmtConfig() {
 }
 
 beforeEach(() => {
+  if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+  if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
   testDb.exec("DELETE FROM positions");
   testDb.exec("DELETE FROM recent_events");
   testDb.exec("DELETE FROM lessons");

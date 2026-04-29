@@ -15,7 +15,7 @@ import { log } from "../logger.js";
 const POSTMORTEM_FILE = "./postmortem-rules.json";
 const MAX_RULES = 50;
 
-export function ensureTable(db) {
+export function _ensureTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS postmortem_rules (
       key TEXT PRIMARY KEY,
@@ -45,7 +45,7 @@ export function ensureTable(db) {
  */
 export function loadRules() {
   const db = getDB();
-  ensureTable(db);
+  _ensureTable(db);
 
   // Try DB first
   try {
@@ -112,7 +112,15 @@ export function loadRules() {
  */
 export function saveRules(rules) {
   const db = getDB();
-  ensureTable(db);
+  _ensureTable(db);
+
+  // When given an empty array, clear all existing rules.
+  if (rules.length === 0) {
+    runTransaction(() => {
+      db.prepare('DELETE FROM postmortem_rules').run();
+    });
+    return;
+  }
 
   const trimmed = rules.slice(-MAX_RULES);
 

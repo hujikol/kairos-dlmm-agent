@@ -316,6 +316,15 @@ pm2 restart kairos
 | `npm run test:screen` | Test screening flow |
 | `npm run test:agent` | Test agent loop |
 
+## Operations
+
+| Document | Purpose |
+|----------|---------|
+| [Operational Runbook](OPS.md) | PM2, health checks, backup/restore, deployment checklist, panic recovery |
+| [Sentry Setup](SENTRY_SETUP.md) | Create project, find DSN, sampling rates, free tier limits |
+
+---
+
 ## CLI (alternative to REPL)
 
 ```bash

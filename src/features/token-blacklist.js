@@ -7,6 +7,7 @@
 
 import { getDB } from "../core/db.js";
 import { log } from "../core/logger.js";
+import { isDbReady } from "../core/db-helpers.js";
 
 // ─── Check ─────────────────────────────────────────────────────
 
@@ -16,6 +17,7 @@ import { log } from "../core/logger.js";
 export function isBlacklisted(mint) {
   if (!mint) return false;
   const db = getDB();
+  if (!isDbReady(db)) return false;
   const row = db.prepare('SELECT 1 FROM token_blacklist WHERE mint = ?').get(mint);
   return !!row;
 }
@@ -29,6 +31,7 @@ export function addToBlacklist({ mint, symbol, reason }) {
   if (!mint) return { error: "mint required" };
 
   const db = getDB();
+  if (!isDbReady(db)) return { error: "database not ready" };
   const existing = db.prepare('SELECT * FROM token_blacklist WHERE mint = ?').get(mint);
 
   if (existing) {
@@ -56,6 +59,7 @@ export function removeFromBlacklist({ mint }) {
   if (!mint) return { error: "mint required" };
 
   const db = getDB();
+  if (!isDbReady(db)) return { error: "database not ready" };
   const entry = db.prepare('SELECT * FROM token_blacklist WHERE mint = ?').get(mint);
 
   if (!entry) {
@@ -72,6 +76,7 @@ export function removeFromBlacklist({ mint }) {
  */
 export function listBlacklist() {
   const db = getDB();
+  if (!isDbReady(db)) return { count: 0, blacklist: [] }; // db not ready
   const entries = db.prepare('SELECT * FROM token_blacklist').all();
 
   return {

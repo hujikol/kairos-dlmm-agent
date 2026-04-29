@@ -1,6 +1,4 @@
 import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import { log } from "../core/logger.js";
 import { USER_CONFIG_PATH } from "../config.js";
 import { caveman } from "../tools/caveman.js";
@@ -16,6 +14,41 @@ const BASE  = TOKEN ? `https://api.telegram.org/bot${TOKEN}` : null;
 let chatId   = String(process.env.TELEGRAM_CHAT_ID || "") || null;
 let _offset  = 0;
 let _polling = false;
+
+// ─── Shared fetch helper ─────────────────────────────────────────
+/**
+ * Internal helper: fetch with timeout signal + rate-limit handling.
+ * @param {string} method  - API method name (e.g. "sendMessage")
+ * @param {object} payload - Request body
+ * @param {number} [timeoutMs=8000] - Abort timeout
+ * @returns {Promise<{res: Response, isRateLimited: boolean}>}
+ */
+async function telegramFetch(method, payload, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${BASE}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    clearTimeout(timeout);
+    if (e.name === "AbortError") {
+      throw new Error(`telegramFetch ${method} timed out after ${timeoutMs}ms`);
+    }
+    throw e;
+  }
+  clearTimeout(timeout);
+
+  if (res.status === 429) {
+    log("error", "telegram", `Rate limited (429) on ${method}. Stalling queue...`);
+    await sleep(5000);
+  }
+  return { res, isRateLimited: res.status === 429 };
+}
 
 // ─── chatId persistence ──────────────────────────────────────────
 function loadChatId() {
@@ -97,19 +130,10 @@ export async function sendMessage(text, parseMode = "Markdown") {
         };
         if (parseMode) payload.parse_mode = parseMode;
 
-        const res = await fetch(`${BASE}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
+        const { res, isRateLimited } = await telegramFetch("sendMessage", payload);
+        if (!res.ok && !isRateLimited) {
           const err = await res.text();
-          if (res.status === 429) {
-            log("error", "telegram", `Rate limited (429). Stalling queue...`);
-            await sleep(5000);
-          } else {
-            log("error", "telegram", `sendMessage ${res.status}: ${err.slice(0, 100)}`);
-          }
+          log("error", "telegram", `sendMessage ${res.status}: ${err.slice(0, 100)}`);
         }
       } catch (e) {
         log("error", "telegram", `sendMessage failed: ${e?.message ?? e}`);
@@ -134,28 +158,16 @@ export async function sendMessageDirect(text) {
   }
   const safeText = escapeHTMLLocal(String(text)).slice(0, 4096);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(`${BASE}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: safeText,
-        parse_mode: "HTML",
-      }),
-      signal: controller.signal,
+    const { res } = await telegramFetch("sendMessage", {
+      chat_id: chatId,
+      text: safeText,
+      parse_mode: "HTML",
     });
-    clearTimeout(timeout);
     if (!res.ok) {
       log("error", "telegram", `sendMessageDirect failed: ${res.status}`);
     }
   } catch (e) {
-    if (e.name === "AbortError") {
-      log("error", "telegram", `sendMessageDirect timed out after 8s`);
-    } else {
-      log("error", "telegram", `sendMessageDirect failed: ${e?.message ?? e}`);
-    }
+    log("error", "telegram", `sendMessageDirect failed: ${e?.message ?? e}`);
   }
 }
 
@@ -170,19 +182,8 @@ export async function sendChatAction(action = "typing") {
   if (!chatId) return;
   if (isDryRun()) return;
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    await fetch(`${BASE}/sendChatAction`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, action }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-  } catch (e) {
-    // Silently ignore — chat action is non-critical
-  }
-}
+    await telegramFetch("sendChatAction", { chat_id: chatId, action }, 5000);
+  } catch (e) { log("warn", "telegram", `sendChatAction ${action} failed: ${e?.message ?? e}`); } }
 
 // Re-export drainTelegramQueue from telegram-handlers (avoids circular import in management-cycle)
 export { drainTelegramQueue } from "../telegram-handlers.js";
@@ -203,23 +204,14 @@ export async function sendHTML(html) {
   return new Promise((resolve) => {
     enqueueMessage(async () => {
       try {
-        const res = await fetch(`${BASE}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: finalText.slice(0, 4096),
-            parse_mode: "HTML",
-          }),
+        const { res, isRateLimited } = await telegramFetch("sendMessage", {
+          chat_id: chatId,
+          text: finalText.slice(0, 4096),
+          parse_mode: "HTML",
         });
-        if (!res.ok) {
+        if (!res.ok && !isRateLimited) {
           const err = await res.text();
-          if (res.status === 429) {
-            log("error", "telegram", `Rate limited (429). Stalling queue...`);
-            await sleep(5000);
-          } else {
-            log("error", "telegram", `sendHTML ${res.status}: ${err.slice(0, 100)}`);
-          }
+          log("error", "telegram", `sendHTML ${res.status}: ${err.slice(0, 100)}`);
         }
       } catch (e) {
         log("error", "telegram", `sendHTML failed: ${e?.message ?? e}`);
@@ -235,7 +227,7 @@ async function poll(onMessage) {
   while (_polling) {
     try {
       const res = await fetch(
-        `${BASE}/getUpdates?offset=${_offset}&timeout=30`,
+        `${BASE}/getUpdates?offset=${_offset}&timeout=${TELEGRAM_POLL_TIMEOUT_MS / 1000}`,
         { signal: AbortSignal.timeout(TELEGRAM_POLL_TIMEOUT_MS) }
       );
       if (!res.ok) { await sleep(5000); continue; }

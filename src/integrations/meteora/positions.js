@@ -21,7 +21,6 @@ import {
   getPool,
   getDLMM,
   DLMM_PROGRAM,
-  applyPriorityFee,
   sendTx,
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
@@ -290,14 +289,59 @@ export async function deployPosition({
       txs: txHashes,
     };
   } catch (error) {
-    log("error", "deploy", error.message);
     let logs = null;
-    if (error.logs) {
-        logs = typeof error.getLogs === 'function' ? error.getLogs() : error.logs;
-        log("error", "deploy", "Program logs", { logs });
+    // Extract logs from various Solana error shapes
+    if (error?.logs) {
+      try { logs = typeof error.getLogs === "function" ? error.getLogs() : error.logs; } catch { logs = error.logs; }
+    } else if (typeof error.getLogs === "function") {
+      try { logs = error.getLogs(); } catch { /* ignore */ }
     }
+    if (logs?.length) log("error", "deploy", "Program logs", { logs });
     return { success: false, error: error.message, logs };
   }
+}
+
+// ─── Fallback Response Validation ──────────────────────────────────
+
+/**
+ * Validate an Agent Meridian relay fallback response before writing any
+ * position state. Prevents corrupted relay data from polluting OOR tracking,
+ * PnL calculation, or management decisions.
+ *
+ * @param {Object} relayPositions - Raw positions array from agentMeridianPositions()
+ * @param {string} walletAddress - Wallet address (for error messages)
+ * @returns {{ valid: boolean, reason?: string, errors?: string[] }}
+ */
+function validateAgentMeridianFallbackResponse(relayPositions, _walletAddress) {
+  if (!Array.isArray(relayPositions)) {
+    return { valid: false, reason: "relayPositions is not an array", errors: ["type mismatch"] };
+  }
+
+  const errors = [];
+
+  for (const p of relayPositions) {
+    const addr = p.position || p.positionAddress || "?";
+    if (!p.pool && !p.poolAddress) {
+      errors.push(`Missing pool address for position ${addr}`);
+    }
+    if (!p.position && !p.positionAddress) {
+      errors.push(`Missing position address for pool ${p.pool || p.poolAddress}`);
+    }
+    if (p.isOutOfRange !== undefined && typeof p.isOutOfRange !== "boolean") {
+      errors.push(`Invalid isOutOfRange type for ${addr}: ${typeof p.isOutOfRange}`);
+    }
+    if (p.pnlPctChange !== undefined && typeof p.pnlPctChange !== "number") {
+      errors.push(`Invalid pnlPctChange type for ${addr}: ${typeof p.pnlPctChange}`);
+    }
+    if (p.pnlUsd !== undefined && typeof p.pnlUsd !== "number") {
+      errors.push(`Invalid pnlUsd type for ${addr}: ${typeof p.pnlUsd}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    return { valid: false, reason: errors.join("; "), errors };
+  }
+  return { valid: true };
 }
 
 // ─── getMyPositions helpers ───────────────────────────────────────
@@ -311,10 +355,11 @@ export async function deployPosition({
  * @param {boolean} ctx.silent - Suppress logging
  * @returns {Promise<{ pools: Array, walletAddress: string }>}
  */
-async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
+async function _fetchPositionsFromMeteora({ walletAddress, force: _force, silent }) {
   let pools = [];
 
   // 1. Try Meteora portfolio API first (fastest, freshest on-chain data)
+  let _meteoraHadError = false;
   if (!silent) log("debug", "positions", "Fetching portfolio via Meteora portfolio API...");
   try {
     const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
@@ -325,18 +370,26 @@ async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
       log("debug", "positions", `Meteora returned ${pools.length} pool(s) with open positions`);
     } else {
       log("warn", "positions", `Meteora portfolio API ${res.status}`);
+      _meteoraHadError = true;
     }
   } catch (e) {
     log("warn", "positions", `Meteora portfolio fetch failed: ${e.message}`);
+    _meteoraHadError = true;
   }
 
-  // 2. Supplement with Agent Meridian relay if Meteora returned nothing
+  // 2. Supplement with Agent Meridian relay only if Meteora API itself failed
   // (relay provides richer data like outOfRange flags but has additional lag)
-  if (pools.length === 0) {
+  // If Meteora returned a valid empty list, that's the ground truth — don't ping relay
+  if (pools.length === 0 && _meteoraHadError) {
     if (!silent) log("info", "positions", "Trying Agent Meridian relay for open positions...");
     try {
       const relayPositions = await agentMeridianPositions(walletAddress);
       if (relayPositions && relayPositions.length > 0) {
+        const validation = validateAgentMeridianFallbackResponse(relayPositions, walletAddress);
+        if (!validation.valid) {
+          log("warn", "relay-fallback", `Invalid relay response: ${validation.reason}`);
+          return { pools: [], walletAddress };
+        }
         pools = relayPositions.map(p => ({
           poolAddress: p.pool || p.poolAddress,
           listPositions: [p.position || p.positionAddress],
@@ -363,7 +416,7 @@ async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
  * @param {Object} ctx - Orchestrator context { walletAddress, silent }
  * @returns {Promise<Array>} positions - Enriched position objects
  */
-async function _enrichPositionsWithPnL(pools, { walletAddress, silent }) {
+async function _enrichPositionsWithPnL(pools, { walletAddress, silent: _silent }) {
   const binDataByPool = {};
   const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
   pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });

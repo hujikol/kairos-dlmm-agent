@@ -10,10 +10,9 @@
 
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { fileURLToPath } from "url";
-import path from "path";
+ "url";
 import crypto from "crypto";
-import { makeMemDB } from "./mem-db.js";
+import { makeMemDB as _makeMemDB } from "./mem-db.js";
 
 // ─── In-memory schema (mirrors db.js) ───────────────────────────────────────
 
@@ -71,7 +70,7 @@ function initSchema(db) {
 
 let _mockDb = null;
 
-function getMockDB() {
+function _getMockDB() {
   if (!_mockDb) {
     _mockDb = new Database(":memory:");
     initSchema(_mockDb);

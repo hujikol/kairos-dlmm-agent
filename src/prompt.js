@@ -41,8 +41,8 @@ import { getStrategyStats } from "./core/lessons.js";
 import { getRulesForPrompt } from "./core/postmortem.js";
 import { addrShort } from "./tools/addrShort.js";
 
-export function buildSystemPrompt(agentType, portfolio, positions, stateSummary = null, lessons = null, perfSummary = null) {
-  const s = config.screening;
+export async function buildSystemPrompt(agentType, portfolio, positions, stateSummary = null, lessons = null, perfSummary = null) {
+  const _s = config.screening;
 
   // MANAGER gets a leaner prompt — positions are pre-loaded in the goal, not repeated here
   if (agentType === "MANAGER") {
@@ -161,8 +161,8 @@ TOKEN TAGS: dev_sold_all=BULLISH, dev_buying_more=BULLISH, smart_money_buy=BULLI
 IMPORTANT: fee_active_tvl_ratio values are ALREADY in percentage form. Do NOT multiply by 100.
 Current screening timeframe: ${config.screening.timeframe}
 
-${(() => {
-  const stats = getStrategyStats();
+${(async () => {
+  const stats = await getStrategyStats();
   const stratKeys = Object.keys(stats);
   return stratKeys.length > 0
     ? `STRATEGY PERFORMANCE (from your history):\n${stratKeys.map(s => `  ${s}: win_rate=${stats[s].win_rate}%, avg_pnl=${stats[s].avg_pnl}%, samples=${stats[s].sample_size}`).join("\n")}\nPrefer strategies with higher win rates. Avoid strategies that consistently lose.\n`

@@ -65,8 +65,8 @@ export async function syncOpenPositions(active_addresses) {
       }
 
       const closed_at = new Date().toISOString();
-      updatePosition(pos.position, { closed: 1, closed_at });
-      appendNote(pos.position, `Auto-closed during state sync (missing from on-chain data for ${misses} consecutive syncs)`);
+      updatePosition(pos.position, { closed: 1, closed_at }, db);
+      appendNote(pos.position, `Auto-closed during state sync (missing from on-chain data for ${misses} consecutive syncs)`, db);
       log("info", "state", `Position ${pos.position} auto-closed (missing from on-chain data for ${misses} consecutive syncs)`);
       _syncMissCount.delete(pos.position);
     }

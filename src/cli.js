@@ -8,7 +8,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { parseArgs } from "util";
-import { out, die, DRY_RUN, COMMAND_DEFAULTS } from "./cli/utils.js";
+import { die, DRY_RUN as _DRY_RUN, COMMAND_DEFAULTS as _COMMAND_DEFAULTS } from "./cli/utils.js";
 
 // ─── DRY_RUN must be set before any tool imports ─────────────────
 if (process.argv.includes("--dry-run")) process.env.DRY_RUN = "true";

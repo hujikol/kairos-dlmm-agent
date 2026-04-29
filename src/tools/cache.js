@@ -23,6 +23,9 @@ const TTL_MAP = {
   get_wallet_balance: 5 * 60,
 };
 
+// Named exports for test injection
+export { CACHE, PENDING, TTL_MAP };
+
 /**
  * Get cached tool result or compute + cache it.
  * @param {string} name - tool name
@@ -75,13 +78,15 @@ export function clearCache() {
   PENDING.clear();
 }
 
-// Evict expired entries every 60s
-const _evictionTimer = setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of CACHE) if (v.exp < now) CACHE.delete(k);
-}, 60_000);
+// Evict expired entries every 60s (skip in test env to prevent spurious timers)
+const _evictionTimer = (process.env.NODE_ENV !== "test")
+  ? setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of CACHE) if (v.exp < now) CACHE.delete(k);
+  }, 60_000)
+  : null;
 
 // Allow callers to stop the eviction timer (e.g., during shutdown)
 export function stopCacheEviction() {
-  clearInterval(_evictionTimer);
+  if (_evictionTimer !== null) clearInterval(_evictionTimer);
 }

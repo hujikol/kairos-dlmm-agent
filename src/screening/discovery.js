@@ -1,9 +1,8 @@
 import { config } from "../config.js";
 import { isBlacklisted } from "../features/token-blacklist.js";
-import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
+import { getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
-import { poolCache } from "../core/cache-manager.js";
 import { TOKEN_AGE_MS_PER_HOUR, OKX_ENRICHMENT_TIMEOUT_MS } from "../core/constants.js";
 
 const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
@@ -259,6 +258,8 @@ export async function getTopCandidates({ limit = 10 } = {}) {
  * @returns {Promise<object>} - Full raw pool object from the API
  */
 export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
+  if (!pool_address) throw new Error("pool_address is required");
+
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
     `page_size=1` +
     `&filter_by=${encodeURIComponent(`pool_address=${pool_address}`)}` +
@@ -274,7 +275,7 @@ export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
   const pool = (data.data || [])[0];
 
   if (!pool) {
-    throw new Error(`Pool ${pool_address} not found`);
+    return undefined;
   }
 
   return pool;

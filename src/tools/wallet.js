@@ -1,5 +1,4 @@
 import { getWalletBalances, swapToken, swapAllTokensToSol } from "../integrations/helius.js";
-import { log, logAction } from "../core/logger.js";
 import { pushNotification } from "../notifications/queue.js";
 import { SOL_MINT } from "../constants.js";
 import { addrShort } from "./addrShort.js";

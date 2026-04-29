@@ -1,16 +1,19 @@
 import { PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
-import { CLAIM_DEDUP_MS, METEORA_CLOSE_SYNC_WAIT_MS, METEORA_CLOSE_RETRY_DELAY_MS } from "../../core/constants.js";
+import { CLAIM_DEDUP_MS, METEORA_CLOSE_SYNC_WAIT_MS, METEORA_MIN_BIN_ID, METEORA_MAX_BIN_ID } from "../../core/constants.js";
 import { recordClaim, recordClose, getTrackedPosition } from "../../core/state/registry.js";
 import { recordPerformance } from "../../core/lessons.js";
-import { config, isDryRun } from "../../config.js";
+import { isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { getPool, getWallet, getDLMM, getConnection, sendTx, lookupPoolForPosition } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
-import { getMyPositions, invalidatePositionsCache } from "./positions.js";
+import { invalidatePositionsCache } from "./positions.js";
 import { positionsCache, poolCache } from "../../core/cache-manager.js";
+import { retryWithFixedDelay } from "../../core/retry.js";
+import { claimAndSweepSol } from "../solana/close-accounts.js";
+import { isFlagEnabled } from "../../core/feature-flags.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
 
@@ -65,7 +68,7 @@ export async function claimFees({ position_address }) {
       if (entry) {
         claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
       }
-    } catch (_) { log("warn", "claim", `Non-critical error fetching claimed fees: ${_?.message || _}`); }
+    } catch (e) { log("warn", "claim", `Non-critical error fetching claimed fees: ${e?.message || e}`); }
     if (claimedFeesUsd !== null) {
       recordClaim(position_address, claimedFeesUsd);
     }
@@ -111,7 +114,7 @@ async function closeClaimFees(ctx) {
             const claimedFeesUsd = parseFloat(entry.allTimeFees?.total?.usd || 0);
             if (claimedFeesUsd > 0) recordClaim(position_address, claimedFeesUsd);
           }
-        } catch (_) { log("warn", "close", `Non-critical error fetching claimed fees in close flow: ${_?.message || _}`); }
+        } catch (e) { log("warn", "close", `Non-critical error fetching claimed fees in close flow: ${e?.message || e}`); }
       }
     }
   } catch (e) {
@@ -137,10 +140,8 @@ async function closeRemoveLiquidity(ctx) {
   let hasLiquidity = false;
   // The minimum/maximum bin ID for Meteora DLMM pools.
   // 887272 ≈ log_base(1.0001)(MAX_TICK), the theoretical max bin for tick spacing 0.0001.
-  const MIN_BIN_ID = -887272;
-  const MAX_BIN_ID =  887272;
-  let closeFromBinId = MIN_BIN_ID;
-  let closeToBinId = MAX_BIN_ID;
+  let closeFromBinId = METEORA_MIN_BIN_ID;
+  let closeToBinId = METEORA_MAX_BIN_ID;
 
   try {
     const positionDataForClose = await pool.getPosition(positionPubKey);
@@ -195,30 +196,36 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   await new Promise(r => setTimeout(r, METEORA_CLOSE_SYNC_WAIT_MS));
   invalidatePositionsCache();
 
-  let closedConfirmed = false;
-  let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      // Use getAllLbPairPositionsByUser directly — do NOT trust getMyPositions (relay/Meteora API has stale data)
-      const { DLMM } = await getDLMM();
-      const allPositions = await DLMM.getAllLbPairPositionsByUser(getConnection(), wallet.publicKey);
-      let allPos = [];
-      if (Array.isArray(allPositions)) allPos = allPositions;
-      else if (allPositions instanceof Map) allPos = [...allPositions.values()];
-      const stillOpen = allPos.some(p => {
-        const key = p.publicKey?.toString?.() || p.positionAddress || p.address || String(p);
-        return key === position_address;
-      });
-      log("debug", "close", `Close verification attempt ${attempt + 1}/3: ${stillOpen ? "still open" : "confirmed closed"} (${allPos.length} on-chain positions)`);
-      if (!stillOpen) { closedConfirmed = true; break; }
-    } catch (e) {
-      lastError = e;
-      log("warn", "close", `Close verification failed (attempt ${attempt + 1}/3): ${e?.message ?? e}`);
-    }
-    if (attempt < 2) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
-  }
+  let confirmed = false;
+  try {
+    await retryWithFixedDelay(
+      async () => {
+        const { DLMM } = await getDLMM();
+        const allPositions = await DLMM.getAllLbPairPositionsByUser(getConnection(), wallet.publicKey);
+        let allPos = [];
+        if (Array.isArray(allPositions)) allPos = allPositions;
+        else if (allPositions instanceof Map) allPos = [...allPositions.values()];
+        const stillOpen = allPos.some(p => {
+          const key = p.publicKey?.toString?.() || p.positionAddress || p.address || String(p);
+          return key === position_address;
+        });
+        log("debug", "close", `Close verification: ${stillOpen ? "still open" : "confirmed closed"} (${allPos.length} on-chain positions)`);
+        if (stillOpen) throw Object.assign(new Error("position still open"), { _isRetryable: true });
+        confirmed = true;
+      },
+      {
+        maxAttempts: 3,
+        shouldRetry(err) {
+          return err?._isRetryable === true;
+        },
+        onRetry(err, attempt) {
+          log("warn", "close", `Close verification failed (attempt ${attempt}/3): ${err?.message ?? err}`);
+        },
+      },
+    );
+  } catch {}
 
-  if (!closedConfirmed) {
+  if (!confirmed) {
     return {
       closedConfirmed: false,
       result: {
@@ -310,16 +317,16 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   await recordPerformance({
     position: position_address, pool: poolAddress,
     pool_name: tracked.pool_name || addrShort(poolAddress),
-    strategy: tracked.strategy, bin_range: tracked.bin_range,
-    bin_step: tracked.bin_step || null, volatility: tracked.volatility || null,
-    fee_tvl_ratio: tracked.fee_tvl_ratio || null, organic_score: tracked.organic_score || null,
-    amount_sol: tracked.amount_sol, fees_earned_usd: feesUsd,
+    strategy: tracked.strategy ?? null, bin_range: tracked.bin_range ?? null,
+    bin_step: tracked.bin_step ?? null, volatility: tracked.volatility ?? null,
+    fee_tvl_ratio: tracked.fee_tvl_ratio ?? null, organic_score: tracked.organic_score ?? null,
+    amount_sol: tracked.amount_sol ?? 0, fees_earned_usd: feesUsd,
     final_value_usd: finalValueUsd, initial_value_usd: initialUsd,
-    minutes_in_range: minutesHeld - minutesOOR, minutes_held: minutesHeld,
+    minutes_in_range: Math.max(0, minutesHeld - minutesOOR), minutes_held: minutesHeld,
     close_reason: reason || "agent decision",
-    signal_snapshot: tracked.signal_snapshot || null,
+    signal_snapshot: tracked.signal_snapshot ?? null,
     base_mint: tracked.base_mint || pool.lbPair.tokenXMint.toString(),
-    deployed_at: tracked.deployed_at || null,
+    deployed_at: tracked.deployed_at ?? null,
   });
 
   return {
@@ -463,9 +470,18 @@ export async function closePosition({ position_address, reason }) {
     const { closeTxHashes } = await closeRemoveLiquidity(ctx);
 
     // Phase 3: Verify & record
-    const { closedConfirmed, result } = await closeVerifyAndRecord(
+    const { result } = await closeVerifyAndRecord(
       ctx, { claimTxHashes, closeTxHashes }, reason,
     );
+
+    // Auto-claim SOL rent from closed position account
+    if (result.success && isFlagEnabled("auto_claim_sol_enabled")) {
+      const sweepResult = await claimAndSweepSol(position_address);
+      if (sweepResult.success && sweepResult.amount > 0) {
+        log("info", "close", `Auto-claimed ${sweepResult.amount} lamports SOL rent from ${position_address.slice(0, 8)}`);
+        result.claimed_sol_rent = sweepResult.amount;
+      }
+    }
 
     return result;
   } catch (error) {
@@ -504,10 +520,10 @@ export async function closePosition({ position_address, reason }) {
       await recordPerformance({
         position: position_address, pool: trackedVerify.pool || poolAddress,
         pool_name: trackedVerify.pool_name || null,
-        strategy: trackedVerify.strategy, bin_range: trackedVerify.bin_range,
-        bin_step: trackedVerify.bin_step || null, volatility: trackedVerify.volatility || null,
-        fee_tvl_ratio: trackedVerify.fee_tvl_ratio || null, organic_score: trackedVerify.organic_score || null,
-        amount_sol: trackedVerify.amount_sol, fees_earned_usd: trackedVerify.total_fees_claimed_usd || 0,
+        strategy: trackedVerify.strategy ?? null, bin_range: trackedVerify.bin_range ?? null,
+        bin_step: trackedVerify.bin_step ?? null, volatility: trackedVerify.volatility ?? null,
+        fee_tvl_ratio: trackedVerify.fee_tvl_ratio ?? null, organic_score: trackedVerify.organic_score ?? null,
+        amount_sol: trackedVerify.amount_sol ?? 0, fees_earned_usd: trackedVerify.total_fees_claimed_usd || 0,
         final_value_usd: 0, initial_value_usd: trackedVerify.initial_value_usd || 0,
         minutes_in_range: 0, minutes_held: trackedVerify.deployed_at
           ? Math.floor((Date.now() - new Date(trackedVerify.deployed_at).getTime()) / 60000) : 0,

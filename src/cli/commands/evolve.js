@@ -2,7 +2,7 @@ import { out } from "../utils.js";
 import { config } from "../../config.js";
 import { evolveThresholds } from "../../core/lessons.js";
 
-export async function evolveCmd(argv, flags) {
+export async function evolveCmd(_argv, _flags) {
   const fs2 = await import("fs");
   const lessonsFile = "./lessons.json";
   let perfData = [];

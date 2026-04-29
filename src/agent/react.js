@@ -4,14 +4,14 @@
 
 import { captureError } from "../instrument.js";
 import { log } from "../core/logger.js";
-import { config } from "../config.js";
+import { getLlmConfig } from "../core/config-facade.js";
 import { getWalletBalances } from "../integrations/helius.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { buildSystemPrompt } from "../prompt.js";
 import { getToolsForRole } from "./tools.js";
 import { shouldRequireRealToolUse } from "./intent.js";
 import { client, callWithRetry } from "./fallback.js";
-import { DEFAULT_MODEL } from "./intent.js";
+import { DEFAULT_MODEL as _DEFAULT_MODEL } from "./intent.js";
 import { parseToolArgs } from "./repair.js";
 import { isRateLimitError, rateLimitBackoff, sleep } from "./rate.js";
 import { executeTool } from "../tools/executor.js";
@@ -20,20 +20,18 @@ import { getStateSummary } from "../core/state/index.js";
 import { getLessonsForPrompt, getPerformanceSummary } from "../core/lessons.js";
 import { LOOP_TIMEOUT_MS } from "../core/constants.js";
 
+import { canRun, recordRun, createFiredOnceTracker } from "./once-per-session.js";
+
 // ReAct safety guards
 const MAX_REACT_DEPTH = 10;
 const MAX_TOOL_CALLS_PER_STEP = 10;
 
-// Tools that should only fire once per session
-const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_position"]);
-// These lock after first attempt regardless of outcome
-const NO_RETRY_TOOLS = new Set(["deploy_position"]);
-
 export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
+  const llmConfig = getLlmConfig();
   const effectiveMaxSteps = maxSteps ?? (
-    agentType === "SCREENER" ? config.llm.screenerMaxSteps ?? 5
-    : agentType === "MANAGER" ? config.llm.managerMaxSteps ?? 4
-    : config.llm.maxSteps ?? 10
+    agentType === "SCREENER" ? llmConfig.screenerMaxSteps ?? 5
+    : agentType === "MANAGER" ? llmConfig.managerMaxSteps ?? 4
+    : llmConfig.maxSteps ?? 10
   );
   const { requireTool = false, portfolio: prePortfolio, positions: prePositions } = options;
 
@@ -45,9 +43,9 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
       ]);
 
   const stateSummary = getStateSummary();
-  const lessons = getLessonsForPrompt({ agentType });
-  const perfSummary = getPerformanceSummary();
-  let systemPrompt = buildSystemPrompt(agentType, portfolio, positions, stateSummary, lessons, perfSummary);
+  const lessons = await getLessonsForPrompt({ agentType });
+  const perfSummary = await getPerformanceSummary();
+  let systemPrompt = await buildSystemPrompt(agentType, portfolio, positions, stateSummary, lessons, perfSummary);
   let goalText = goal;
 
   // Caveman compression — always on
@@ -60,7 +58,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
     { role: "user", content: goalText },
   ];
 
-  const firedOnce = new Set();
+  const firedOnce = createFiredOnceTracker();
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, requireTool);
   let sawToolCall = false;
   let noToolRetryCount = 0;
@@ -149,51 +147,79 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         break;
       }
 
-      const results = await Promise.allSettled(msg.tool_calls.map(async (toolCall) => {
-        const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
-        const rawArgs = toolCall.function.arguments ?? "{}";
-        const { args } = parseToolArgs(rawArgs, functionName);
+      // Helper to safely stringify tool results containing BigInts or circular refs
+      const safeStringify = (obj) => {
+        try {
+          return JSON.stringify(obj, (key, value) => typeof value === 'bigint' ? value.toString() : value);
+        } catch (e) {
+          return JSON.stringify({ error: `Could not serialize result: ${e.message}` });
+        }
+      };
 
-        // Block once-per-session tools from firing a second time
-        if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
-          log("info", "agent", `Blocked duplicate ${functionName} call — already executed this session`);
+      const results = await Promise.allSettled(msg.tool_calls.map(async (toolCall) => {
+        try {
+          const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
+          const rawArgs = toolCall.function.arguments ?? "{}";
+          const { args } = parseToolArgs(rawArgs, functionName);
+
+          // Block once-per-session tools from firing a second time
+          if (!canRun(functionName, firedOnce)) {
+            log("info", "agent", `Blocked duplicate ${functionName} call — already executed this session`);
+            return {
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: safeStringify({ blocked: true, reason: `${functionName} already attempted this session — do not retry.` }),
+            };
+          }
+
+          const result = await executeTool(functionName, args);
+
+          // Track meaningful on-chain results so MAX_REACT_DEPTH break still returns useful info.
+          // Capture BOTH success and failure — failed deploy/close is still meaningful signal
+          // for the caller to override the LLM's hallucinated text with the real result.
+          const isMeaningfulClose = functionName === "close_position" && result?.already_closed === true;
+          if (result?.success === true || isMeaningfulClose) {
+            lastMeaningfulResult = { functionName, result };
+          } else if (functionName === "deploy_position" || functionName === "close_position") {
+            // Track failed write ops so caller can detect LLM hallucination
+            lastMeaningfulResult = { functionName, result };
+          }
+
+          recordRun(functionName, result?.success === true, firedOnce);
+
           return {
             role: "tool",
             tool_call_id: toolCall.id,
-            content: JSON.stringify({ blocked: true, reason: `${functionName} already attempted this session — do not retry.` }),
+            content: safeStringify(result ?? { error: "Tool returned no result" }),
+          };
+        } catch (callErr) {
+          // Catch any unexpected throw inside the callback so it becomes a fulfilled
+          // result with an error message instead of a rejected promise.
+          const errDetail = callErr?.stack ? `\n${callErr.stack}` : ` - ${callErr?.message}`;
+          log("error", "agent", `Tool call callback error (${toolCall?.function?.name})${errDetail}`);
+          return {
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: safeStringify({ error: callErr?.message || "Tool call failed unexpectedly" }),
           };
         }
-
-        const result = await executeTool(functionName, args);
-
-        // Track meaningful on-chain results so MAX_REACT_DEPTH break still returns useful info.
-        // close_position returns { success, already_closed } — success=false with already_closed=true
-        // means position confirmed closed on-chain but returned false (catch block path).
-        // We treat this as meaningful since it means the position is actually closed.
-        const isMeaningfulClose = functionName === "close_position" && result?.already_closed === true;
-        if (result?.success === true || isMeaningfulClose) {
-          lastMeaningfulResult = { functionName, result };
-        }
-
-        if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
-        else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
-
-        return {
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: JSON.stringify(result),
-        };
       }));
       // Log any rejections
       results.forEach((r, i) => {
         if (r.status === 'rejected') {
-          log("error", "agent", `Tool call ${i} failed`, { reason: r.reason?.message });
+          const tc = msg.tool_calls[i];
+          const toolName = tc?.function?.name ?? "unknown";
+          const reason = r.reason instanceof Error
+            ? `${r.reason.message}\n${r.reason.stack}`
+            : String(r.reason ?? "unknown");
+          const argsPreview = tc?.function?.arguments?.slice(0, 200) || "none";
+          log("error", "agent", `Tool call ${i} failed (${toolName})\nArgs: ${argsPreview}\nReason: ${reason}`);
         }
       });
       const toolResults = results.map(r => r.status === 'fulfilled' ? r.value : {
         role: "tool",
         tool_call_id: msg.tool_calls[results.indexOf(r)].id,
-        content: JSON.stringify({ error: r.reason?.message || "Tool call rejected" }),
+        content: safeStringify({ error: r.reason?.message || "Tool call rejected" }),
       });
 
       messages.push(...toolResults);
@@ -218,15 +244,21 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
   }
 
   log("info", "agent", "Max steps reached without final answer");
-  // Prioritize meaningful on-chain results over generic timeout message
+  // Return meaningful on-chain results even if LLM text output doesn't match reality.
+  // For write ops (deploy/close), the tool result overrides whatever the LLM reported in text.
   if (lastMeaningfulResult) {
     const { functionName, result } = lastMeaningfulResult;
-    log("info", "agent", `Returning partial result: ${functionName} succeeded (${JSON.stringify(result).slice(0, 100)})`);
+    const isWriteOp = functionName === "deploy_position" || functionName === "close_position";
+    const failedWriteOp = isWriteOp && result?.success === false;
+    log("info", "agent", `${failedWriteOp ? "WRITE OP FAILED" : "Returning partial result"}: ${functionName} → ${JSON.stringify(result).slice(0, 150)}`);
     return {
-      content: `${functionName} completed successfully. Result: ${JSON.stringify(result, null, 2)}`,
+      // On failed write ops, return a placeholder text that the caller should replace
+      // with actual result content — prevents hallucinated DEPLOYED text from propagating
+      content: failedWriteOp ? "[tool-failed-see-partial-result]" : content,
       userMessage: goal,
       partialResult: lastMeaningfulResult,
+      toolFailed: failedWriteOp ? functionName : null,
     };
   }
-  return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
+  return { content, userMessage: goal };
 }

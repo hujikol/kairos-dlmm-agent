@@ -16,9 +16,10 @@ import {
   PRICE_FORMAT_THRESHOLD,
 } from "./constants.js";
 import { autoSwapRewardFees } from "../integrations/helius.js";
-import { pushNotification, flushNotifications, hasPendingNotifications } from "../notifications/queue.js";
-import { sendHTML, isEnabled as telegramEnabled } from "../notifications/telegram.js";
+import { pushNotification, flushNotifications } from "../notifications/queue.js";
+import { sendHTML } from "../notifications/telegram.js";
 import { stripThink } from "../tools/caveman.js";
+import { getStreak } from "./state/index.js";
 
 // ─── Deterministic rule engine ───────────────────────────────────────────────
 
@@ -35,6 +36,19 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
       actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
       continue;
     }
+
+    // Loss Streak check
+    const streak = getStreak(p.position);
+    const minAgeCycles = config.management.lossStreakMinPositionAgeCycles ?? 2;
+    const intervalMin = config.schedule?.managementIntervalMin ?? 10;
+    
+    if (config.management.lossStreakEnabled &&
+        streak >= config.management.lossStreakThreshold &&
+        (p.age_minutes ?? 0) >= minAgeCycles * intervalMin) {
+      actionMap.set(p.position, { action: "CLOSE", rule: "loss_streak", reason: `Loss streak ${streak}x` });
+      continue;
+    }
+
     // Instruction-set — pass to LLM, can't parse in JS
     if (p.instruction) {
       actionMap.set(p.position, { action: "INSTRUCTION" });

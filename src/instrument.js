@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/node";
 import { nodeProfilingIntegration } from "@sentry/profiling-node";
+import { log } from "./core/logger.js";
 
 export function initSentry() {
   if (!process.env.SENTRY_DSN) return; // Sentry disabled if no DSN

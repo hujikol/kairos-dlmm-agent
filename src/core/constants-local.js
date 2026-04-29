@@ -1,6 +1,11 @@
 /**
- * Local constants not yet in constants.js.
- * Duplicates of constants.js values: import from constants.js instead.
+ * Operator overrides — per-instance tuning that should NOT be committed.
+ *
+ * Use this file to override values from constants.js without modifying the
+ * canonical file. Useful for experimentation, emergency overrides, or
+ * instance-specific tuning during live operation.
+ *
+ * This file is .gitignored. Copy constants.js values here and override as needed.
  */
 
 import { config } from "../config.js";

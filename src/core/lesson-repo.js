@@ -87,7 +87,7 @@ export function listLessons({ role = null, pinned = null, tag = null, limit = 30
       parsedTags = JSON.parse(l.tags || '[]');
       if (typeof parsedTags === "string") parsedTags = JSON.parse(parsedTags);
       if (!Array.isArray(parsedTags)) parsedTags = [];
-    } catch (e) { parsedTags = []; }
+    } catch { parsedTags = []; }
     return { ...l, tags: parsedTags };
   });
   if (tag) lessons = lessons.filter(l => l.tags.includes(tag));
