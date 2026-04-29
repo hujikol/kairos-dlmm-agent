@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { addrShort } from "../../tools/addrShort.js";
+import { addrShort } from "../utils/addrShort.js";
 import { rotateIfNeeded } from "./rotation.js";
 import { logAction } from "./action-log.js";
 import { logSnapshot } from "./snapshot-log.js";
@@ -40,8 +40,17 @@ export function log(level, category, message, meta = {}) {
       const m = line.match(/\(([^)]+)\)/) || line.match(/at\s+([^ ]+)/);
       if (m && !m[1].includes("logger.js")) {
         const parts = m[1].split(":");
-        const file = parts[0].replace(/^.*[/\\]/, "");
-        caller = ` <${file}:${parts[parts.length - 2]}>`;
+        const urlOrPath = m[1];
+        let file;
+        if (urlOrPath.startsWith("file://")) {
+          file = urlOrPath.split("/").pop().split(":")[0];
+        } else if (urlOrPath.includes("\\")) {
+          file = urlOrPath.split("\\").pop().split(":")[0];
+        } else {
+          file = urlOrPath.split("/").pop().split(":")[0];
+        }
+        const lineNum = parts[parts.length - 2];
+        caller = ` <${file}:${lineNum}>`;
         break;
       }
     }

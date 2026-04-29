@@ -42,6 +42,10 @@ const SCHEMA = {
   gasReserve:            { type: "number", min: 0,                 coerce: true },
   maxDeployAmount:       { type: "number", min: 0.01,              coerce: true },
   minFeePerTvl24h:       { type: "number", min: 0,                 coerce: true },
+  lossStreakEnabled:     { type: "boolean" },
+  lossStreakThreshold:   { type: "number", min: 1,                 coerce: true },
+  lossStreakMinPnlPct:   { type: "number", max: 0,                 coerce: true },
+  lossStreakMinPositionAgeCycles: { type: "number", min: 0,        coerce: true },
   // ─── Risk ─────────────────────────────────
   maxPositions:          { type: "number", min: 1,    max: 20,      coerce: true },
   dailyProfitTarget:     { type: "number", min: 0,                 coerce: true },
@@ -55,12 +59,13 @@ const SCHEMA = {
   screeningModel:        { type: "string", nullable: true },
   generalModel:          { type: "string", nullable: true },
   // ─── Strategy ────────────────────────────
-  binsBelow:              { type: "number", min: 1,                 coerce: true },
+  binsBelow:              { type: "number", min: 1,    max: 1400,    coerce: true },
+  binsAbove:             { type: "number", min: 0,    max: 1400,    coerce: true },
   // ─── Behavior ─────────────────────────────
   cavemanEnabled:         { type: "boolean" },
 };
 
-const CONFIG_MAP = {
+const _CONFIG_MAP = {
   minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
   minTvl: ["screening", "minTvl"],
   maxTvl: ["screening", "maxTvl"],
@@ -97,6 +102,10 @@ const CONFIG_MAP = {
   baseDeployAmount: ["management", "baseDeployAmount"],
   gasReserve: ["management", "gasReserve"],
   maxDeployAmount: ["management", "maxDeployAmount"],
+  lossStreakEnabled: ["management", "lossStreakEnabled"],
+  lossStreakThreshold: ["management", "lossStreakThreshold"],
+  lossStreakMinPnlPct: ["management", "lossStreakMinPnlPct"],
+  lossStreakMinPositionAgeCycles: ["management", "lossStreakMinPositionAgeCycles"],
   maxPositions: ["risk", "maxPositions"],
   managementIntervalMin: ["schedule", "managementIntervalMin"],
   screeningIntervalMin: ["schedule", "screeningIntervalMin"],

@@ -11,23 +11,22 @@ import { computeDeployAmount, config } from "../src/config.js";
 
 describe("computeDeployAmount", () => {
 
-  // Note: Actual config values come from user-config.json which overrides defaults.
-  // Tests use the runtime config values (gasReserve=0.05, deployAmountSol=0.48, maxDeployAmount=1.44).
+  // Runtime config defaults: gasReserve=0.2, maxDeployAmount=50
+  // SIZING_MATRIX: very_high={0:1.50,1:1.00,other:1.00}, high={0:1.00,1:1.00,other:1.00}, normal={any:0.50}
 
   test("returns calculated amount for small wallet", () => {
-    // walletSol = 0.5, reserve = 0.05, deployable = 0.45
-    // target = 0.35 (normal), ceil = min(1.44, 0.45) = 0.45
-    // amount = min(0.45, 0.35) = 0.35
+    // walletSol=0.5, reserve=0.2, deployable=0.3, target=0.50 (normal)
+    // ceil=min(50,0.3)=0.3, amount=min(0.3,0.50)=0.3
     const result = computeDeployAmount(0.5);
-    assert.strictEqual(result.amount, 0.35);
+    assert.strictEqual(result.amount, 0.3);
     assert.strictEqual(result.error, null);
   });
 
   test("returns calculated amount when wallet is large", () => {
-    // walletSol = 10, deployable = 9.95, target = 0.35 (normal)
-    // ceil = min(1.44, 9.95) = 1.44, amount = min(1.44, 0.35) = 0.35
+    // walletSol=10, deployable=9.8, target=0.50 (normal)
+    // ceil=min(50,9.8)=9.8, amount=min(9.8,0.50)=0.50
     const result = computeDeployAmount(10);
-    assert.strictEqual(result.amount, 0.35);
+    assert.strictEqual(result.amount, 0.5);
     assert.strictEqual(result.error, null);
   });
 
@@ -38,45 +37,48 @@ describe("computeDeployAmount", () => {
   });
 
   test("returns error when wallet is below gas reserve", () => {
-    // walletSol = 0.04, reserve = 0.05, deployable = max(0, -0.01) = 0
+    // walletSol=0.04, reserve=0.2, deployable=max(0,-0.16)=0
     const result = computeDeployAmount(0.04);
     assert.strictEqual(result.amount, 0);
     assert.ok(result.error.includes("Insufficient SOL"));
   });
 
   test("returns error when wallet is just above zero but below 0.1 floor", () => {
-    // walletSol = 0.12, reserve = 0.05, deployable = 0.07
-    // 0.07 < 0.1 floor → error
+    // walletSol=0.12, reserve=0.2, deployable=max(0,-0.08)=0
     const result = computeDeployAmount(0.12);
     assert.strictEqual(result.amount, 0);
     assert.ok(result.error.includes("Insufficient SOL"));
   });
 
-  test("very_high conviction with 0 positions uses 1.05 target", () => {
-    // walletSol = 5, deployable = 4.95, target = 1.05 (very_high, 0 positions)
+  test("very_high conviction with 0 positions uses 1.50 target", () => {
+    // walletSol=5, deployable=4.8, target=1.50 (very_high, 0 positions)
+    // amount=min(4.8,1.50)=1.50
     const result = computeDeployAmount(5, 0, "very_high");
-    assert.strictEqual(result.amount, 1.05);
+    assert.strictEqual(result.amount, 1.5);
     assert.strictEqual(result.error, null);
   });
 
-  test("very_high conviction with 1+ positions uses 0.70 target", () => {
-    // walletSol = 5, deployable = 4.95, target = 0.70 (very_high, other)
+  test("very_high conviction with 1+ positions uses 1.00 target", () => {
+    // walletSol=5, deployable=4.8, target=1.00 (very_high, 1 position)
+    // amount=min(4.8,1.00)=1.00
     const result = computeDeployAmount(5, 1, "very_high");
-    assert.strictEqual(result.amount, 0.7);
+    assert.strictEqual(result.amount, 1.0);
     assert.strictEqual(result.error, null);
   });
 
-  test("high conviction uses 0.53 target", () => {
+  test("high conviction uses 1.00 target", () => {
+    // walletSol=5, deployable=4.8, target=1.00 (high, 0 positions)
+    // amount=min(4.8,1.00)=1.00
     const result = computeDeployAmount(5, 0, "high");
-    assert.strictEqual(result.amount, 0.53);
+    assert.strictEqual(result.amount, 1.0);
     assert.strictEqual(result.error, null);
   });
 
   test("clamps at maxDeployAmount when deployable exceeds it", () => {
-    // walletSol = 100, deployable = 99.95, ceil = min(1.44, 99.95) = 1.44
-    // For normal conviction: amount = min(1.44, 0.35) = 0.35
+    // walletSol=100, deployable=99.8, ceil=min(50,99.8)=50
+    // normal conviction: amount=min(50,0.50)=0.50
     const result = computeDeployAmount(100);
-    assert.strictEqual(result.amount, 0.35);
+    assert.strictEqual(result.amount, 0.5);
   });
 });
 

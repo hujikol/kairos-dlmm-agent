@@ -7,11 +7,12 @@ import { getDB, runTransaction } from "../db.js";
 import { log } from "../logger.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { pushEvent } from "./events.js";
+import { minutesOutOfRange } from "./oor.js";
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
-export function updatePosition(position_address, updates) {
-  const db = getDB();
+export function updatePosition(position_address, updates, db) {
+  if (!db) db = getDB();
   const keys = Object.keys(updates);
   if (keys.length === 0) return;
   const setCols = keys.map(k => `${k} = ?`).join(", ");
@@ -26,8 +27,8 @@ function touchLastUpdated() {
   db.prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)').run("lastUpdated", new Date().toISOString());
 }
 
-export function appendNote(position_address, note) {
-  const db = getDB();
+export function appendNote(position_address, note, db) {
+  if (!db) db = getDB();
   const pos = db.prepare("SELECT notes FROM positions WHERE position = ?").get(position_address);
   if (!pos) return;
   let notes = [];
@@ -36,7 +37,7 @@ export function appendNote(position_address, note) {
     notes = [];
   }
   notes.push(note);
-  updatePosition(position_address, { notes: JSON.stringify(notes) });
+  updatePosition(position_address, { notes: JSON.stringify(notes) }, db);
 }
 
 function rowToPos(row) {
@@ -287,16 +288,4 @@ export function getStateSummary() {
     last_updated: getKV("lastUpdated"),
     recent_events: events,
   };
-}
-
-/**
- * How many minutes has a position been out of range?
- * Returns 0 if currently in range.
- */
-export function minutesOutOfRange(position_address) {
-  const db = getDB();
-  const pos = db.prepare("SELECT out_of_range_since FROM positions WHERE position = ?").get(position_address);
-  if (!pos || !pos.out_of_range_since) return 0;
-  const ms = Date.now() - new Date(pos.out_of_range_since).getTime();
-  return Math.floor(ms / 60000);
 }

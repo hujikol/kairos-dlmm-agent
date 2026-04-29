@@ -60,7 +60,7 @@ function pruneOldRecords(db) {
 function pruneIfNeeded(db) {
   const { c } = db.prepare(`SELECT COUNT(*) as c FROM ${TABLE}`).get();
   if (c > AUTO_PRUNE_THRESHOLD) {
-    const cutoff = new Date(Date.now() - PRUNE_DAYS * 86_400_000).toISOString();
+    const _cutoff = new Date(Date.now() - PRUNE_DAYS * 86_400_000).toISOString();
     const toDelete = c - AUTO_PRUNE_THRESHOLD;
     const oldest = db.prepare(
       `SELECT id FROM ${TABLE} ORDER BY timestamp ASC LIMIT ?`

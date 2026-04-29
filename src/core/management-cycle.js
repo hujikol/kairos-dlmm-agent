@@ -6,7 +6,7 @@
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
-import { config, computeDeployAmount, isDryRun } from "../config.js";
+import { config } from "../config.js";
 import {
   timers,
   _busyState,
@@ -16,6 +16,7 @@ import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
 import { captureAlert } from "../instrument.js";
 import { getTrackedPosition } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
+import { getStreak, incrementStreak, resetStreak } from "./state/index.js";
 import { recordPositionSnapshot, recallForPool } from "../features/pool-memory.js";
 import { pushNotification, hasPendingNotifications } from "../notifications/queue.js";
 import { isEnabled as telegramIsEnabled, drainTelegramQueue } from "../notifications/telegram.js";
@@ -77,13 +78,24 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       return { ...p, recall: recallForPool(p.pool) };
     });
 
-    // JS trailing TP check
+    // JS trailing TP check and Loss Streak Tracking
     const exitMap = new Map();
     for (const p of positionData) {
       const exit = updatePnlAndCheckExits(p.position, p, config.management);
       if (exit) {
         exitMap.set(p.position, exit.reason);
         log("info", "state", `Exit alert for ${p.pair}: ${exit.reason}`);
+      }
+
+      // Loss Streak tracking
+      const isOOR = !p.in_range;
+      const isNegative = (p.pnl_pct ?? 0) < config.management.lossStreakMinPnlPct;
+
+      if (!isOOR && isNegative) {
+        incrementStreak(p.position);
+        log("debug", "loss-streak", `${p.pair}: streak ${getStreak(p.position)}`);
+      } else {
+        resetStreak(p.position);
       }
     }
 
@@ -110,14 +122,12 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
     // Direct close execution — bypasses LLM entirely
     const { closePosition, claimFees } = await import("../integrations/meteora/close.js");
-    const closeResults = [];
     for (const p of closeActions) {
       const act = actionMap.get(p.position);
       const reason = act.reason || "agent decision";
       log("info", "cron", `Direct CLOSE: ${p.pair} (${p.position}) — ${reason}`);
       try {
         const result = await closePosition({ position_address: p.position, reason });
-        closeResults.push({ position: p, result, reason });
         if (result.success !== false) {
           pushNotification({
             type: "close",
@@ -165,7 +175,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
       const cur = config.management.solMode ? "◎" : "$";
       const actionBlocks = instructionActions.map((p) => {
-        const act = actionMap.get(p.position);
+        const _act = actionMap.get(p.position);
         return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,

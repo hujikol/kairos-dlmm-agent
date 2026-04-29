@@ -12,7 +12,7 @@
  */
 
 import { log } from "./logger.js";
-import { loadRules, saveRules, ensureTable } from "./postmortem/store.js";
+import { loadRules, saveRules, _ensureTable } from "./postmortem/store.js";
 import { detectLosingPattern, detectRecurringFailure, detectTimePattern } from "./postmortem/rules.js";
 import { writeAutopsyToLessons } from "./postmortem/autopsy.js";
 
@@ -145,5 +145,5 @@ export {
   getRemediationForReason,
 } from "./postmortem/rules.js";
 
-export { loadRules, saveRules, ensureTable } from "./postmortem/store.js";
+export { loadRules, saveRules, _ensureTable as ensureTable } from "./postmortem/store.js";
 export { writeAutopsyToLessons } from "./postmortem/autopsy.js";

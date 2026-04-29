@@ -4,7 +4,6 @@
  */
 
 import { getDB } from "./db.js";
-import { log } from "./logger.js";
 import { USER_CONFIG_PATH } from "../config.js";
 import writeFileAtomic from "write-file-atomic";
 import fs from "fs";

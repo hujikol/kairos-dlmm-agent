@@ -1,5 +1,5 @@
 import { out, die, COMMAND_DEFAULTS } from "../utils.js";
-import { addLesson, listLessons } from "../../core/lessons.js";
+import { addLesson, listLessons } from "../../core/lesson-repo.js";
 
 export async function lessonsCmd(argv, flags, sub2) {
   if (sub2 === "add") {

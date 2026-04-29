@@ -8,7 +8,7 @@
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert";
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ describe("agent/react.js core logic", () => {
     };
 
     try {
-      const result = await agentLoop("test goal", 20, [], "GENERAL", null, null, {});
+      const _result = await agentLoop("test goal", 20, [], "GENERAL", null, null, {});
       assert.strictEqual(callCount, 6, "callWithRetry should fire exactly 6 times (MAX_REACT_DEPTH)");
     } finally {
       fallbackMod.callWithRetry = orig;
@@ -78,7 +78,7 @@ describe("agent/react.js core logic", () => {
     });
 
     try {
-      const result = await agentLoop("simple question", 3, [], "GENERAL", null, null, {});
+      const _result = await agentLoop("simple question", 3, [], "GENERAL", null, null, {});
       assert.strictEqual(result.content, "All good, no tools needed.");
     } finally {
       fallbackMod.callWithRetry = orig;
@@ -133,7 +133,7 @@ describe("agent/react.js core logic", () => {
     };
 
     try {
-      const result = await agentLoop("check pnl", 5, [], "MANAGER", null, null, {});
+      const _result = await agentLoop("check pnl", 5, [], "MANAGER", null, null, {});
       // Loop completes without throwing — error is captured and returned as tool result
       assert.ok(result !== undefined, "agentLoop should return a result");
     } finally {
@@ -152,7 +152,7 @@ describe("agent/react.js core logic", () => {
     const origExec = execMod.executeTool;
 
     let step = 0;
-    let toolCallResults = [];
+    let _toolCallResults = [];
 
     fallbackMod.callWithRetry = async () => {
       step++;
@@ -174,13 +174,13 @@ describe("agent/react.js core logic", () => {
     };
 
     let execCount = 0;
-    execMod.executeTool = async (name, args) => {
+    execMod.executeTool = async (_name, _args) => {
       execCount++;
       return { success: true, deployed: `pos${execCount}` };
     };
 
     try {
-      const result = await agentLoop("deploy to PoolABC", 10, [], "SCREENER", null, null, {});
+      const _result = await agentLoop("deploy to PoolABC", 10, [], "SCREENER", null, null, {});
       // Loop should complete (not hang) after the second deploy_position is blocked
       assert.ok(result !== undefined, "agentLoop should return after blocked call");
     } finally {
@@ -197,7 +197,7 @@ describe("agent/react.js core logic", () => {
     const origExec = execMod.executeTool;
 
     let step = 0;
-    const toolCalls = [];
+    const _toolCalls = [];
 
     fallbackMod.callWithRetry = async () => {
       step++;
@@ -233,7 +233,7 @@ describe("agent/react.js core logic", () => {
     };
 
     const calledTools = [];
-    execMod.executeTool = async (name, args) => {
+    execMod.executeTool = async (_name, _args) => {
       calledTools.push(name);
       return { success: true };
     };
@@ -273,7 +273,7 @@ describe("agent/react.js core logic", () => {
     const fallbackMod = await import("../src/agent/fallback.js");
     const origFallback = fallbackMod.callWithRetry;
 
-    let attempt = 0;
+    let _attempt = 0;
     fallbackMod.callWithRetry = async () => {
       attempt++;
       const err = new Error("429 rate limit");
@@ -313,7 +313,7 @@ describe("agent/react.js core logic", () => {
     });
 
     try {
-      const result = await agentLoop("hello", 3, [], "GENERAL", null, null, {});
+      const _result = await agentLoop("hello", 3, [], "GENERAL", null, null, {});
       assert.strictEqual(result.content, "I can help with that.");
     } finally {
       fallbackMod.callWithRetry = origFallback;

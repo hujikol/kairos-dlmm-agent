@@ -2,7 +2,7 @@
  * Rate limiting utilities for the agent loop.
  */
 
-import { log } from "../core/logger.js";
+import { log as _log } from "../core/logger.js";
 
 /**
  * Sleep helper.

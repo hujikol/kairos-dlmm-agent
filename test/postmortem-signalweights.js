@@ -5,19 +5,28 @@
 
 import { fileURLToPath } from 'url';
 import path from 'path';
-import Database from "better-sqlite3";
-import { _injectDB, initSchema } from '../src/core/db.js';
+import { it } from 'node:test';
+import Database from 'better-sqlite3';
+import { _injectDB, initSchema, getDB } from '../src/core/db.js';
+import { migrate as migration001 } from '../migrations/001_initial_schema.js';
+import { migrate as migration002 } from '../migrations/002_add_missing_columns.js';
+import { migrate as migration003 } from '../migrations/003_decision_log.js';
 
-// Use isolated in-memory DB for this test file
-const _testDb = new Database(":memory:");
-initSchema(_testDb);
-_injectDB(_testDb);
+// Use isolated in-memory DB for this test file.
+// _injectDB must run first so that tableHasColumn() (used by migration002)
+// resolves against _db rather than a null pointer.
+const _testDb = new Database(':memory:');
+_injectDB(_testDb);      // sets module-level _db = _testDb
+migration001(_testDb);   // creates all tables (fresh DB path)
+migration002(_testDb);   // adds missing columns
+migration003(_testDb);   // adds decision_log table
+initSchema(_testDb);     // creates indexes (safety net)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
-function delay(ms) {
+function _delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
@@ -114,7 +123,7 @@ await it('signal_weights_history table has correct schema', async () => {
 });
 
 await it('saveRules() persists rules to DB and loadRules() retrieves them', async () => {
-  const { clearRules, getActiveRules } = await import('../src/core/postmortem.js');
+  const { clearRules, getActiveRules} = await import('../src/core/postmortem.js');
   clearRules();
 
   const db = getDB();
@@ -223,7 +232,7 @@ await it('matchesBlockedPattern() returns rule for blocked pattern or null', asy
 });
 
 await it('MAX_RULES pruning is enforced (50 rule limit)', async () => {
-  const { clearRules, getActiveRules } = await import('../src/core/postmortem.js');
+  const { clearRules} = await import('../src/core/postmortem.js');
   clearRules();
 
   const db = getDB();

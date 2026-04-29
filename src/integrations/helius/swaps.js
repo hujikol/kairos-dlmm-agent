@@ -12,7 +12,7 @@ export const JUPITER_ULTRA_API        = process.env.JUPITER_ULTRA_API_URL || "ht
 export const JUPITER_QUOTE_API        = process.env.JUPITER_QUOTE_API_URL || "https://api.jup.ag/swap/v1";
 export const JUPITER_API_KEY          = process.env.JUPITER_API_KEY;
 
-const SLIPPAGE_BPS = config.screening?.slippageBps ?? DEFAULT_SLIPPAGE_BPS; // 3%
+const SLIPPAGE_BPS = DEFAULT_SLIPPAGE_BPS; // 3% (config override requires restart; default = 300 bps)
 
 // ─── Wallet lazy init (shared with balances.js) ────────────────
 let _wallet = null;

@@ -9,18 +9,10 @@
  *   - src/core/lesson-service.js      — recordPerformance orchestration + stats
  */
 
-import { log } from "./logger.js";
 import { getDB } from "./db.js";
 import { ageWeight, ROLE_TAGS } from "./lesson-repo.js";
-import {
-  addLesson, pinLesson, unpinLesson, listLessons,
-  removeLesson, removeLessonsByKeyword, clearAllLessons, clearPerformance,
-  rateLesson, pinLessonById, unpinLessonById,
-  getRelevantLessons,
-} from "./lesson-repo.js";
 
-// Re-export lesson-repo (callers that import from lessons.js)
-export { addLesson, pinLesson, unpinLesson, listLessons, removeLesson, removeLessonsByKeyword, clearAllLessons, clearPerformance, rateLesson, pinLessonById, unpinLessonById, getRelevantLessons, ROLE_TAGS, ageWeight };
+// Canonical definition is in lesson-repo.js:158 — not re-exported here to avoid duplication.
 
 // Re-export from lesson-service
 export {
@@ -41,8 +33,8 @@ export { evolveThresholds } from "./threshold-evolver.js";
 
 // ─── Strategy Stats (remains in lessons.js — not extracted) ──────
 
-export function getStrategyStats() {
-  const db = getDB();
+export async function getStrategyStats() {
+  const db = await getDB();
   const perf = db.prepare('SELECT pnl_pct, range_efficiency, strategy FROM performance').all();
   const byStrategy = {};
 
@@ -70,11 +62,11 @@ export function getStrategyStats() {
 
 // ─── Lessons for Prompt Injection ──────────────────────────────
 
-export function getLessonsForPrompt(opts = {}) {
+export async function getLessonsForPrompt(opts = {}) {
   if (typeof opts === "number") opts = { maxLessons: opts };
 
   const { agentType = "GENERAL", maxLessons } = opts;
-  const db = getDB();
+  const db = await getDB();
   const allRows = db.prepare('SELECT * FROM lessons').all();
   if (allRows.length === 0) return null;
 
@@ -84,7 +76,7 @@ export function getLessonsForPrompt(opts = {}) {
       parsedTags = JSON.parse(l.tags || '[]');
       if (typeof parsedTags === "string") parsedTags = JSON.parse(parsedTags);
       if (!Array.isArray(parsedTags)) parsedTags = [];
-    } catch (e) { parsedTags = []; }
+    } catch { parsedTags = []; }
 
     return {
       ...l,

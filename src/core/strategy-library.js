@@ -78,7 +78,7 @@ const DEFAULT_STRATEGIES = {
 
 async function ensureDefaultStrategies() {
   let db;
-  try { db = await getDB(); } catch (e) { return; } // db not ready, skip
+  try { db = await getDB(); } catch { return; } // db not ready, skip
   const count = db.prepare('SELECT COUNT(*) as c FROM strategies').get().c;
   if (count === 0) {
     runTransaction(() => {

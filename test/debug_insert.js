@@ -1,25 +1,29 @@
 /**
- * Debug script to test near_misses and lessons inserts in isolation.
+ * Integration test for near_misses and lessons inserts against an
+ * in-memory better-sqlite3 DB with full schema (migrate + initSchema).
+ * Run with: node --test test/debug_insert.js
  */
 import Database from "better-sqlite3";
-import { initSchema, closeDB } from "../src/core/db.js";
+import { initSchema, migrate, _injectDB } from "../src/core/db.js";
+import { test } from "node:test";
+import assert from "node:assert";
 import crypto from "crypto";
 
 const db = new Database(":memory:");
+// _injectDB sets the module-level _db so migrate()'s internal _all() call works
+_injectDB(db);
+migrate(db);
 initSchema(db);
 
 // Check what the actual schema is
-console.log("=== near_misses columns ===");
 const nmCols = db.prepare("PRAGMA table_info(near_misses)").all();
-console.log(nmCols);
+assert.ok(nmCols.length > 0, "near_misses table should exist");
 
-console.log("\n=== lessons columns ===");
 const lCols = db.prepare("PRAGMA table_info(lessons)").all();
-console.log(lCols);
+assert.ok(lCols.length > 0, "lessons table should exist");
 
 // Test near_misses insert
-console.log("\n=== Testing near_misses insert ===");
-try {
+test("near_misses insert works with full schema", () => {
   const id = crypto.randomUUID();
   db.prepare(`
     INSERT OR IGNORE INTO near_misses (
@@ -34,15 +38,14 @@ try {
     0.5, 1.5, 30, 40, 75,
     "manual", new Date().toISOString()
   );
-  console.log("SUCCESS: near_misses insert worked");
-} catch (e) {
-  console.log(`ERROR: ${e.message}`);
-  console.log(e.stack);
-}
+  const row = db.prepare("SELECT * FROM near_misses WHERE id = ?").get(id);
+  assert.strictEqual(row.pool, "pool_test");
+  assert.strictEqual(row.strategy, "bid_ask");
+  assert.strictEqual(row.bin_step, 90);
+});
 
 // Test lessons insert
-console.log("\n=== Testing lessons insert ===");
-try {
+test("lessons insert works with full schema", () => {
   const lid = crypto.randomUUID();
   db.prepare(`
     INSERT INTO lessons (id, rule, tags, outcome, context, pnl_pct, range_efficiency, pool, created_at, pinned, role)
@@ -51,10 +54,8 @@ try {
     lid, "Test lesson rule", '["test"]', "bad", "test context", -10, 20,
     "pool_test", "2025-01-01T00:00:00Z", 0, null
   );
-  console.log("SUCCESS: lessons insert worked");
-} catch (e) {
-  console.log(`ERROR: ${e.message}`);
-  console.log(e.stack);
-}
-
-closeDB(db);
+  const row = db.prepare("SELECT * FROM lessons WHERE id = ?").get(lid);
+  assert.strictEqual(row.rule, "Test lesson rule");
+  assert.strictEqual(row.outcome, "bad");
+  assert.strictEqual(row.pnl_pct, -10);
+});

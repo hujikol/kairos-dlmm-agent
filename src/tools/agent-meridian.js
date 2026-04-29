@@ -87,7 +87,7 @@ export async function agentMeridianPositions(wallet_address) {
     if (Array.isArray(data)) return data;
     if (Array.isArray(data?.positions)) return data.positions;
     return [];
-  } catch (err) {
+  } catch {
     // Relay unavailable or timed out — caller should fall back to Meteora
     return null;
   }
@@ -112,7 +112,7 @@ export async function agentMeridianPnl({ position_address, pool_address }) {
     clearTimeout(timer);
     if (!data || Object.keys(data).length === 0) return null;
     return data;
-  } catch (err) {
+  } catch {
     // Relay unavailable or timed out — caller should fall back to Meteora
     return null;
   }

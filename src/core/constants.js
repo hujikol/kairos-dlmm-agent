@@ -1,6 +1,8 @@
 /**
  * Centralized magic numbers and tuning constants.
  * All hardcoded numeric values that could benefit from named identification.
+ *
+ * For per-instance operator overrides (e.g. emergency tuning), see constants-local.js.
  */
 
 // ─── Simulator / IL Model ────────────────────────────────────────
@@ -27,6 +29,12 @@ export const RISK_LOW_ORGANIC  = 25;   // organic_score < 60
 
 // ─── Meteora / Positions ─────────────────────────────────────────
 export const CLAIM_DEDUP_MS    = 60_000; // 60-second window to skip re-claiming fees
+export const METEORA_MIN_BIN_ID = -887272;
+export const METEORA_MAX_BIN_ID =  887272;
+export const METEORA_CLOSE_RETRY_DELAY_MS = 3_000;
+export const METEORA_POOL_CACHE_TTL_MS    = 600_000; // 10 minutes
+export const DEFAULT_PRIORITY_MICRO_LAMPORTS = 50_000;
+export const DEFAULT_COMPUTE_UNIT_LIMIT     = 1_400_000;
 
 // ─── Timeouts (ms) ─────────────────────────────────────────
 export const WATCHDOG_POLL_INTERVAL_MS     = 60_000;
@@ -36,21 +44,38 @@ export const SOLANA_BACKOFF_BASE_DELAY_MS  = 1_000;
 export const SOLANA_BACKOFF_MAX_DELAY_MS   = 30_000;
 export const TELEGRAM_POLL_TIMEOUT_MS      = 35_000;
 export const TELEGRAM_MSG_DELAY_MS         = 500;
+export const TELEGRAM_RETRY_DELAY_MS       = 5_000;
+export const HEALTH_CHECK_TIMEOUT_MS       = 2_000;
 export const HIVE_MIND_SYNC_DEBOUNCE_MS    = 300_000;
 export const HIVE_MIND_GET_TIMEOUT_MS      = 5_000;
 export const HIVE_MIND_POST_TIMEOUT_MS     = 10_000;
 export const PNL_TIMEOUT_MS               = 8_000;
 export const METEORA_CLOSE_SYNC_WAIT_MS    = 15_000;
-export const METEORA_CLOSE_RETRY_DELAY_MS  = 3_000;
 export const METEORA_POSITIONS_CACHE_TTL_MS = 300_000;
 export const PNL_SUSPECT_PCT  = 100;   // flag PnL > 100% as suspect (API bad data)
 export const PNL_SUSPECT_USD  = 1;     // minimum USD value for inner suspect check
+
+// ─── Time / Date ────────────────────────────────────────────────────
+export const MS_PER_DAY = 86_400_000;
 
 // ─── Position Age & Yield ─────────────────────────────────────────
 export const MIN_POSITION_AGE_FOR_YIELD_CHECK_MS = 86_400_000; // 24 hours in ms
 
 // ─── Screener ─────────────────────────────────────────────────────
 export const SCREENING_COOLDOWN_MS = 300_000; // 5-minute cooldown between scans
+export const CANDIDATES_RATE_LIMIT_DELAY_MS = 150; // ms delay between candidate fetches
+export const ATH_THRESHOLD_BASE    = 100;  // base ATH threshold multiplier (discovery.js:219)
+
+// ─── CLI Defaults ───────────────────────────────────────────────────
+export const CLI_CANDIDATES_LIMIT     = 5;
+export const CLI_TOKEN_HOLDERS_LIMIT  = 20;
+export const CLI_SEARCH_POOLS_LIMIT   = 10;
+export const CLI_STUDY_LIMIT          = 4;
+export const CLI_LESSONS_LIMIT        = 50;
+export const CLI_PERFORMANCE_LIMIT   = 200;
+
+// ─── Jupiter / Token Holders ────────────────────────────────────────
+export const JUPITER_HOLDERS_FETCH_LIMIT = 100; // per Jupiter v2 API (jupiter.js:157)
 
 // ─── LLM Output ───────────────────────────────────────────────────
 export const MIN_LLM_OUTPUT_LEN     = 5;
@@ -59,6 +84,11 @@ export const MAX_HTML_MSG_LEN       = 4096;
 
 // ─── Agent Loop ───────────────────────────────────────────────────
 export const LOOP_TIMEOUT_MS = 120_000; // 2 minutes wall-clock per step
+export const MAX_REACT_DEPTH = 10;
+export const MAX_TOOL_CALLS_PER_STEP = 10;
+
+// ─── Threshold Evolution ───────────────────────────────────────────
+export const MAX_CHANGE_PER_STEP = 0.20;
 
 // ─── Gas ──────────────────────────────────────────────────────────
 export const GAS_COST_PER_TX_SOL = 0.01; // 0.005 * 2 for deploy + close
@@ -79,7 +109,18 @@ export const WIN_RATE_THRESHOLD     = 0.33;  // win rate below this triggers AVO
 export const FREQUENCY_THRESHOLD    = 0.6;   // failure frequency above this triggers RECURRING_FAILURE (postmortem.js line 272)
 
 // ─── External Integrations ─────────────────────────────────────────
-export const OKX_ENRICHMENT_TIMEOUT_MS = 60_000;  // OKX enrichment timeout (discovery.js line 172)
-export const BALANCE_CACHE_AGE_MS       = 30_000;  // balance cache max age (executor.js line 180)
-export const SLIPPAGE_BPS               = 300;      // default slippage in basis points (helius/swaps.js line 14)
-export const TOKEN_AGE_MS_PER_HOUR      = 3_600_000; // ms per hour for token age calculation (discovery.js line 45)
+export const SOLANA_TOKEN_PROGRAM_ID      = "TokenkegQfeufY51mhKE9FknRSAoGYStdFCo5vvhMpkp";
+export const OKX_ENRICHMENT_TIMEOUT_MS    = 60_000;  // OKX enrichment timeout (discovery.js line 172)
+export const OKX_ENRICHMENT_CACHE_TTL_MS  = 300_000; // 5 minutes (jupiter.js:9)
+export const BALANCE_CACHE_AGE_MS         = 30_000;  // balance cache max age (executor.js line 180)
+export const SLIPPAGE_BPS                 = 300;      // default slippage in basis points (helius/swaps.js line 14)
+export const DEFAULT_SLIPPAGE_BPS          = 10;       // lower baseline slippage for most operations
+export const TOKEN_AGE_MS_PER_HOUR         = 3_600_000; // ms per hour for token age calculation (discovery.js line 45)
+
+// ─── Loss Streak ───────────────────────────────────────────────────
+export const DEFAULT_LOSS_STREAK_THRESHOLD = 3;
+export const DEFAULT_LOSS_STREAK_MIN_PNL_PCT = -1.0;
+export const DEFAULT_LOSS_STREAK_MIN_AGE_CYCLES = 2;
+
+// ─── Watchdog Soft Loss ─────────────────────────────────────────────
+export const SOFT_LOSS_TRIGGER_PCT = -4; // triggers unscheduled management cycle

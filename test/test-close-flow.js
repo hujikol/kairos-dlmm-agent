@@ -19,10 +19,10 @@ import assert from "node:assert";
 import { mock } from "node:test";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
-import { _injectDB, closeDB } from "../src/core/db.js";
-import { makeMemDB } from "./mem-db.js";
+import { _injectDB } from "../src/core/db.js";
+
 import { clearPerformance } from "../src/core/lessons.js";
-import { getTrackedPosition, _injectTrackedPosition } from "../src/core/state/index.js";
+import { _injectTrackedPosition } from "../src/core/state/index.js";
 import { _injectPool, _injectSendTx } from "../src/integrations/meteora/pool.js";
 import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";
 
@@ -32,9 +32,9 @@ import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations
 let _mockAgent = null;
 let _dispatcherMock = null;
 
-function installUndiciMock() {
+function _installUndiciMock() {
   try {
-    const { MockAgent, setGlobalDispatcher, getGlobalDispatcher } = require("undici");
+    const { MockAgent, setGlobalDispatcher, _getGlobalDispatcher } = require("undici");
     _mockAgent = new MockAgent({ keepAliveTimeout: 0 });
     _mockAgent.disableNetConnect();
     setGlobalDispatcher(_mockAgent);
@@ -51,12 +51,12 @@ function installUndiciMock() {
   }
 }
 
-function uninstallUndiciMock() {
+function _uninstallUndiciMock() {
   if (!_mockAgent) return;
   try {
     const { setGlobalDispatcher, getGlobalDispatcher } = require("undici");
     setGlobalDispatcher(getGlobalDispatcher()); // restore default
-  } catch (_) {}
+  } catch {}
   _mockAgent = null;
   _dispatcherMock = null;
 }
@@ -256,7 +256,7 @@ describe("closePosition integration tests", function () {
     seedPosition(_testDB, POS555, POOL555);
 
     const { closePosition } = await import("../src/integrations/meteora/close.js");
-    const result = await closePosition({ position_address: POS555, reason: "test" });
+    const _result = await closePosition({ position_address: POS555, reason: "test" });
 
     const removeCalled = failingPool.removeLiquidity.mock.calls.length > 0;
     const closeCalled = failingPool.closePosition.mock.calls.length > 0;
@@ -333,7 +333,7 @@ describe("closePosition integration tests", function () {
     });
 
     const { closePosition } = await import("../src/integrations/meteora/close.js");
-    const result = await closePosition({ position_address: POS888, reason: "test" });
+    const _result = await closePosition({ position_address: POS888, reason: "test" });
 
     // The early-return path is hit iff getTrackedPosition returns the injected closed position
     // Due to test infra state pollution between tests, this may occasionally fail;

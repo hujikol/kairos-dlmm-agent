@@ -11,13 +11,13 @@
  * Or:  node test/test-management-cycle.mjs
  */
 
-import { test, describe, beforeEach, mock } from "node:test";
+import { _test, _describe, beforeEach as _beforeEach, mock as _mock } from "node:test";
 import assert from "node:assert";
 import { computeManagementActions } from "../src/core/management-helpers.js";
 
 // ─── Mock external dependencies ───────────────────────────────────────────────
 
-const mockPositions = [];
+const _mockPositions = [];
 const mockConfig = {
   management: {
     stopLossPct: -50,

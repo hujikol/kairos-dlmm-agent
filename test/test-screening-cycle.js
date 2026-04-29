@@ -43,6 +43,10 @@ describe("runScreeningCycle pre-checks", () => {
     _injectDailyPnL({ realized: 0, unrealized: 0 });
     _injectCircuitBreaker({ action: "trade", reason: "normal" });
     if (!process.env.DRY_RUN) process.env.DRY_RUN = "true";
+    if (!process.env.OPENROUTER_API_KEY) process.env.OPENROUTER_API_KEY = "test-key";
+    // Sentinel values accepted by validateEnv() so tests don't need real keys
+    if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+    if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
   });
 
   afterEach(async () => {
@@ -89,9 +93,14 @@ describe("runScreeningCycle pre-checks", () => {
     // Insufficient SOL for any deploy
     _injectBalances({ sol: 0.001, tokens: [] });
 
+    // DRY_RUN bypasses the SOL check, so disable it for this test
+    const origDryRun = process.env.DRY_RUN;
+    process.env.DRY_RUN = "false";
+
     const { runScreeningCycle } = await import("../src/core/screening-cycle.js");
     const result = await runScreeningCycle({ silent: true });
 
+    process.env.DRY_RUN = origDryRun ?? "true";
     Object.assign(config.management, origConfigMgmt);
     assert.strictEqual(result, null, "Should return null when SOL insufficient");
   });
@@ -124,14 +133,13 @@ describe("runScreeningCycle pre-checks", () => {
     // Inject non-empty candidates so getTopCandidates "returns something"
     _injectDiscovery({ pools: [{ pool_address: "PoolA", volume_24h: 10000 }] });
 
-    const { runScreeningCycle } = await import("../src/core/screening-cycle.js");
     // The cycle may still return null if LLM call fails, but it should
     // pass the pre-checks and proceed into the screening logic.
     // We verify this by checking that it didn't immediately return null
     // due to pre-check failures (which would be synchronous before any async work).
-    const { runScreeningCycle: run2 } = await import("../src/core/screening-cycle.js");
+    const { runScreeningCycle: _run2 } = await import("../src/core/screening-cycle.js");
     // If we got here without an error, pre-checks passed
-    const result = await run2({ silent: true });
+    const _result = await _run2({ silent: true });
     // The result may be null for other reasons (LLM, etc.) but not pre-check
     // We can't easily verify "got past pre-checks" without fully mocking the LLM,
     // so this test documents that with sufficient SOL and room, it does not

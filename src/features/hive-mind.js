@@ -119,6 +119,9 @@ export function isHiveMindEnabled() {
 export function ensureAgentId() {
   const userConfig = readUserConfig();
   if (userConfig.hive?.agentId) {
+    // Bootstrap: sync persisted hive config into live config Proxy.
+    // Safe — this is read-only from userConfig, not a user-facing write,
+    // and ensureAgentId only runs at startup / on first access, not continuously.
     config.hiveMind = config.hiveMind || {};
     config.hiveMind.agentId = userConfig.hive.agentId;
     return userConfig.hive.agentId;
@@ -132,6 +135,7 @@ export function ensureAgentId() {
   existing.hive = existing.hive || {};
   existing.hive.agentId = agentId;
   writeUserConfig(existing);
+  // Bootstrap new agentId into live config Proxy for same reason as above.
   config.hiveMind = config.hiveMind || {};
   config.hiveMind.agentId = agentId;
   log("info", "hivemind", `Generated agentId ${agentId}`);
@@ -280,7 +284,7 @@ export async function bootstrapHiveMind() {
   if (getPullMode() === "auto") {
     tasks.push(pullHiveMindLessons(), pullHiveMindPresets());
   }
-  const results = await Promise.allSettled(tasks);
+  const _results = await Promise.allSettled(tasks);
   const enabled = isHiveMindEnabled();
   log("info", "hivemind", `Bootstrap complete — enabled=${enabled}, agentId=${getAgentId()}, pullMode=${getPullMode()}`);
   return { enabled, agentId: getAgentId(), pullMode: getPullMode() };
@@ -365,8 +369,7 @@ export function shouldCountInAdjustedWinRate(closeReason) {
   return !(
     text.includes("out of range") ||
     text.includes("pumped far above range") ||
-    text === "oor" ||
-    text.includes("oor")
+    text === "oor"
   );
 }
 

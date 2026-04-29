@@ -54,6 +54,8 @@ describe("watchdog.js", () => {
   let db;
 
   beforeEach(async () => {
+    if (!process.env.WALLET_PRIVATE_KEY) process.env.WALLET_PRIVATE_KEY = "[]";
+    if (!process.env.RPC_URL) process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
     db = await makeSchemaDB();
     _injectDB(db);
     _resetPositionsCache();

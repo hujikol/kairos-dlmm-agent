@@ -1,8 +1,17 @@
 import { getDB } from "./db.js";
-import { config } from "../config.js";
+import { getRiskConfig } from "./config-facade.js";
 
-const DAILY_PROFIT_TARGET = config.risk.dailyProfitTarget ?? 2;
-const DAILY_LOSS_LIMIT = config.risk.dailyLossLimit ?? -5;
+/**
+ * Returns risk config values for daily PnL tracking.
+ * Called at runtime rather than module-load time to ensure config is validated.
+ */
+function getDailyLimits() {
+  const r = getRiskConfig();
+  return {
+    DAILY_PROFIT_TARGET: r.dailyProfitTarget ?? 2,
+    DAILY_LOSS_LIMIT: r.dailyLossLimit ?? -5,
+  };
+}
 
 // ─── Test injection ───────────────────────────────────────────────────────────
 let _testDailyPnL = null;
@@ -30,6 +39,7 @@ export async function getDailyPnL() {
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
   const iso = todayStart.toISOString();
+  const { DAILY_PROFIT_TARGET, DAILY_LOSS_LIMIT } = getDailyLimits();
 
   // Sum realized PnL from closed positions today
   const realized = db.prepare(
