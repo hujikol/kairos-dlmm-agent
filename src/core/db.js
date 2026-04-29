@@ -70,6 +70,14 @@ let _rawRun = null;
 let _rawGetRowsModified = null;
 
 function _normalizeBindParams(bindParams) {
+  if (bindParams.length === 1 && typeof bindParams[0] === 'object' && bindParams[0] !== null && !Array.isArray(bindParams[0])) {
+    const obj = bindParams[0];
+    const bound = {};
+    for (const [k, v] of Object.entries(obj)) {
+      bound[k.startsWith('@') || k.startsWith('$') || k.startsWith(':') ? k : `@${k}`] = v === undefined ? null : v;
+    }
+    return bound;
+  }
   return bindParams.map((value) => value === undefined ? null : value);
 }
 
@@ -157,21 +165,22 @@ function _makePreparedStatement(sql) {
       if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
       const rows = [];
       while (stmt.step()) rows.push(stmt.getAsObject());
-      stmt.free();
+      stmt.reset();
       return rows;
     },
     get: (...bindParams) => {
       if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
       const row = stmt.step() ? stmt.getAsObject() : null;
-      stmt.free();
+      stmt.reset();
       return row;
     },
     run: (...bindParams) => {
       if (bindParams.length > 0) stmt.bind(_normalizeBindParams(bindParams));
       stmt.step();
-      stmt.free();
+      stmt.reset();
       return { changes: _rawGetRowsModified(), lastInsertRowid: 0 };
     },
+    free: () => stmt.free(),
     _stmt: stmt,
   };
 }

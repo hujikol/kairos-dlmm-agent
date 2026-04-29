@@ -14,7 +14,16 @@ export async function makeMemDB() {
   const SQL = await initSqlJs();
   const db = new SQL.Database();
   const bindValues = (stmt, vals) => {
-    if (vals.length > 0) stmt.bind(vals.map((value) => value === undefined ? null : value));
+    if (vals.length === 1 && typeof vals[0] === 'object' && vals[0] !== null && !Array.isArray(vals[0])) {
+      const obj = vals[0];
+      const bound = {};
+      for (const [k, v] of Object.entries(obj)) {
+        bound[k.startsWith('@') || k.startsWith('$') || k.startsWith(':') ? k : `@${k}`] = v === undefined ? null : v;
+      }
+      stmt.bind(bound);
+    } else if (vals.length > 0) {
+      stmt.bind(vals.map((value) => value === undefined ? null : value));
+    }
   };
 
   const wrapper = {
@@ -39,8 +48,8 @@ export async function makeMemDB() {
         return {
           bind(...vals) { bindValues(rawStmt, vals); return this; },
           step() { rawStmt.step(); return false; },
-          run(...vals) { bindValues(rawStmt, vals); rawStmt.step(); rawStmt.free(); return { changes: db.getRowsModified(), lastInsertRowid: 0 }; },
-          get() { return null; },
+          run(...vals) { if (vals.length > 0) bindValues(rawStmt, vals); rawStmt.step(); rawStmt.free(); return { changes: db.getRowsModified(), lastInsertRowid: 0 }; },
+          get(...vals) { if (vals.length > 0) bindValues(rawStmt, vals); return null; },
           free() { rawStmt.free(); },
           reset() { rawStmt.reset(); },
           getRowsModified: () => db.getRowsModified(),
@@ -66,14 +75,16 @@ export async function makeMemDB() {
             }
             return rawStmt.step();
           },
-          get() {
+          get(...vals) {
+            if (vals.length > 0) bindValues(rawStmt, vals);
             const overlay = wrapper._testRows.get(tableName);
             if (overlay && overlay.length > 0) {
               return overlay[wrapper._resultRow++] || null;
             }
             return rawStmt.step() ? rawStmt.getAsObject() : null;
           },
-          all() {
+          all(...vals) {
+            if (vals.length > 0) bindValues(rawStmt, vals);
             const overlay = wrapper._testRows.get(tableName);
             if (overlay && overlay.length > 0) {
               return overlay;
