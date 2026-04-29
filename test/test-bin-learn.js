@@ -188,8 +188,8 @@ describe("FEATURE-BINLEARN-01 bin learning", () => {
 
       const result = getBinStatsByVolatility(1.5);
       assert.notStrictEqual(result, null);
-      assert.strictEqual(result.avg_lower_bin, 96); // avg of 95 and 98 = 96.5 → rounds to 96
-      assert.strictEqual(result.avg_upper_bin, 126); // avg of 125 and 128 = 126.5 → rounds to 126
+      assert.strictEqual(result.avg_lower_bin, 97); // avg of 95 and 98 = 96.5 → rounds to 97
+      assert.strictEqual(result.avg_upper_bin, 127); // avg of 125 and 128 = 126.5 → rounds to 127
       assert.strictEqual(result.avg_total_bins, 31); // avg of 30 and 32 = 31
       assert.strictEqual(result.sample_size, 2);
       assert.strictEqual(result.win_rate_at_vol, 50); // 1 winner out of 2 → 50%

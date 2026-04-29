@@ -94,7 +94,7 @@ export function recordPoolDeploy(poolAddress, deployData, binConfig) {
     const lastOutcome = (pnl_pct ?? 0) >= 0 ? "profit" : "loss";
 
     // Fetch latest pool state
-    const poolState = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress);
+    const poolState = db.prepare('SELECT * FROM pool_memory WHERE pool_address = ?').get(poolAddress) || { notes: '[]', name: addrShort(poolAddress), base_mint: null, cooldown_until: null };
     let notes = [];
     try { notes = JSON.parse(poolState.notes || '[]'); } catch (e) { log("warn", "pool-memory", `Failed to parse pool notes: ${e?.message}`); notes = []; }
     let cooldownUntil = poolState.cooldown_until;
@@ -336,7 +336,7 @@ export function getBinSuggestion(poolAddress) {
     LIMIT 10
   `).all(poolAddress);
 
-  if (winners.length === 0) return null;
+  if (winners.length < 2) return null;
 
   // Use median of winner configs
   const lowerBins = winners.map(w => w.lower_bin).filter(v => v != null).sort((a, b) => a - b);
