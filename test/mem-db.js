@@ -13,6 +13,9 @@ import initSqlJs from "sql.js";
 export async function makeMemDB() {
   const SQL = await initSqlJs();
   const db = new SQL.Database();
+  const bindValues = (stmt, vals) => {
+    if (vals.length > 0) stmt.bind(vals.map((value) => value === undefined ? null : value));
+  };
 
   const wrapper = {
     transaction(fn) {
@@ -34,9 +37,9 @@ export async function makeMemDB() {
       if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE")) {
         const rawStmt = db.prepare(sql);
         return {
-          bind(...vals) { rawStmt.bind(...vals); return this; },
+          bind(...vals) { bindValues(rawStmt, vals); return this; },
           step() { rawStmt.step(); return false; },
-          run(...vals) { rawStmt.bind(...vals); rawStmt.step(); rawStmt.free(); return { changes: db.getRowsModified(), lastInsertRowid: 0 }; },
+          run(...vals) { bindValues(rawStmt, vals); rawStmt.step(); rawStmt.free(); return { changes: db.getRowsModified(), lastInsertRowid: 0 }; },
           get() { return null; },
           free() { rawStmt.free(); },
           reset() { rawStmt.reset(); },
@@ -52,7 +55,7 @@ export async function makeMemDB() {
         const tableName = tableMatch ? tableMatch[1] : null;
 
         return {
-          bind(...vals) { rawStmt.bind(...vals); return this; },
+          bind(...vals) { bindValues(rawStmt, vals); return this; },
           step() {
             // Check overlay first for test data injection
             const overlay = wrapper._testRows.get(tableName);

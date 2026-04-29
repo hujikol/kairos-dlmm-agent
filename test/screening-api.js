@@ -31,10 +31,12 @@ describe("screening/discovery", () => {
   });
 
   it("getTopCandidates accepts limit parameter", async () => {
-    const { getTopCandidates } = await import("../src/screening/discovery.js");
-    // Without valid API keys the call will likely fail/return empty,
-    // but the function should accept the parameter without throwing a TypeError
-    await getTopCandidates({ limit: 1 });
+    const { getTopCandidates, _injectDiscovery } = await import("../src/screening/discovery.js");
+    const { _injectPositionsCache } = await import("../src/integrations/meteora/positions.js");
+    _injectDiscovery({ pools: [] });
+    _injectPositionsCache({ wallet: "TestWallet", total_positions: 0, positions: [] });
+    const result = await getTopCandidates({ limit: 1 });
+    assert.equal(Array.isArray(result.candidates), true);
   });
 
   it("getPoolDetail requires pool_address parameter", async () => {
@@ -48,12 +50,22 @@ describe("screening/discovery", () => {
 
   it("getPoolDetail accepts pool_address and timeframe", async () => {
     const { getPoolDetail } = await import("../src/screening/discovery.js");
-    // With a valid-looking address format but no real network, should get a network error
-    // not a parameter error — this verifies the function accepts both args
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => ({
+      ok: true,
+      json: async () => ({
+        data: [{
+          pool_address: url.includes("timeframe=1h") ? "PoolWithTimeframe" : "PoolWithoutTimeframe",
+        }],
+      }),
+    });
     const fakeAddr = "7n1AhBwFD5MWKxL9K4JmCbgWBnJBJf3GvWKJx3gGJFZP";
-    const result = await getPoolDetail({ pool_address: fakeAddr, timeframe: "1h" });
-    // Result shape should have a pool key if it succeeded
-    assert.ok(result === undefined || typeof result === "object");
+    try {
+      const result = await getPoolDetail({ pool_address: fakeAddr, timeframe: "1h" });
+      assert.equal(result.pool_address, "PoolWithTimeframe");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

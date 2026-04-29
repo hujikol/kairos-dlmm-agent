@@ -12,9 +12,21 @@ import "dotenv/config";
  * Run: node --test test/concurrent-cycles.js
  */
 
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
 import assert from "node:assert";
 import Database from "better-sqlite3";
+
+process.env.DRY_RUN = "true";
+
+after(async () => {
+  const { closeDB } = await import("../src/core/db.js");
+  const { stopCronJobs } = await import("../src/core/scheduler.js");
+  const { stopWatchdog } = await import("../src/watchdog.js");
+  stopCronJobs();
+  stopWatchdog();
+  await closeDB();
+  setImmediate(() => process.exit(process.exitCode ?? 0));
+});
 
 function freshDB() {
   const db = new Database(":memory:");
@@ -31,10 +43,16 @@ async function stubAgentGateway() {
   const fs = await import("fs");
   const path = req.resolve("../src/core/agent-gateway.js");
   const original = fs.readFileSync(path, "utf8");
-  const stub = `export class AgentGateway {
+const stub = `export class AgentGateway {
   constructor() {}
-  async runManagementCycle() { return { content: "" }; }
-  async runScreeningCycle() { return { content: "", partialResult: null, toolFailed: null }; }
+  async runManagementCycle() {
+    if (globalThis.__KAIROS_TEST_GATEWAY_DELAY) await globalThis.__KAIROS_TEST_GATEWAY_DELAY;
+    return { content: "" };
+  }
+  async runScreeningCycle() {
+    if (globalThis.__KAIROS_TEST_GATEWAY_DELAY) await globalThis.__KAIROS_TEST_GATEWAY_DELAY;
+    return { content: "", partialResult: null, toolFailed: null };
+  }
 }
 export const defaultGateway = new AgentGateway();
 `;
@@ -84,7 +102,7 @@ async function restorePool(original) {
   fs.writeFileSync(path, original, "utf8");
 }
 
-describe("concurrent-cycles", () => {
+describe("concurrent-cycles", { concurrency: false }, () => {
 
   // ── Test 1a: direct guard check — pre-set flag, verify null return ────────
   test("runScreeningCycle() returns null when _screeningBusy is already true", async () => {
@@ -116,12 +134,15 @@ describe("concurrent-cycles", () => {
 
       // Pre-set busy flag to simulate "already running"
       _busyState._screeningBusy = true;
-      const result = runScreeningCycle({ silent: true });
+      const result = await runScreeningCycle({ silent: true });
       assert.strictEqual(result, null, "runScreeningCycle() should return null when _screeningBusy is already true");
       assert.strictEqual(_busyState._screeningBusy, true, "_screeningBusy should still be true (guard rejected entry)");
 
       _busyState._screeningBusy = false;
     } finally {
+      const { _busyState } = await import("../src/core/state/scheduler-state.js");
+      _busyState._screeningBusy = false;
+      _busyState._managementBusy = false;
       await restoreAgentGateway(originalGateway);
     }
   });
@@ -164,7 +185,7 @@ describe("concurrent-cycles", () => {
 
       assert.strictEqual(_busyState._screeningBusy, true, "screening busy should be true during first run");
 
-      const secondResult = runScreeningCycle({ silent: true });
+      const secondResult = await runScreeningCycle({ silent: true });
       assert.strictEqual(secondResult, null, "second runScreeningCycle() should return null (blocked)");
       assert.strictEqual(_busyState._screeningBusy, true, "screening busy still true");
 
@@ -173,6 +194,9 @@ describe("concurrent-cycles", () => {
 
       assert.strictEqual(_busyState._screeningBusy, false, "screening busy should be false after first cycle completes");
     } finally {
+      const { _busyState } = await import("../src/core/state/scheduler-state.js");
+      _busyState._screeningBusy = false;
+      _busyState._managementBusy = false;
       await restoreAgentGateway(originalGateway);
     }
   });
@@ -202,7 +226,7 @@ describe("concurrent-cycles", () => {
       const runManagementCycle = cyclesMod.runManagementCycle;
 
       _busyState._managementBusy = true;
-      const result = runManagementCycle({ silent: true });
+      const result = await runManagementCycle({ silent: true });
       assert.strictEqual(result, null, "runManagementCycle() should return null when _managementBusy is already true");
       assert.strictEqual(_busyState._managementBusy, true, "_managementBusy should still be true");
 
@@ -222,7 +246,24 @@ describe("concurrent-cycles", () => {
       _injectBalances({ sol: 10.0, usd: 300, tokens: [] });
 
       const { _injectPositionsCache } = await import("../src/integrations/meteora/positions.js");
-      _injectPositionsCache({ wallet: "TestWallet", total_positions: 0, positions: [] });
+      _injectPositionsCache({
+        wallet: "TestWallet",
+        total_positions: 1,
+        positions: [{
+          position: "PosInstruction",
+          pool: "PoolInstruction",
+          pair: "TEST/SOL",
+          in_range: true,
+          pnl_pct: 0,
+          pnl_usd: 0,
+          total_value_usd: 10,
+          unclaimed_fees_usd: 0,
+          fee_per_tvl_24h: 0,
+          minutes_out_of_range: 0,
+          age_minutes: 30,
+          instruction: "hold unless test says close",
+        }],
+      });
 
       const { _injectDailyPnL, _injectCircuitBreaker } = await import("../src/core/daily-tracker.js");
       _injectDailyPnL({ realized: 0, unrealized: 0 });
@@ -237,19 +278,27 @@ describe("concurrent-cycles", () => {
 
       assert.strictEqual(_busyState._managementBusy, false, "management busy should be false initially");
 
+      let unblockFirst = null;
+      globalThis.__KAIROS_TEST_GATEWAY_DELAY = new Promise(resolve => { unblockFirst = resolve; });
       const firstRun = runManagementCycle({ silent: true });
       await new Promise(resolve => setTimeout(resolve, 20));
 
       assert.strictEqual(_busyState._managementBusy, true, "management busy should be true during first run");
 
-      const secondResult = runManagementCycle({ silent: true });
+      const secondResult = await runManagementCycle({ silent: true });
       assert.strictEqual(secondResult, null, "second runManagementCycle() should return null (blocked)");
       assert.strictEqual(_busyState._managementBusy, true, "management busy still true");
 
+      unblockFirst();
       await firstRun.catch(() => {});
+      globalThis.__KAIROS_TEST_GATEWAY_DELAY = null;
 
       assert.strictEqual(_busyState._managementBusy, false, "management busy should be false after first cycle completes");
     } finally {
+      globalThis.__KAIROS_TEST_GATEWAY_DELAY = null;
+      const { _busyState } = await import("../src/core/state/scheduler-state.js");
+      _busyState._screeningBusy = false;
+      _busyState._managementBusy = false;
       await restoreAgentGateway(originalGateway);
     }
   });
@@ -284,12 +333,16 @@ describe("concurrent-cycles", () => {
       assert.strictEqual(_busyState._screeningBusy, false, "_screeningBusy should be false after cycle completes");
       assert.strictEqual(_busyState._managementBusy, false, "_managementBusy should be false after cycle completes");
     } finally {
+      const { _busyState } = await import("../src/core/state/scheduler-state.js");
+      _busyState._screeningBusy = false;
+      _busyState._managementBusy = false;
       await restoreAgentGateway(originalGateway);
     }
   });
 
   test("concurrent getMyPositions() calls share the same promise (inflight dedup)", async () => {
     const originalPool = await injectFakeWallet();
+    const originalFetch = globalThis.fetch;
     try {
       const { _injectDB } = await import("../src/core/db.js");
       _injectDB(freshDB());
@@ -301,14 +354,13 @@ describe("concurrent-cycles", () => {
       _injectPositionsCache(null);
       _resetPositionsCache();
 
-      const originalFetch = globalThis.fetch;
       let fetchCount = 0;
       globalThis.fetch = async function mockFetch(url) {
         if (url && typeof url === "string" && url.includes("dlmm.datapi.meteora.ag")) {
           fetchCount++;
           return { ok: true, json: async () => ({ pools: [] }) };
         }
-        return originalFetch.call(this, url);
+        return originalFetch?.call(this, url);
       };
 
       const { getMyPositions } = await import("../src/integrations/meteora.js");
