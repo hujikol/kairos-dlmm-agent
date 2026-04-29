@@ -1,11 +1,11 @@
 // Debug: trace what happens in DRY_RUN test flow
-import { makeSchemaDB } from "./test/mem-db.js";
-import { _injectDB, closeDB } from "./src/core/db.js";
-import { _injectPositionsCache, _resetPositionsCache } from "./src/integrations/meteora/positions.js";
-import { _injectBalances } from "./src/integrations/helius.js";
-import { clearCache } from "./src/tools/cache.js";
-import { balanceCache } from "./src/core/cache-manager.js";
-import { executeTool } from "./src/tools/executor.js";
+import { makeSchemaDB } from "./mem-db.js";
+import { _injectDB, closeDB } from "../src/core/db.js";
+import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";
+import { _injectBalances } from "../src/integrations/helius.js";
+import { clearCache } from "../src/tools/cache.js";
+import { balanceCache } from "../src/core/cache-manager.js";
+import { executeTool } from "../src/tools/executor.js";
 
 process.env.DRY_RUN = "true";
 

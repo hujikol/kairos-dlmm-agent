@@ -1,5 +1,5 @@
-import { _injectBalances, getWalletBalances } from "./src/integrations/helius.js";
-import { balanceCache } from "./src/core/cache-manager.js";
+import { _injectBalances, getWalletBalances } from "../src/integrations/helius.js";
+import { balanceCache } from "../src/core/cache-manager.js";
 
 console.log("balanceCache key:", "balances");
 console.log("balanceCache before:", balanceCache.get("balances"));

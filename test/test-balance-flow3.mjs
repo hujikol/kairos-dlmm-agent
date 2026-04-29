@@ -4,13 +4,13 @@ process.env.WALLET_PRIVATE_KEY = "[]";
 process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
 process.env.OPENROUTER_API_KEY = "test";
 
-import { makeSchemaDB } from "./test/mem-db.js";
-import { _injectDB, closeDB } from "./src/core/db.js";
-import { _injectPositionsCache, _resetPositionsCache } from "./src/integrations/meteora/positions.js";
-import { _injectBalances } from "./src/integrations/helius.js";
-import { balanceCache } from "./src/core/cache-manager.js";
-import { executeTool } from "./src/tools/executor.js";
-import { clearCache } from "./src/tools/cache.js";
+import { makeSchemaDB } from "./mem-db.js";
+import { _injectDB, closeDB } from "../src/core/db.js";
+import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";
+import { _injectBalances } from "../src/integrations/helius.js";
+import { balanceCache } from "../src/core/cache-manager.js";
+import { executeTool } from "../src/tools/executor.js";
+import { clearCache } from "../src/tools/cache.js";
 
 const db = await makeSchemaDB();
 _injectDB(db);

@@ -4,8 +4,8 @@ process.env.WALLET_PRIVATE_KEY = "[]";
 process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
 process.env.OPENROUTER_API_KEY = "test";
 
-import { _injectBalances, getWalletBalances } from "./src/integrations/helius.js";
-import { balanceCache } from "./src/core/cache-manager.js";
+import { _injectBalances, getWalletBalances } from "../src/integrations/helius.js";
+import { balanceCache } from "../src/core/cache-manager.js";
 
 console.log("balanceCache singleton test:");
 console.log("  balanceCache === balanceCache?", balanceCache === balanceCache);

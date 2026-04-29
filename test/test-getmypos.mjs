@@ -1,6 +1,6 @@
-import { _injectPositionsCache, _resetPositionsCache, getMyPositions } from "./src/integrations/meteora/positions.js";
-import { _injectBalances } from "./src/integrations/helius.js";
-import { balanceCache, positionsCache } from "./src/core/cache-manager.js";
+import { _injectPositionsCache, _resetPositionsCache, getMyPositions } from "../src/integrations/meteora/positions.js";
+import { _injectBalances } from "../src/integrations/helius.js";
+import { balanceCache, positionsCache } from "../src/core/cache-manager.js";
 
 process.env.DRY_RUN = "true";
 process.env.WALLET_PRIVATE_KEY = "[]";
