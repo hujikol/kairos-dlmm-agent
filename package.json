@@ -12,11 +12,11 @@
     "setup": "node src/setup.js",
     "start": "node src/index.js",
     "dev": "DRY_RUN=true node src/index.js",
-    "test": "node --test --experimental-test-coverage 'test-*.js' '*.test.js'",
+    "test": "node scripts/run-tests.cjs",
     "test:watch": "node --test --watch test-*.js",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
-    "lint": "eslint src/ test/",
+    "lint": "node --require ./scripts/node-polyfills.cjs ./node_modules/eslint/bin/eslint.js src/ test/",
     "postinstall": "node scripts/patch-anchor.js"
   },
   "dependencies": {

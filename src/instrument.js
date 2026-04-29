@@ -1,17 +1,26 @@
 import * as Sentry from "@sentry/node";
-import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import { log } from "./core/logger.js";
 
-export function initSentry() {
+export async function initSentry() {
   if (!process.env.SENTRY_DSN) return; // Sentry disabled if no DSN
+  const integrations = [
+    Sentry.captureConsoleIntegration({ levels: ["log", "warn", "error"] }),
+  ];
+  let profilesSampleRate = parseFloat(process.env.SENTRY_PROFILES_SAMPLE_RATE ?? "0.1");
+
+  try {
+    const { nodeProfilingIntegration } = await import("@sentry/profiling-node");
+    integrations.unshift(nodeProfilingIntegration());
+  } catch (e) {
+    profilesSampleRate = 0;
+    log("warn", "sentry", `CPU profiling disabled: ${e?.message ?? e}`);
+  }
+
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
-    integrations: [
-      nodeProfilingIntegration(),
-      Sentry.captureConsoleIntegration({ levels: ["log", "warn", "error"] }),
-    ],
+    integrations,
     tracesSampleRate: parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE ?? '0.1'),
-    profilesSampleRate: parseFloat(process.env.SENTRY_PROFILES_SAMPLE_RATE ?? '0.1'),
+    profilesSampleRate,
     enableLogs: true,
   });
 }
