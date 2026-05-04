@@ -12,7 +12,7 @@ const DB_PATH = process.env.KAIROS_DB_PATH
 let _db = null;
 let _initPromise = null;
 
-async function _initDB() {
+function _initDB() {
   _db = new Database(DB_PATH);
   _db.pragma("journal_mode = WAL");
   _db.pragma("synchronous = NORMAL");
@@ -22,9 +22,8 @@ async function _initDB() {
 }
 
 export function getDB() {
-  if (_db) return _db;
-  if (!_initPromise) _initPromise = _initDB();
-  return _initPromise.then(() => _db);
+  if (!_db) _initDB();
+  return _db;
 }
 
 export function runTransaction(fn) {
@@ -100,7 +99,6 @@ export function closeDB() {
   if (_db) {
     _db.close();
     _db = null;
-    _initPromise = null;
   }
 }
 
