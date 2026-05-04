@@ -199,7 +199,7 @@ export async function getTokenHolders({ mint, limit = 20 }) {
   // ─── Bundle / Cluster Analysis (OKX) ─────────────────────────
   let okxGetAdvancedInfo = async () => null, okxGetClusterList = async () => [];
   try { ({ getAdvancedInfo: okxGetAdvancedInfo, getClusterList: okxGetClusterList } = await import("./okx.js")); } catch { /* use noop fallbacks */ }
-  const { advancedData, clusterList } = await getOkxEnrichmentCached(
+  const { advancedData } = await getOkxEnrichmentCached(
     mint,
     okxGetAdvancedInfo,
     okxGetClusterList,

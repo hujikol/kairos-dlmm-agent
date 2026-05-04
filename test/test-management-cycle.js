@@ -191,7 +191,8 @@ describe("Rule Engine — Rule 4: Stale Above Range", () => {
 describe("Rule Engine — Rule 5: Low Fee Yield", () => {
 
   test("closes when fee_per_tvl_24h below threshold and position is old enough", () => {
-    const pos = { position: "pos1", fee_per_tvl_24h: 5, age_minutes: 120, pnl_pct: 0 };
+    // age_minutes=1500 (25h) > 1440 (24h threshold) → old enough
+    const pos = { position: "pos1", fee_per_tvl_24h: 5, age_minutes: 1500, pnl_pct: 0 };
     const tracked = {};
     const result = computeAction(pos, tracked, mockConfig);
     assert.equal(result.action, "CLOSE");

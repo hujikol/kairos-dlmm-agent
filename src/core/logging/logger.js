@@ -12,8 +12,8 @@ const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 // Console-only level: defaults to warn (errors + warnings only).
 // Set CONSOLE_LOG_LEVEL=debug for full console output, or any of debug/info/warn/error.
 // File output always captures everything regardless of this setting.
-const CONSOLE_LEVEL = LEVELS[process.env.CONSOLE_LOG_LEVEL] ?? LEVELS.warn;
-const currentLevel = LEVELS[LOG_LEVEL] || 1;
+const CONSOLE_LEVEL = LEVELS[process.env.CONSOLE_LOG_LEVEL || process.env.LOG_LEVEL] ?? LEVELS.warn;
+const currentLevel = LEVELS[LOG_LEVEL] ?? 1;
 
 /**
  * General log function with explicit level.
@@ -39,9 +39,12 @@ export function log(level, category, message, meta = {}) {
     for (const line of stack.slice(2)) {
       const m = line.match(/\(([^)]+)\)/) || line.match(/at\s+([^ ]+)/);
       if (m && !m[1].includes("logger.js")) {
-        const parts = m[1].split(":");
-        const file = parts[0].replace(/^.*[/\\]/, "");
-        caller = ` <${file}:${parts[parts.length - 2]}>`;
+        const filePathWithLoc = m[1];
+        const locMatch = filePathWithLoc.match(/:(\d+):\d+$/) || filePathWithLoc.match(/:(\d+)$/);
+        const lineNumber = locMatch ? locMatch[1] : "?";
+        const pathPart = filePathWithLoc.replace(/:\d+:\d+$/, "").replace(/:\d+$/, "");
+        const file = pathPart.replace(/^.*[/\\]/, "");
+        caller = ` <${file}:${lineNumber}>`;
         break;
       }
     }

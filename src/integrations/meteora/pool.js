@@ -5,13 +5,9 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import { getConnection as getRpcConnection } from "../solana.js";
-import BN from "bn.js";
 import bs58 from "bs58";
-import { config } from "../../config.js";
 import { createCircuitBreaker, CircuitOpenError } from "../../core/circuit-breaker.js";
-import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
-import { isPoolOnCooldown } from "../../features/pool-memory.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { poolCache } from "../../core/cache-manager.js";
 
@@ -122,7 +118,7 @@ export function _injectPool(pool) {
   }
 }
 
-export async function getPool(poolAddress, { invalidate = false, poolOverride } = {}) {
+export async function getPool(poolAddress, { invalidate = false, poolOverride: _poolOverride } = {}) {
   if (meteoraPool.isOpen()) throw new CircuitOpenError("meteoraPool");
   const key = poolAddress.toString();
   if (invalidate) {

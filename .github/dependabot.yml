@@ -1,9 +1,0 @@
-version: 2
-updates:
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    ignore:
-      # Manually patched in scripts/patch-anchor.js, so avoid automated updates
-      - dependency-name: "@meteora-ag/dlmm"

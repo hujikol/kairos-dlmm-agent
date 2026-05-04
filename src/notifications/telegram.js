@@ -2,9 +2,9 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "../core/logger.js";
-import { USER_CONFIG_PATH } from "../config.js";
 import { caveman } from "../tools/caveman.js";
 import { config, isDryRun } from "../config.js";
+import { setKV, getKV } from "../core/state/registry.js";
 import { addrShort } from "../tools/addrShort.js";
 import { PRICE_FORMAT_THRESHOLD, TELEGRAM_MSG_DELAY_MS, TELEGRAM_POLL_TIMEOUT_MS } from "../core/constants.js";
 import { escapeHTMLLocal } from "../core/cycle-helpers.js";
@@ -13,35 +13,36 @@ import writeFileAtomic from "write-file-atomic";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const BASE  = TOKEN ? `https://api.telegram.org/bot${TOKEN}` : null;
 
-let chatId   = String(process.env.TELEGRAM_CHAT_ID || "") || null;
+let chatId = null;
+// Lazily load chatId on first use (DB may not be ready at import time)
+let _chatIdLoaded = false;
+async function _ensureChatIdLoaded() {
+  if (_chatIdLoaded) return;
+  try {
+    const result = getKV("telegram_chat_id");
+    if (result && typeof result.then === "function") {
+      result.then(v => { if (v) chatId = v; });
+    } else if (result) {
+      chatId = result;
+    }
+  } catch { }
+  _chatIdLoaded = true;
+}
+// Call lazy loader (fire-and-forget)
+_ensureChatIdLoaded();
 let _offset  = 0;
 let _polling = false;
 
-// ─── chatId persistence ──────────────────────────────────────────
-function loadChatId() {
-  try {
-    if (fs.existsSync(USER_CONFIG_PATH)) {
-      const cfg = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
-      if (cfg.telegramChatId) chatId = String(cfg.telegramChatId);
-    }
-  } catch (e) {
-    log("warn", "telegram", `loadChatId: failed to load — telegram disabled: ${e?.message}`);
-  }
-}
+// ─── chatId persistence (kv_store in SQLite) ────────────────────────
 
 async function saveChatId(id) {
   try {
-    let cfg = fs.existsSync(USER_CONFIG_PATH)
-      ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
-      : {};
-    cfg.telegramChatId = id;
-    await writeFileAtomic(USER_CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    await setKV("telegram_chat_id", id);
+    chatId = id;
   } catch (e) {
     log("error", "telegram", `Failed to persist chatId: ${e?.message ?? e}`);
   }
 }
-
-loadChatId();
 
 // ─── Queue System & Rate Limiting ────────────────────────────────
 const _outboundQueue = [];
@@ -185,7 +186,24 @@ export async function sendChatAction(action = "typing") {
 }
 
 // Re-export drainTelegramQueue from telegram-handlers (avoids circular import in management-cycle)
-export { drainTelegramQueue } from "../telegram-handlers.js";
+export { drainTelegramQueue } from "../telegram/index.js";
+
+const SUPPORTED_HTML_TAGS = new Set([
+  "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+  "span", "tg-spoiler", "tg-emoji", "code", "pre", "a",
+]);
+
+function sanitizeHtmlForTelegram(html) {
+  let s = String(html);
+  // 1. Escape ALL < and > characters first
+  s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // 2. Unescape only supported tags
+  for (const tag of SUPPORTED_HTML_TAGS) {
+    const re = new RegExp(`&lt;(/?)\\s*${tag}\\b([^&]*?)&gt;`, "gi");
+    s = s.replace(re, (_, slash, attrs) => `<${slash}${tag}${attrs}>`);
+  }
+  return s;
+}
 
 /**
  * Send an HTML-formatted message to the registered Telegram chat.
@@ -199,7 +217,8 @@ export async function sendHTML(html) {
     log("debug", "telegram", "DRY_RUN: skipping send", { html: String(html).slice(0, 80) });
     return;
   }
-  const finalText = config.cavemanEnabled ? caveman(html) : html;
+  const clean = sanitizeHtmlForTelegram(html);
+  const finalText = config.cavemanEnabled ? caveman(clean) : clean;
   return new Promise((resolve) => {
     enqueueMessage(async () => {
       try {

@@ -142,7 +142,7 @@ describe("core/state/registry.js", () => {
 
     trackPosition({ position: "ClosePos001", pool: "PoolZ", amount_sol: 0.1, bin_step: 100 });
     updatePositionStatus("ClosePos001", "active");
-    recordClose("ClosePos001", "Profit taken at 5%");
+    await recordClose("ClosePos001", "Profit taken at 5%");
 
     const row = db.prepare("SELECT closed, closed_at, notes FROM positions WHERE position = ?").get("ClosePos001");
     assert.strictEqual(row.closed, 1, "closed flag should be 1");

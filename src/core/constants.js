@@ -43,7 +43,7 @@ export const PNL_TIMEOUT_MS               = 8_000;
 export const METEORA_CLOSE_SYNC_WAIT_MS    = 15_000;
 export const METEORA_CLOSE_RETRY_DELAY_MS  = 3_000;
 export const METEORA_POSITIONS_CACHE_TTL_MS = 300_000;
-export const PNL_SUSPECT_PCT  = 100;   // flag PnL > 100% as suspect (API bad data)
+export const PNL_SUSPECT_PCT  = -90;   // flag PnL jump as suspect if prev > -90% (not extreme)
 export const PNL_SUSPECT_USD  = 1;     // minimum USD value for inner suspect check
 
 // ─── Position Age & Yield ─────────────────────────────────────────
@@ -59,9 +59,15 @@ export const MAX_HTML_MSG_LEN       = 4096;
 
 // ─── Agent Loop ───────────────────────────────────────────────────
 export const LOOP_TIMEOUT_MS = 120_000; // 2 minutes wall-clock per step
+export const MAX_REACT_DEPTH = 10;
+export const MAX_TOOL_CALLS_PER_STEP = 10;
 
 // ─── Gas ──────────────────────────────────────────────────────────
 export const GAS_COST_PER_TX_SOL = 0.01; // 0.005 * 2 for deploy + close
+export const GAS_RESERVE_DEFAULT = 0.2;   // default gas reserve in SOL
+export const BASE_DEPLOY_AMOUNT_DEFAULT = 0.35; // default base deploy amount in SOL
+export const DEPLOY_AMOUNT_SOL_DEFAULT = 0.35; // default deploy amount in SOL
+export const MAX_DEPLOY_AMOUNT_DEFAULT = 50;    // default max deploy amount in SOL
 
 // ─── Price Formatting ──────────────────────────────────────────────
 export const PRICE_FORMAT_THRESHOLD = 0.0001; // below this, use toExponential(3); else toFixed(6)

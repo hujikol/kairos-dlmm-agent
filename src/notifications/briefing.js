@@ -48,11 +48,12 @@ export async function generateBriefing() {
       ? lessonsLast24h.map(l => `• ${l.rule}`).join("\n")
       : "• No new lessons recorded overnight.",
     "",
-    `<b>Current Portfolio:</b>`,
-    `📂 Open Positions: ${openPositions.length}`,
+    openPositions.length > 0
+      ? `📂 Open Positions: ${openPositions.length}`
+      : "📂 Open Positions: 0",
     perfSummary
       ? `📊 All-time PnL: $${perfSummary.total_pnl_usd.toFixed(2)} (${perfSummary.win_rate_pct}% win)`
-      : "",
+      : "📊 All-time PnL: N/A",
     "────────────────"
   ];
 

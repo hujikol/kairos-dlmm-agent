@@ -11,18 +11,14 @@ import { buildSystemPrompt } from "../prompt.js";
 import { getToolsForRole } from "./tools.js";
 import { shouldRequireRealToolUse } from "./intent.js";
 import { client, callWithRetry } from "./fallback.js";
-import { DEFAULT_MODEL } from "./intent.js";
+// DEFAULT_MODEL removed - unused
 import { parseToolArgs } from "./repair.js";
 import { isRateLimitError, rateLimitBackoff, sleep } from "./rate.js";
 import { executeTool } from "../tools/executor.js";
 import { caveman } from "../tools/caveman.js";
 import { getStateSummary } from "../core/state/index.js";
 import { getLessonsForPrompt, getPerformanceSummary } from "../core/lessons.js";
-import { LOOP_TIMEOUT_MS } from "../core/constants.js";
-
-// ReAct safety guards
-const MAX_REACT_DEPTH = 10;
-const MAX_TOOL_CALLS_PER_STEP = 10;
+import { LOOP_TIMEOUT_MS, MAX_REACT_DEPTH, MAX_TOOL_CALLS_PER_STEP } from "../core/constants.js";
 
 // Tools that should only fire once per session
 const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_position"]);
@@ -84,7 +80,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
     try {
       const tools = getToolsForRole(agentType, goal);
       const options = { maxTokens: maxOutputTokens };
-      const { response, usedModel } = await callWithRetry(client, model, messages, tools, options);
+      let { response, usedModel } = await callWithRetry(client, model, messages, tools, options);
       if (!response?.choices?.length) {
         log("error", "agent", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
         throw new Error(`API returned no choices: ${response?.error?.message || JSON.stringify(response)}`);
@@ -104,6 +100,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
 
       const msg = response.choices[0].message;
 
+      response = null; // free large response data
       // Repair malformed tool call JSON before pushing to history
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {

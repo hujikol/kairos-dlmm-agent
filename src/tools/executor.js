@@ -11,7 +11,8 @@ import { cachedTool } from "./cache.js";
 import { registerCronRestarter as _registerCron } from "./admin.js";
 export const registerCronRestarter = _registerCron;
 
-// Register all tool domains
+// ─── Tool Registration ─────────────────────────────────────────────
+// Register all tool domains: screens, tokens, positions, wallet, admin
 import { registerScreens } from "./screens.js";
 import { registerTokens } from "./tokens.js";
 import { registerPositions, positionWriteTools } from "./positions.js";
@@ -27,10 +28,12 @@ registerPositions(registerTool);
 registerWallet(registerTool);
 registerAdmin(registerTool);
 
-// All write tools that need safety checks
+export { toolMap };
+
+// ─── WRITE_TOOLS: Tools that require safety checks before execution ──
 const WRITE_TOOLS = new Set([...positionWriteTools, ...walletWriteTools]);
 
-// Read-only tools that can use the TTL cache.
+// ─── READ_ONLY_CACHE: Tools that can use TTL cache to avoid redundant API calls ──
 // Map of tool name → cache key extractor function (receives args, returns string key)
 const READ_ONLY_CACHE = {
   discover_pools:      () => "default",
@@ -46,8 +49,7 @@ const READ_ONLY_CACHE = {
   search_pools:        (a) => a.query || "default",
 };
 
-export { toolMap };
-
+// ─── Argument Validation ────────────────────────────────────────────
 /**
  * Validate tool arguments against the tool's parameter schema.
  * Throws a descriptive error if required params are missing or extra params are present.
@@ -72,11 +74,13 @@ function validateToolArgs(toolName, args, schema) {
   }
 }
 
+// ─── Tool Execution ────────────────────────────────────────────
 /**
  * Execute a tool call with safety checks and logging.
  * Read-only tools use the TTL cache to avoid redundant API calls.
  */
-export async function executeTool(name, args) {
+// Mutable implementation for test mockability.
+let _executeToolImpl = async (name, args) => {
   const startTime = Date.now();
 
   // Strip model artifacts like "<|channel|>commentary" appended to tool names
@@ -143,6 +147,7 @@ export async function executeTool(name, args) {
   }
 }
 
+// ─── Safety Checks (pre-execution for write tools) ────────────────
 /**
  * Run safety checks before executing write operations.
  */
@@ -228,6 +233,7 @@ async function runSafetyChecks(name, args) {
   }
 }
 
+// ─── Result Summary ──────────────────────────────────────────
 /**
  * Summarize a result for logging (truncate large responses).
  */
@@ -237,4 +243,19 @@ function summarizeResult(result) {
     return str.slice(0, 1000) + "...(truncated)";
   }
   return result;
+}
+
+
+export async function executeTool(name, args) {
+  return _executeToolImpl(name, args);
+}
+
+export function _setExecuteTool(fn) {
+  _executeToolImpl = fn;
+}
+
+const _originalExecuteToolImpl = _executeToolImpl;
+
+export function _resetExecuteTool() {
+  _executeToolImpl = _originalExecuteToolImpl;
 }

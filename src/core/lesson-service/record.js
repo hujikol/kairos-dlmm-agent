@@ -59,6 +59,7 @@ export async function recordPerformance(perf) {
     recorded_at: new Date().toISOString(),
   };
 
+	let lesson = null;
   runTransaction(() => {
     db.prepare(`
       INSERT INTO performance (
@@ -77,7 +78,7 @@ export async function recordPerformance(perf) {
       entry.deployed_at, entry.closed_at, entry.recorded_at, entry.base_mint
     );
 
-    const lesson = derivLesson(entry);
+    lesson = derivLesson(entry);
     if (lesson) {
       db.prepare(`
         INSERT INTO lessons (
@@ -132,8 +133,8 @@ export async function recordPerformance(perf) {
 
   // Push to Hive Mind — individual lesson + performance event
   const { pushHiveLesson, pushHivePerformanceEvent } = await import("../../features/hive-mind.js");
-  pushHiveLesson(lesson).catch(e => log("warn", "hivemind", `pushHiveLesson failed: ${e?.message}`));
-  pushHivePerformanceEvent(entry).catch(e => log("warn", "hivemind", `pushHivePerformanceEvent failed: ${e?.message}`));
+  await pushHiveLesson(lesson).catch(e => log("warn", "hivemind", `pushHiveLesson failed: ${e?.message}`));
+  await pushHivePerformanceEvent(entry).catch(e => log("warn", "hivemind", `pushHivePerformanceEvent failed: ${e?.message}`));
 
   // Record decision log entry for the close
   const { recordDecision } = await import("../decision-log.js");

@@ -14,6 +14,9 @@ export function escapeHTMLLocal(text) {
     .replace(/'/g, "&#039;");
 }
 
+// Alias for backward compatibility
+export const escapeHTML = escapeHTMLLocal;
+
 // ─── bins_below computation (used in screening cycle prompt) ─────────────────
 
 /**

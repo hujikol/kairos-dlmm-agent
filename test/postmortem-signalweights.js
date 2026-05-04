@@ -8,6 +8,7 @@ import path from 'path';
 import Database from "better-sqlite3";
 import { _injectDB, initSchema } from '../src/core/db.js';
 
+
 // Use isolated in-memory DB for this test file
 const _testDb = new Database(":memory:");
 initSchema(_testDb);

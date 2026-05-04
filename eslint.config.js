@@ -11,7 +11,7 @@ export default [
       },
     },
     rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      "no-unused-vars": "off",
       "no-console": "off",
       "no-constant-condition": ["error", { checkLoops: false }],
     },

@@ -57,15 +57,15 @@ jobs:
       - name: Find integration test files
         id: find-integration-tests
         run: |
-          # Find test files in test/ subdir that do NOT match *.test.js pattern
-          # Also include any file with "integration" in its name
+          # Integration tests: files with "integration" in name, or explicit list
           INTEGRATION_TESTS=$(node -e "
             const fs = require('fs');
             const path = require('path');
             const testDir = 'test';
             const files = fs.readdirSync(testDir)
               .filter(f => f.endsWith('.js'))
-              .filter(f => !f.match(/^test-.*\.js$/) && !f.match(/^.*\.test\.js$/))  // not test-*.js or *.test.js
+              .filter(f => !f.match(/^test-.*\.js$/) && !f.match(/^.*\.test\.js$/))
+              .filter(f => !f.match(/(helper|setup|mem-db|debug)\./))  // exclude helpers
               .map(f => path.join(testDir, f));
             console.log(files.join(' '));
           " || echo "")

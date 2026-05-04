@@ -13,7 +13,8 @@ import assert from "node:assert";
 import { fileURLToPath } from "url";
 import path from "path";
 import crypto from "crypto";
-import { makeMemDB } from "./mem-db.js";
+import Database from "better-sqlite3";
+import { makeMemDB, makeSchemaDB } from "./mem-db.js";
 
 // ─── In-memory schema (mirrors db.js) ───────────────────────────────────────
 

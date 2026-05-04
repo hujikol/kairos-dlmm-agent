@@ -13,24 +13,27 @@ pm2 monit
 
 ## Environment Variables
 
+> **Note:** `OPENROUTER_API_KEY` is the primary key for OpenRouter. Code also accepts `LLM_API_KEY` for local LLM endpoints.
+
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
 | `WALLET_PRIVATE_KEY` | Yes | — | Base58 or JSON array |
 | `RPC_URL` | Yes | — | Solana RPC endpoint |
-| `SENTRY_DSN` | No | — | Sentry error tracking DSN |
-| `LLM_API_KEY` | Yes | — | OpenRouter API key |
+| `OPENROUTER_API_KEY` | Yes | — | Primary OpenRouter API key (also accepts `LLM_API_KEY` for local endpoints) |
+| `DRY_RUN` | No | — | Skip on-chain transactions |
+| `LLM_MODEL` | No | `MiniMax-M2.7` | Override default model |
+| `LLM_BASE_URL` | No | — | Local LLM endpoint (e.g. LM Studio `http://localhost:1234/v1`) |
+| `LLM_API_KEY` | No | — | API key for local endpoints; fallback for `OPENROUTER_API_KEY` |
+| `LLM_FALLBACK_MODEL` | No | `stepfun/step-3.5-flash:free` | Fallback on provider 502/503/529 errors |
+| `LLM_TIMEOUT_MS` | No | `300000` | LLM call timeout (5 min) |
+| `MAX_WALL_CLOCK_MS` | No | `480000` | Agent loop wall-clock timeout (8 min) |
 | `TELEGRAM_BOT_TOKEN` | No | — | Telegram bot token |
 | `TELEGRAM_CHAT_ID` | No | — | Telegram notification target |
-| `LLM_BASE_URL` | No | — | Local LLM override |
-| `LLM_MODEL` | No | `openrouter/healer-alpha` | Override default model |
-| `LLM_FALLBACK_MODEL` | No | `stepfun/step-3.5-flash:free` | Fallback on provider errors |
-| `LLM_TIMEOUT_MS` | No | `300000` | LLM call timeout |
-| `MAX_WALL_CLOCK_MS` | No | `480000` | Agent loop wall-clock timeout |
-| `DRY_RUN` | No | — | Skip on-chain transactions |
-| `HIVE_MIND_URL` | No | — | Collective intelligence server |
-| `HIVE_MIND_API_KEY` | No | — | Hive mind auth token |
+| `TELEGRAM_MSG_DELAY_MS` | No | `1500` | Delay between Telegram messages |
+| `TELEGRAM_POLL_TIMEOUT_MS` | No | `35000` | Telegram long-poll timeout |
 | `HELIUS_API_KEY` | No | — | Enhanced wallet data |
 | `HELIUS_API_BASE` | No | `https://api.helius.xyz` | Helius API base |
+| `HELIUS_BALANCE_CACHE_TTL_MS` | No | `300000` | Helius balance cache TTL |
 | `JUPITER_API_KEY` | No | — | Jupiter API key |
 | `JUPITER_DATAPI_BASE_URL` | No | `https://datapi.jup.ag/v1` | Jupiter datapi base |
 | `JUPITER_PRICE_API_URL` | No | `https://api.jup.ag/price/v3` | Jupiter price API |
@@ -46,27 +49,32 @@ pm2 monit
 | `METEORA_POSITIONS_CACHE_TTL_MS` | No | `300000` | Positions cache TTL (5 min) |
 | `METEORA_CLOSE_SYNC_WAIT_MS` | No | `5000` | Wait after close before verifying |
 | `METEORA_CLOSE_RETRY_DELAY_MS` | No | `3000` | Close verification retry delay |
+| `PRIORITY_MICRO_LAMPORTS` | No | `50000` | Priority fee micro-lamports for transactions |
 | `OKX_API_BASE` | No | `https://web3.okx.com` | OKX API base |
 | `OPENROUTER_BASE_URL` | No | `https://openrouter.ai/api/v1` | OpenRouter base |
 | `MINIMAX_BASE_URL` | No | `https://api.minimax.io/v1` | MiniMax base |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible base |
 | `LOCAL_LLM_BASE_URL` | No | `http://localhost:1234/v1` | Local LLM (LM Studio/Ollama) |
+| `AGENT_MERIDIAN_API_URL` | No | `https://api.agentmeridian.xyz/api` | Primary Agent Meridian relay endpoint |
+| `HIVE_MIND_URL` | No | — | Alternative relay URL (fallback) |
+| `HIVE_MIND_PUBLIC_API_KEY` | No | — | Primary Hive Mind public API key |
+| `HIVE_MIND_API_KEY` | No | — | Alternative API key (fallback) |
+| `HIVE_MIND_SYNC_DEBOUNCE_MS` | No | `300000` | Hive Mind sync debounce (5 min) |
+| `HIVE_MIND_GET_TIMEOUT_MS` | No | `5000` | Hive Mind GET timeout |
+| `HIVE_MIND_POST_TIMEOUT_MS` | No | `10000` | Hive Mind POST timeout |
 | `SOLANA_BACKOFF_BASE_DELAY_MS` | No | `1000` | RPC rate-limit backoff base |
 | `SOLANA_BACKOFF_MAX_DELAY_MS` | No | `30000` | RPC backoff max delay |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, `error` |
 | `LOG_FORMAT` | No | `text` | `text` or `json` |
 | `LOG_MAX_SIZE` | No | `10000000` | Bytes per log file before rotation |
 | `LOG_MAX_FILES` | No | `7` | Number of rotated log files to keep |
-| `BACKUP_DEST_DIR` | No | — | Offsite backup mount path (copied to in addition to local `backups/`) |
-| `KAIROS_DB_PATH` | No | `src/core/kairos.db` | SQLite DB path (must be set if running from different CWD than project root) |
+| `SENTRY_DSN` | No | — | Sentry error tracking DSN |
+| `SENTRY_TRACES_SAMPLE_RATE` | No | `0.1` | Sentry trace sample rate |
+| `SENTRY_PROFILES_SAMPLE_RATE` | No | `0.1` | Sentry profile sample rate |
+| `KAIROS_DB_PATH` | No | `src/core/kairos.db` | SQLite DB path (set if running from different CWD) |
+| `BACKUP_DEST_DIR` | No | — | Offsite backup mount path |
 | `HEALTH_PORT` | No | `3030` | Health endpoint port |
-| `TELEGRAM_MSG_DELAY_MS` | No | `1500` | Delay between Telegram messages |
-| `TELEGRAM_POLL_TIMEOUT_MS` | No | `35000` | Telegram long-poll timeout |
 | `BRIEFING_LOOKBACK_MS` | No | `86400000` | Briefing lookback window (24h) |
-| `HIVE_MIND_SYNC_DEBOUNCE_MS` | No | `300000` | Hive Mind sync debounce (5 min) |
-| `HIVE_MIND_GET_TIMEOUT_MS` | No | `5000` | Hive Mind GET timeout |
-| `HIVE_MIND_POST_TIMEOUT_MS` | No | `10000` | Hive Mind POST timeout |
-| `HELIUS_BALANCE_CACHE_TTL_MS` | No | `300000` | Helius balance cache TTL |
 | `WATCHDOG_POLL_INTERVAL_MS` | No | `60000` | Watchdog poll interval (1 min) |
 | `CAVEMAN_ENABLED` | No | `false` | Enable prompt compression |
 

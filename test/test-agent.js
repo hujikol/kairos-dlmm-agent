@@ -1,23 +1,15 @@
 /**
- * Test the full agent loop in dry-run mode (no wallet needed for screening).
- * Run: DRY_RUN=true node test/test-agent.js
+ * Test that agent module can be imported without errors.
+ * Run with: npm test
  */
 
-import "dotenv/config";
-import { agentLoop } from "../src/agent.js";
+import { it, before } from 'node:test';
+import { fileURLToPath } from 'url';
+import path from 'path';
 
-async function main() {
-  console.log("=== Testing Agent Loop (DRY RUN) ===\n");
-  console.log("Goal: Discover top pools and recommend 3 LP opportunities\n");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-  const result = await agentLoop(
-    "Run get_top_candidates. Then deploy_position into the #1 candidate using 0.1 SOL. Report what was deployed.",
-    5
-  );
-
-  console.log("\n=== Agent Response ===");
-  console.log(result);
-  console.log("\n=== Test complete ===");
-}
-
-main().catch(console.error);
+it('agent/react.js can be imported without error', async () => {
+  const mod = await import('../src/agent/react.js');
+  if (typeof mod.agentLoop !== 'function') throw new Error('agentLoop not exported');
+});

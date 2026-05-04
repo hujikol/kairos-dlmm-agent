@@ -12,7 +12,8 @@
  */
 
 import { log } from "./logger.js";
-import { loadRules, saveRules, ensureTable } from "./postmortem/store.js";
+import { getDB } from "./db.js";
+import { loadRules, saveRules } from "./postmortem/store.js";
 import { detectLosingPattern, detectRecurringFailure, detectTimePattern } from "./postmortem/rules.js";
 import { writeAutopsyToLessons } from "./postmortem/autopsy.js";
 
@@ -132,7 +133,8 @@ export function matchesBlockedPattern(candidate) {
  * Clear all postmortem rules.
  */
 export function clearRules() {
-  saveRules([]);
+  const db = getDB();
+  db.prepare("DELETE FROM postmortem_rules").run();
   return { cleared: true };
 }
 
@@ -145,5 +147,5 @@ export {
   getRemediationForReason,
 } from "./postmortem/rules.js";
 
-export { loadRules, saveRules, ensureTable } from "./postmortem/store.js";
+export { loadRules, saveRules } from "./postmortem/store.js";
 export { writeAutopsyToLessons } from "./postmortem/autopsy.js";

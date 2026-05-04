@@ -6,10 +6,7 @@
  * Caching: 30 min on Agent Meridian side.
  */
 
-import { addrShort } from "../tools/addrShort.js";
 import { agentMeridianJson } from "../tools/agent-meridian.js";
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Fetch top LPers for a pool, filter to credible performers,

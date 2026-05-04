@@ -2,13 +2,24 @@
  * Rate limiting utilities for the agent loop.
  */
 
-import { log } from "../core/logger.js";
 
 /**
  * Sleep helper.
+ * Mutable implementation for test mockability.
  */
-export function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+let _sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function sleep(ms) {
+  return _sleepImpl(ms);
+}
+
+export function _setSleep(fn) {
+  _sleepImpl = fn;
+}
+
+const _originalSleepImpl = _sleepImpl;
+export function _resetSleep() {
+  _sleepImpl = _originalSleepImpl;
 }
 
 /**

@@ -280,7 +280,7 @@ export async function bootstrapHiveMind() {
   if (getPullMode() === "auto") {
     tasks.push(pullHiveMindLessons(), pullHiveMindPresets());
   }
-  const results = await Promise.allSettled(tasks);
+  const _results = await Promise.allSettled(tasks);
   const enabled = isHiveMindEnabled();
   log("info", "hivemind", `Bootstrap complete — enabled=${enabled}, agentId=${getAgentId()}, pullMode=${getPullMode()}`);
   return { enabled, agentId: getAgentId(), pullMode: getPullMode() };

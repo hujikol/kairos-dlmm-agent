@@ -17,6 +17,12 @@ export function _injectDiscovery(result) {
   _testDiscoveryResult = result;
 }
 
+let _testMyPositions = null;
+
+export function _injectMyPositions(fn) {
+  _testMyPositions = fn;
+}
+
 
 
 /**
@@ -139,8 +145,14 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   }
 
   // Exclude pools where the wallet already has an open position
-  const { getMyPositions } = await import("../integrations/meteora.js");
-  const { positions } = await getMyPositions();
+  let posResult = { positions: [] };
+  if (_testMyPositions !== null) {
+    posResult = await _testMyPositions();
+  } else {
+    const { getMyPositions } = await import("../integrations/meteora.js");
+    posResult = await getMyPositions();
+  }
+  const positions = posResult.positions || [];
   const occupiedPools = new Set(positions.map((p) => p.pool));
   const occupiedMints = new Set(positions.map((p) => p.base_mint).filter(Boolean));
 
@@ -258,7 +270,10 @@ export async function getTopCandidates({ limit = 10 } = {}) {
  * @param {string} [params.timeframe="5m"] - Timeframe for the pool data
  * @returns {Promise<object>} - Full raw pool object from the API
  */
-export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
+export async function getPoolDetail({ pool_address, timeframe = "5m" } = {}) {
+  if (!pool_address) {
+    throw new Error("pool_address is required");
+  }
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
     `page_size=1` +
     `&filter_by=${encodeURIComponent(`pool_address=${pool_address}`)}` +

@@ -52,12 +52,12 @@ function rowToPos(row) {
 
 // ─── KV Store ───────────────────────────────────────────────────────────────
 
-function setKV(key, value) {
+export function setKV(key, value) {
   const db = getDB();
   db.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)").run(key, value);
 }
 
-function getKV(key) {
+export function getKV(key) {
   const db = getDB();
   const row = db.prepare("SELECT value FROM kv_store WHERE key = ?").get(key);
   return row ? row.value : null;
@@ -141,7 +141,8 @@ export function trackPosition({
  */
 export function updatePositionStatus(position_address, status) {
   const db = getDB();
-  db.prepare("UPDATE positions SET status = ? WHERE position = ?").run(status, position_address);
+  const closedVal = status === "closed" ? 1 : 0;
+  db.prepare("UPDATE positions SET status = ?, closed = ? WHERE position = ?").run(status, closedVal, position_address);
   log("info", "state", `Position ${addrShort(position_address)} status -> ${status}`);
 }
 

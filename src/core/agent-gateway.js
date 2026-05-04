@@ -100,7 +100,7 @@ After executing, write a brief one-line result per position.
     deployAmount,
     pnl,
     canDeploy,
-    screeningMode,
+    _screeningMode,
     hiveLessonsBlock = null,
     maxSteps = null,
     model = null,

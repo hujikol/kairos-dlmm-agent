@@ -6,13 +6,13 @@
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
-import { config, computeDeployAmount, isDryRun } from "../config.js";
 import {
   timers,
   _busyState,
   _timersState,
 } from "./state/scheduler-state.js";
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
+import { config } from "../config.js";
 import { captureAlert } from "../instrument.js";
 import { getTrackedPosition } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
@@ -20,7 +20,14 @@ import { recordPositionSnapshot, recallForPool } from "../features/pool-memory.j
 import { pushNotification, hasPendingNotifications } from "../notifications/queue.js";
 import { isEnabled as telegramIsEnabled, drainTelegramQueue } from "../notifications/telegram.js";
 import {
+} from "./management/index.js";
+import {
   computeManagementActions,
+} from "./management/index.js";
+import {
+  executeActions,
+} from "./management/index.js";
+import {
   buildManagementReport,
   autoSwapAndNotify,
   buildAndSendConsolidatedReport,
@@ -108,55 +115,17 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       return a?.action === "INSTRUCTION";
     });
 
-    // Direct close execution — bypasses LLM entirely
-    const { closePosition, claimFees } = await import("../integrations/meteora/close.js");
-    const closeResults = [];
-    for (const p of closeActions) {
-      const act = actionMap.get(p.position);
-      const reason = act.reason || "agent decision";
-      log("info", "cron", `Direct CLOSE: ${p.pair} (${p.position}) — ${reason}`);
-      try {
-        const result = await closePosition({ position_address: p.position, reason });
-        closeResults.push({ position: p, result, reason });
-        if (result.success !== false) {
-          pushNotification({
-            type: "close",
-            pair: p.pair,
-            pnlUsd: result.pnl_usd ?? p.pnl_usd ?? 0,
-            pnlPct: result.pnl_pct ?? p.pnl_pct ?? 0,
-            reason,
-          });
-          mgmtReport += `\n✅ Closed ${p.pair}: ${reason} (PnL: ${result.pnl_pct ?? p.pnl_pct ?? "?"}%)`;
-        } else {
-          log("error", "cron", `Direct CLOSE failed for ${p.pair}: ${result.error}`);
-          mgmtReport += `\n❌ Close failed ${p.pair}: ${result.error}`;
-        }
-      } catch (e) {
-        const errMsg = e?.message ?? String(e);
-        log("error", "cron", `Direct CLOSE error for ${p.pair}: ${errMsg}`);
-        mgmtReport += `\n❌ Close error ${p.pair}: ${errMsg}`;
-      }
+    // Execute via executor module
+    const { closeResults: _closeResults, mgmtReportAdditions } = await executeActions(
+      closeActions, claimActions, config, actionMap
+    );
+    for (const addition of _closeResults) {
+      mgmtReport += `
+${addition}`;
     }
-
-    // Direct claim execution — bypasses LLM entirely
-    for (const p of claimActions) {
-      log("info", "cron", `Direct CLAIM: ${p.pair} (${p.position})`);
-      try {
-        const result = await claimFees({ position_address: p.position });
-        if (result.success !== false) {
-          pushNotification({
-            type: "claim",
-            pair: p.pair,
-            usd: p.unclaimed_fees_usd ?? 0,
-          });
-          mgmtReport += `\n💰 Claimed fees ${p.pair}: $${(p.unclaimed_fees_usd ?? 0).toFixed(2)}`;
-        } else {
-          log("warn", "cron", `Direct CLAIM failed for ${p.pair}: ${result.error}`);
-        }
-      } catch (e) {
-        const errMsg = e?.message ?? String(e);
-        log("error", "cron", `Direct CLAIM error for ${p.pair}: ${errMsg}`);
-      }
+    for (const addition of mgmtReportAdditions) {
+      mgmtReport += `
+${addition}`;
     }
 
     // Only INSTRUCTION actions go to LLM (require interpretation)
@@ -165,7 +134,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
       const cur = config.management.solMode ? "◎" : "$";
       const actionBlocks = instructionActions.map((p) => {
-        const act = actionMap.get(p.position);
+        const _act = actionMap.get(p.position);
         return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,

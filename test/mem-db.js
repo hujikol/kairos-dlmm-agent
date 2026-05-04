@@ -1,114 +1,59 @@
 /**
- * In-memory sql.js wrapper for unit tests.
- * Provides the synchronous-like interface expected by _injectDB.
- * Run inside an async context to allow WASM initialization.
+ * In-memory better-sqlite3 wrapper for unit tests.
+ * Provides the same interface that _extendDb in db.js expects.
  */
 
-import initSqlJs from "sql.js";
+import Database from "better-sqlite3";
 
 /**
- * Build an in-memory sql.js database, initialized and ready for _injectDB.
- * The DB is empty (no schema) — call initSchema() after injecting if needed.
+ * Create an in-memory better-sqlite3 database.
+ * Returns a wrapper that provides the interface db.js expects.
  */
 export async function makeMemDB() {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
+  const db = new Database(":memory:");
 
-  // Wrap the WASM db to expose synchronous-looking prepare() interface.
-  // sql.js's db.exec() returns results but prepare() is not synchronous.
-  // We simulate the sync prepare interface that registry.js uses.
+  // Wrapper that provides the interface _extendDb expects
   const wrapper = {
-    transaction(fn) {
-      return () => {
-        db.run("BEGIN TRANSACTION");
-        try {
-          fn.call(wrapper);
-          db.run("COMMIT");
-        } catch (e) {
-          db.run("ROLLBACK");
-          throw e;
-        }
-      };
+    // _extendDb does: _rawRun = _db.run.bind(_db)
+    // So we need a run method that takes (sql, ...params)
+    run(sql, ...params) {
+      db.prepare(sql).run(...params);
+      return { changes: db.pragma("changes"), lastInsertRowid: 0 };
     },
 
+    // _extendDb does: _rawPrepare = _db.prepare.bind(_db)
+    // So we need a prepare method that returns a statement with run/get/all
     prepare(sql) {
-      const upper = sql.trim().toUpperCase();
-
-      if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE")) {
-        return {
-          run(...vals) {
-            db.run(sql, vals);
-          },
-          get(...vals) { return null; },
-          all(...vals) { return []; },
-        };
-      }
-
-      if (upper.startsWith("SELECT")) {
-        const tableMatch = sql.match(/FROM\s+(\w+)/i);
-        const tableName = tableMatch ? tableMatch[1] : null;
-
-        return {
-          run(...vals) { db.run(sql, vals); },
-          get(...vals) {
-            const overlay = _testRows.get(tableName);
-            if (!overlay) {
-              try {
-                const res = db.exec(sql, vals);
-                if (!res.length || !res[0].values.length) return null;
-                const cols = res[0].columns;
-                const vals2 = res[0].values[0];
-                return Object.fromEntries(cols.map((c, i) => [c, vals2[i]]));
-              } catch { return null; }
-            }
-            if (tableName && vals[0] !== undefined) {
-              const row = overlay.find(r => r.position === vals[0]);
-              return row || null;
-            }
-            return overlay[0] || null;
-          },
-          all(...vals) {
-            const overlay = _testRows.get(tableName);
-            if (overlay) return overlay;
-            try {
-              const res = db.exec(sql, vals);
-              if (!res.length) return [];
-              const cols = res[0].columns;
-              return res[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
-            } catch { return []; }
-          },
-        };
-      }
-
-      // DDL / other
+      const stmt = db.prepare(sql);
       return {
-        run(...vals) { db.run(sql); },
-        get(...vals) { return null; },
-        all(...vals) { return []; },
+        run(...params) {
+          stmt.run(...params);
+          return { changes: db.pragma("changes"), lastInsertRowid: 0 };
+        },
+        get(...params) {
+          return stmt.get(...params) || null;
+        },
+        all(...params) {
+          return stmt.all(...params) || [];
+        },
       };
     },
 
+    // Other methods db.js might use
     exec(sql) {
-      db.run(sql);
+      db.exec(sql);
     },
 
     close() {
-      // no-op for in-memory test wrapper
+      db.close();
     },
 
-    export() {
-      return db.export();
+    // pragma support (better-sqlite3 style)
+    pragma(name) {
+      return db.pragma(name);
     },
 
-    // Internal — overlay test data for SELECT queries
-    _testRows: new Map(),
-
-    // Inject test rows for a given table (e.g. "positions")
-    _injectRows(table, rows) {
-      this._testRows.set(table, rows);
-    },
-
-    // Direct passthrough to underlying db for migrations
+    // For accessing the underlying db if needed
     _db: db,
   };
 
@@ -119,12 +64,12 @@ export async function makeMemDB() {
  * Create a fully initialized in-memory DB with schema, suitable for registry tests.
  */
 export async function makeSchemaDB() {
-  const { initSchema } = await import("../src/core/db.js");
   const db = await makeMemDB();
-  // Apply full schema
+
+  // Apply schema
   db.exec(`
-    CREATE TABLE kv_store (key TEXT PRIMARY KEY, value TEXT);
-    CREATE TABLE positions (
+    CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS positions (
       position TEXT PRIMARY KEY, pool TEXT, pool_name TEXT, strategy TEXT,
       bin_range TEXT, amount_sol REAL, amount_x REAL, active_bin_at_deploy INTEGER,
       bin_step INTEGER, volatility REAL, fee_tvl_ratio REAL, organic_score REAL,
@@ -135,11 +80,11 @@ export async function makeSchemaDB() {
       trailing_active INTEGER DEFAULT 0, instruction TEXT, status TEXT DEFAULT 'active',
       market_phase TEXT, strategy_id TEXT
     );
-    CREATE TABLE recent_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, action TEXT, position TEXT,
-      pool_name TEXT, reason TEXT
+    CREATE TABLE IF NOT EXISTS recent_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, action TEXT,
+      position TEXT, pool_name TEXT, reason TEXT
     );
-    CREATE TABLE performance (
+    CREATE TABLE IF NOT EXISTS performance (
       id INTEGER PRIMARY KEY AUTOINCREMENT, position TEXT, pool TEXT, pool_name TEXT,
       strategy TEXT, bin_range TEXT, bin_step INTEGER, volatility REAL, fee_tvl_ratio REAL,
       organic_score REAL, amount_sol REAL, fees_earned_usd REAL, final_value_usd REAL,
@@ -148,5 +93,6 @@ export async function makeSchemaDB() {
       recorded_at TEXT, base_mint TEXT
     );
   `);
+
   return db;
 }

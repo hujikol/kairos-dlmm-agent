@@ -3,21 +3,32 @@
  * Run with: node --test test/postmortem-signalweights.test.js
  */
 
+import { it, before, after } from 'node:test';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { getDB, closeDB } from '../src/core/db.js';
+import { getDB, closeDB, _injectDB } from '../src/core/db.js';
+import { makeMemDB } from './mem-db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ─── Helpers ───────────────────────────────────────────────────────
+let testDb;
 
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+before(async () => {
+  // Set up in-memory database for tests
+  testDb = await makeMemDB();
+  _injectDB(testDb);
+  // Run migrations to create all required tables
+  const { migrate } = await import('../src/core/db.js');
+  migrate(testDb);
+});
+
+after(() => {
+  closeDB();
+});
 
 // ─── Tests ─────────────────────────────────────────────────────────
 
-await it('postmortem.js can be imported without error', async () => {
+it('postmortem.js can be imported without error', async () => {
   const pm = await import('../src/core/postmortem.js');
   if (typeof pm.analyzeClose !== 'function') throw new Error('analyzeClose not exported');
   if (typeof pm.getActiveRules !== 'function') throw new Error('getActiveRules not exported');
@@ -25,7 +36,7 @@ await it('postmortem.js can be imported without error', async () => {
   if (typeof pm.matchesBlockedPattern !== 'function') throw new Error('matchesBlockedPattern not exported');
 });
 
-await it('signal-weights.js can be imported without error', async () => {
+it('signal-weights.js can be imported without error', async () => {
   const sw = await import('../src/core/signal-weights.js');
   if (typeof sw.loadWeights !== 'function') throw new Error('loadWeights not exported');
   if (typeof sw.saveWeights !== 'function') throw new Error('saveWeights not exported');
@@ -33,7 +44,7 @@ await it('signal-weights.js can be imported without error', async () => {
   if (typeof sw.getWeightsSummary !== 'function') throw new Error('getWeightsSummary not exported');
 });
 
-await it('loadRules() returns an array (empty or with rules)', async () => {
+it('loadRules() returns an array (empty or with rules)', async () => {
   // Reset: clear any existing rules
   const { clearRules } = await import('../src/core/postmortem.js');
   clearRules();
@@ -43,7 +54,7 @@ await it('loadRules() returns an array (empty or with rules)', async () => {
   if (!Array.isArray(rules)) throw new Error(`loadRules() returned ${typeof rules}, expected array`);
 });
 
-await it('loadWeights() returns an object with required keys', async () => {
+it('loadWeights() returns an object with required keys', async () => {
   const { loadWeights } = await import('../src/core/signal-weights.js');
   const data = loadWeights();
 
@@ -58,7 +69,7 @@ await it('loadWeights() returns an object with required keys', async () => {
   if (!Array.isArray(data.history)) throw new Error(`history should be array, got ${typeof data.history}`);
 });
 
-await it('postmortem_rules table has correct schema', async () => {
+it('postmortem_rules table has correct schema', async () => {
   const db = getDB();
 
   // ensure the table exists by triggering loadRules
@@ -79,7 +90,7 @@ await it('postmortem_rules table has correct schema', async () => {
   if (colMap['key'].pk !== 1) throw new Error(`key should be PRIMARY KEY (pk=1), got pk=${colMap['key'].pk}`);
 });
 
-await it('signal_weights table has correct schema', async () => {
+it('signal_weights table has correct schema', async () => {
   const db = getDB();
 
   const cols = db.prepare('PRAGMA table_info(signal_weights)').all();
@@ -93,7 +104,7 @@ await it('signal_weights table has correct schema', async () => {
   if (colMap['weights'].type !== 'TEXT') throw new Error(`weights should be TEXT, got ${colMap['weights'].type}`);
 });
 
-await it('signal_weights_history table has correct schema', async () => {
+it('signal_weights_history table has correct schema', async () => {
   const db = getDB();
 
   const cols = db.prepare('PRAGMA table_info(signal_weights_history)').all();
@@ -107,7 +118,7 @@ await it('signal_weights_history table has correct schema', async () => {
   if (colMap['changes'].type !== 'TEXT') throw new Error(`changes should be TEXT, got ${colMap['changes'].type}`);
 });
 
-await it('saveRules() persists rules to DB and loadRules() retrieves them', async () => {
+it('saveRules() persists rules to DB and loadRules() retrieves them', async () => {
   const { clearRules, getActiveRules } = await import('../src/core/postmortem.js');
   clearRules();
 
@@ -146,7 +157,7 @@ await it('saveRules() persists rules to DB and loadRules() retrieves them', asyn
   clearRules();
 });
 
-await it('saveWeights() persists weights to DB and loadWeights() retrieves them', async () => {
+it('saveWeights() persists weights to DB and loadWeights() retrieves them', async () => {
   const { loadWeights, saveWeights } = await import('../src/core/signal-weights.js');
 
   const testWeights = { organic_score: 1.5, fee_tvl_ratio: 2.0, volume: 1.0 };
@@ -161,7 +172,7 @@ await it('saveWeights() persists weights to DB and loadWeights() retrieves them'
   if (data.recalc_count !== 5) throw new Error(`recalc_count should be 5, got ${data.recalc_count}`);
 });
 
-await it('recalculateWeights() writes to signal_weights and signal_weights_history', async () => {
+it('recalculateWeights() writes to signal_weights and signal_weights_history', async () => {
   const { recalculateWeights, loadWeights } = await import('../src/core/signal-weights.js');
 
   // Create fake performance data (some wins, some losses)
@@ -185,7 +196,7 @@ await it('recalculateWeights() writes to signal_weights and signal_weights_histo
   if (!Array.isArray(data.history)) throw new Error(`history should be array`);
 });
 
-await it('matchesBlockedPattern() returns rule for blocked pattern or null', async () => {
+it('matchesBlockedPattern() returns rule for blocked pattern or null', async () => {
   const { matchesBlockedPattern, clearRules } = await import('../src/core/postmortem.js');
   clearRules();
 
@@ -216,7 +227,7 @@ await it('matchesBlockedPattern() returns rule for blocked pattern or null', asy
   clearRules();
 });
 
-await it('MAX_RULES pruning is enforced (50 rule limit)', async () => {
+it('MAX_RULES pruning is enforced (50 rule limit)', async () => {
   const { clearRules, getActiveRules } = await import('../src/core/postmortem.js');
   clearRules();
 
@@ -240,25 +251,3 @@ await it('MAX_RULES pruning is enforced (50 rule limit)', async () => {
 
   clearRules();
 });
-
-// ─── Bug Reports ───────────────────────────────────────────────────
-
-/*
-BUG 1: loadRules() returns raw legacy JSON instead of parsed rules after JSON migration
-File: src/core/postmortem.js
-Location: loadRules() line ~112
-Severity: Medium
-Description: When the DB is empty and postmortem-rules.json exists, the function migrates
-  rules to DB then returns 'legacy' (raw JSON objects) instead of calling loadRules()
-  again to get properly parsed objects. The returned rules have string bin_step_range,
-  volatility_range, hours_utc, evidence instead of parsed arrays/objects.
-Fix: Replace 'return legacy;' with 'return loadRules();' at line 112.
-
-BUG 2: postmortem-rules.json and signal_weights.json still referenced in source
-File: src/core/postmortem.js line 28, src/core/signal-weights.js (comment)
-Severity: Info
-Description: POSTMORTEM_FILE constant './postmortem-rules.json' still exists in postmortem.js
-  (used as fallback). Signal-weights.js comment on line 8 mentions signal-weights.json
-  but the actual code uses SQLite. These are not bugs per se (JSON fallback is intentional
-  for existing deployments), but the JSON files should be confirmed absent in production.
-*/

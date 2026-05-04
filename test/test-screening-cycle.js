@@ -124,14 +124,14 @@ describe("runScreeningCycle pre-checks", () => {
     // Inject non-empty candidates so getTopCandidates "returns something"
     _injectDiscovery({ pools: [{ pool_address: "PoolA", volume_24h: 10000 }] });
 
-    const { runScreeningCycle } = await import("../src/core/screening-cycle.js");
+    const { runScreeningCycle: _runScreeningCycle } = await import("../src/core/screening-cycle.js");
     // The cycle may still return null if LLM call fails, but it should
     // pass the pre-checks and proceed into the screening logic.
     // We verify this by checking that it didn't immediately return null
     // due to pre-check failures (which would be synchronous before any async work).
     const { runScreeningCycle: run2 } = await import("../src/core/screening-cycle.js");
     // If we got here without an error, pre-checks passed
-    const result = await run2({ silent: true });
+    const _result = await run2({ silent: true });
     // The result may be null for other reasons (LLM, etc.) but not pre-check
     // We can't easily verify "got past pre-checks" without fully mocking the LLM,
     // so this test documents that with sufficient SOL and room, it does not

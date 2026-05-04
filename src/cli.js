@@ -4,11 +4,7 @@
  * Direct tool invocation with JSON output. Agent-native.
  */
 
-import fs from "fs";
-import os from "os";
-import path from "path";
-import { parseArgs } from "util";
-import { out, die, DRY_RUN, COMMAND_DEFAULTS } from "./cli/utils.js";
+import { die } from "./cli/utils.js";
 
 // ─── DRY_RUN must be set before any tool imports ─────────────────
 if (process.argv.includes("--dry-run")) process.env.DRY_RUN = "true";

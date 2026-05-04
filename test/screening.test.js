@@ -19,10 +19,13 @@ describe("screening/discovery", () => {
   });
 
   it("getTopCandidates accepts limit parameter", async () => {
-    const { getTopCandidates } = await import("../src/screening/discovery.js");
-    // Without valid API keys the call will likely fail/return empty,
-    // but the function should accept the parameter without throwing a TypeError
-    assert.doesNotThrow(() => getTopCandidates({ limit: 1 }));
+    const { getTopCandidates, _injectDiscovery, _injectMyPositions } = await import("../src/screening/discovery.js");
+    // Inject empty discovery result (skip API call) + mock getMyPositions
+    _injectDiscovery([]);
+    _injectMyPositions(async () => ({ positions: [] }));
+    const result = await getTopCandidates({ limit: 1 });
+    assert.ok(result && typeof result === "object", "Should return result object");
+    assert.ok(Array.isArray(result.candidates), "candidates should be array");
   });
 
   it("getPoolDetail requires pool_address parameter", async () => {
@@ -36,12 +39,19 @@ describe("screening/discovery", () => {
 
   it("getPoolDetail accepts pool_address and timeframe", async () => {
     const { getPoolDetail } = await import("../src/screening/discovery.js");
-    // With a valid-looking address format but no real network, should get a network error
-    // not a parameter error — this verifies the function accepts both args
-    const fakeAddr = "7n1AhBwFD5MWKxL9K4JmCbgWBnJBJf3GvWKJx3gGJFZP";
-    const result = await getPoolDetail({ pool_address: fakeAddr, timeframe: "1h" });
-    // Result shape should have a pool key if it succeeded
-    assert.ok(result === undefined || typeof result === "object");
+    // Mock fetch to avoid real API call in test env
+    const originalFetch = global.fetch;
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ data: [{ pool_address: "fakePool", name: "Fake Pool" }] }),
+    });
+    try {
+      const fakeAddr = "7n1AhBwFD5MWKxL9K4JmCbgWBnJBJf3GvWKJx3gGJFZP";
+      const result = await getPoolDetail({ pool_address: fakeAddr, timeframe: "1h" });
+      assert.ok(typeof result === "object" && result !== null, "Should return pool object");
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });
 

@@ -97,7 +97,7 @@ export async function startCronJobs() {
       try {
         await runManagementCycle();
       } catch (e) {
-        captureError(e, { phase: "management_cycle" });
+        try { captureError(e, { phase: "management_cycle" }); } catch {}
         log("error", "scheduler", `Management cycle error: ${e?.message ?? String(e)}`);
       }
     }
@@ -110,7 +110,7 @@ export async function startCronJobs() {
       try {
         await runScreeningCycle();
       } catch (e) {
-        captureError(e, { phase: "screening_cycle" });
+        try { captureError(e, { phase: "screening_cycle" }); } catch {}
         log("error", "scheduler", `Screening cycle error: ${e?.message ?? String(e)}`);
       }
     }
@@ -121,7 +121,7 @@ export async function startCronJobs() {
     try {
       await runBriefing();
     } catch (e) {
-      captureError(e, { phase: "briefing" });
+      try { captureError(e, { phase: "briefing" }); } catch {}
       log("error", "scheduler", `Briefing error: ${e?.message ?? String(e)}`);
     }
   });
@@ -131,7 +131,7 @@ export async function startCronJobs() {
     try {
       await maybeRunMissedBriefing();
     } catch (e) {
-      captureError(e, { phase: "briefing_watchdog" });
+      try { captureError(e, { phase: "briefing_watchdog" }); } catch {}
       log("error", "scheduler", `Briefing watchdog error: ${e?.message ?? String(e)}`);
     }
   });

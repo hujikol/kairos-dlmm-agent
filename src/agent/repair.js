@@ -25,8 +25,7 @@ export function parseToolArgs(rawArgs, functionName) {
       const repaired = JSON.parse(jsonrepair(str));
       log("warn", "agent", `Repaired malformed JSON args for ${functionName}`);
       return { args: repaired, repaired: true };
-    } catch (parseError) {
-      log("error", "agent", `Could not repair JSON args for ${functionName} — cleared to {}`);
+    } catch {
       return { args: {}, repaired: false };
     }
   }

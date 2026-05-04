@@ -10,7 +10,7 @@ import { generateBriefing } from "./notifications/briefing.js";
 import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
 import { getDB } from "./core/db.js";
 import { rl } from "./rl-shared.js";
-import { _telegramBusy } from "./telegram-handlers.js";
+import { _telegramBusy } from "./telegram/index.js";
 import {
   getStatusData,
   getBalanceData,
@@ -19,6 +19,7 @@ import {
   triggerScreen,
   getSwapAllResult,
 } from "./core/shared-handlers.js";
+import { formatCandidates, formatBalance, formatPositions } from "./core/shared-formatters.js";
 
 // ─── Module-level state ─────────────────────────────────────────────────────────
 const sessionHistory = [];
@@ -54,23 +55,6 @@ export function appendHistory(userMsg, assistantMsg) {
   }
 }
 
-// ─── formatCandidates (moved from index.js) ───────────────────────────────────
-export function formatCandidates(candidates) {
-  if (!candidates.length) return "  No eligible pools found right now.";
-  const lines = candidates.map((p, i) => {
-    const name = (p.name || "unknown").padEnd(20);
-    const ftvl = `${p.fee_active_tvl_ratio ?? p.fee_tvl_ratio}%`.padStart(8);
-    const vol = `$${((p.volume_window || 0) / 1000).toFixed(1)}k`.padStart(8);
-    const active = `${p.active_pct}%`.padStart(6);
-    const org = String(p.organic_score).padStart(4);
-    return `  [${i + 1}]  ${name}  fee/aTVL:${ftvl}  vol:${vol}  in-range:${active}  organic:${org}`;
-  });
-  return [
-    "  #   pool                  fee/aTVL     vol    in-range  organic",
-    "  " + "─".repeat(68),
-    ...lines,
-  ].join("\n");
-}
 
 // ─── Startup fetch ─────────────────────────────────────────────────────────────
 export async function runStartupFetch() {
@@ -125,6 +109,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
         console.log(`\n${reply}\n`);
         launchCron();
       });
+        startupCandidates = null;
       return;
     }
 
@@ -172,10 +157,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
         const { wallet, positions, total_positions } = await getStatusData();
         console.log(`\nWallet: ${wallet.sol} SOL  ($${wallet.sol_usd})`);
         console.log(`Positions: ${total_positions}`);
-        for (const p of positions) {
-          const status = p.in_range ? "in-range ✓" : "OUT OF RANGE ⚠";
-          console.log(`  ${p.pair.padEnd(16)} ${status}  fees: ${config.management.solMode ? "◎" : "$"}${p.unclaimed_fees_usd}`);
-        }
+        console.log(formatPositions(positions, "terminal", config.management.solMode));
         console.log();
       });
       return;
@@ -183,14 +165,8 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
 
     if (input === "/balance") {
       await runBusy(async () => {
-        const { sol, sol_usd, tokens, total_usd } = await getBalanceData();
-        console.log(`\nWallet Holdings ($${total_usd.toFixed(2)}):`);
-        console.log(`  SOL:   ${sol.toFixed(4)} ($${sol_usd.toFixed(2)})`);
-        for (const t of tokens) {
-          if (t.symbol !== "SOL" && t.usd > 0.01) {
-            console.log(`  ${t.symbol.padEnd(6)}: ${t.balance.toString().padEnd(12)} ($${t.usd.toFixed(2)})`);
-          }
-        }
+        const data = await getBalanceData();
+        console.log(formatBalance(data, "terminal"));
         console.log();
       });
       return;
@@ -209,6 +185,7 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
         const { candidates, total_eligible, total_screened } = await getCandidatesData({ limit: 5 });
         startupCandidates = candidates;
         console.log(`\nTop pools (${total_eligible} eligible from ${total_screened} screened):\n`);
+        startupCandidates = null;
         console.log(formatCandidates(candidates));
         console.log();
       });

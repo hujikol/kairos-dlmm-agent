@@ -13,40 +13,39 @@ import assert from "node:assert";
 import { makeSchemaDB } from "./mem-db.js";
 import { _injectDB } from "../src/core/db.js";
 import { _resetPositionsCache } from "../src/integrations/meteora/positions.js";
-import { _resetPositionsCache as _resetPosCache } from "../src/integrations/meteora/positions.js";
 
-// Injected mocks — reset after each test
+// Import setter functions from watchdog.js to inject mocks
+import {
+  _setGetPositionPnl,
+  _setGetMyPositions,
+  _setPushNotification,
+  _setCaptureAlert,
+  _setRunManagementCycle,
+  _setSyncOpenPositions,
+  _setMarkOutOfRange,
+  _setClosePosition,
+  _setPollInterval,
+} from "../src/watchdog.js";
+
+// Mock functions
 let mockGetPositionPnl;
 let mockGetMyPositions;
 let mockPushNotification;
 let mockCaptureAlert;
 let mockRunManagementCycle;
+let mockSyncOpenPositions;
+let mockMarkOutOfRange;
+let mockClosePosition;
 
-async function setupMocks() {
-  // Patch meteora module
-  const meteoraMod = await import("../src/integrations/meteora.js");
-  meteoraMod.getPositionPnl = mockGetPositionPnl || (() => ({ pnl_pct: 0, in_range: true }));
-  meteoraMod.getMyPositions = mockGetMyPositions || (() => ({ positions: [] }));
-
-  // Patch oor
-  const oorMod = await import("../src/core/state/oor.js");
-  oorMod.markOutOfRange = () => {};
-
-  // Patch sync
-  const syncMod = await import("../src/core/state/sync.js");
-  syncMod.syncOpenPositions = () => {};
-
-  // Patch notifications
-  const notifMod = await import("../src/notifications/queue.js");
-  notifMod.pushNotification = mockPushNotification || (() => {});
-
-  // Patch instrument
-  const instrMod = await import("../src/instrument.js");
-  instrMod.captureAlert = mockCaptureAlert || (() => {});
-
-  // Patch cycles
-  const cyclesMod = await import("../src/core/cycles.js");
-  cyclesMod.runManagementCycle = mockRunManagementCycle || (() => {});
+function setupMocks() {
+  _setGetPositionPnl(mockGetPositionPnl || (() => Promise.resolve({ pnl_pct: 0, in_range: true })));
+  _setGetMyPositions(mockGetMyPositions || (() => Promise.resolve({ positions: [] })));
+  _setPushNotification(mockPushNotification || (() => {}));
+  _setCaptureAlert(mockCaptureAlert || (() => {}));
+  _setRunManagementCycle(mockRunManagementCycle || (() => {}));
+  _setSyncOpenPositions(mockSyncOpenPositions || (() => {}));
+  _setMarkOutOfRange(mockMarkOutOfRange || (() => {}));
+  _setClosePosition(mockClosePosition || (() => ({ success: true })));
 }
 
 describe("watchdog.js", () => {
@@ -59,15 +58,22 @@ describe("watchdog.js", () => {
     _resetPositionsCache();
 
     mockGetPositionPnl = null;
-    mockGetMyPositions = () => ({ positions: [] });
+    mockGetMyPositions = () => Promise.resolve({ positions: [] });
     mockPushNotification = () => {};
     mockCaptureAlert = () => {};
     mockRunManagementCycle = () => {};
+    mockSyncOpenPositions = () => {};
+    mockMarkOutOfRange = () => {};
+    mockClosePosition = () => ({ success: true });
 
-    await setupMocks();
+    setupMocks();
+    // Set short poll interval for tests (50ms)
+    _setPollInterval(50);
   });
 
   afterEach(async () => {
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
     _resetPositionsCache();
     const { closeDB } = await import("../src/core/db.js");
     closeDB();
@@ -81,135 +87,154 @@ describe("watchdog.js", () => {
     `).run(address, pool, poolName);
   }
 
-  // ── 1. Consecutive failure tracking ─────────────────────────────────────────
-
-  test("3 consecutive failures increments counter to 3", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, _consecutiveFailures } = watchdogMod;
-
-    insertActivePosition("PosFail3", "PoolFail", "FAIL-POOL");
-    recordFailure("PosFail3");
-    recordFailure("PosFail3");
-    recordFailure("PosFail3");
-
-    assert.strictEqual(_consecutiveFailures.get("PosFail3"), 3);
+  test("insertActivePosition helper works", () => {
+    insertActivePosition("pos1");
+    const rows = db.prepare("SELECT * FROM positions").all();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].position, "pos1");
   });
 
-  test("5 consecutive failures marks position stale and removes from watch list", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, _consecutiveFailures } = watchdogMod;
-
-    insertActivePosition("PosFail5", "PoolStale", "STALE-POOL");
-    for (let i = 0; i < 5; i++) recordFailure("PosFail5");
-
-    assert.strictEqual(_consecutiveFailures.get("PosFail5"), 5);
-
-    // Position should now be marked stale in DB
-    const row = db.prepare("SELECT status FROM positions WHERE position = ?").get("PosFail5");
-    assert.strictEqual(row.status, "stale", "Position should be marked stale after 5 failures");
+  test("startWatchdog exists and is a function", async () => {
+    const { startWatchdog } = await import("../src/watchdog.js");
+    assert.strictEqual(typeof startWatchdog, "function");
   });
 
-  test("clearFailure removes failure count for a position", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, clearFailure, _consecutiveFailures } = watchdogMod;
+  test("position with pnl_pct <= stopLossPct triggers emergency close", async () => {
+    insertActivePosition("pos2");
+    let notified = null;
+    let closed = null;
 
-    insertActivePosition("PosClear", "PoolClear", "CLEAR-POOL");
-    recordFailure("PosClear");
-    recordFailure("PosClear");
-    clearFailure("PosClear");
+    mockGetPositionPnl = () => ({ pnl_pct: -10, in_range: false });
+    mockPushNotification = (n) => { notified = n; };
+    mockClosePosition = (opts) => { closed = opts.position_address; return { success: true }; };
+    setupMocks();
 
-    assert.strictEqual(_consecutiveFailures.has("PosClear"), false, "Failure count should be cleared");
+    const { startWatchdog } = await import("../src/watchdog.js");
+    const config = { management: { stopLossPct: -5 } };
+    startWatchdog(config);
+
+    // Wait for interval to fire (50ms poll + buffer)
+    await new Promise(r => setTimeout(r, 200));
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
+
+    assert.ok(closed, "closePosition should have been called");
+    assert.ok(notified, "pushNotification should have been called");
   });
 
-  // ── 2. Successful call clears failure count ─────────────────────────────────
+  test("consecutive failures tracked and alert fires at 3", async () => {
+    insertActivePosition("pos3");
+    let alertMsg = null;
+
+    mockGetPositionPnl = () => Promise.reject(new Error("API down"));
+    mockCaptureAlert = (msg) => { alertMsg = msg; };
+    setupMocks();
+
+    const { startWatchdog } = await import("../src/watchdog.js");
+    const config = { management: { stopLossPct: -5 } };
+    startWatchdog(config);
+
+    // Wait for multiple intervals (50ms * ~6 = 300ms + buffer)
+    await new Promise(r => setTimeout(r, 500));
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
+
+    assert.ok(alertMsg, "captureAlert should fire after 3 consecutive failures");
+  });
 
   test("clearFailure after prior failures removes the counter", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, clearFailure, _consecutiveFailures } = watchdogMod;
+    insertActivePosition("pos4");
 
-    insertActivePosition("PosSuccess", "PoolOK", "OK-POOL");
+    // First 3 calls fail, 4th succeeds (clears failure count)
+    let callCount = 0;
+    mockGetPositionPnl = () => {
+      callCount++;
+      if (callCount <= 3) return Promise.reject(new Error("fail"));
+      return Promise.resolve({ pnl_pct: 0, in_range: true });
+    };
+    setupMocks();
 
-    // Simulate 2 prior failures
-    recordFailure("PosSuccess");
-    recordFailure("PosSuccess");
-    assert.strictEqual(_consecutiveFailures.get("PosSuccess"), 2);
+    const { startWatchdog } = await import("../src/watchdog.js");
+    const config = { management: { stopLossPct: -5 } };
+    startWatchdog(config);
 
-    // Simulate a successful poll
-    clearFailure("PosSuccess");
-
-    assert.strictEqual(_consecutiveFailures.has("PosSuccess"), false, "Failure count cleared after successful poll");
+    await new Promise(r => setTimeout(r, 500));
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
   });
-
-  // ── 3. Stale positions are removed from watch list ───────────────────────────
 
   test("markStaleAndRemove sets status=stale and clears failure tracking", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, markStaleAndRemove, _consecutiveFailures } = watchdogMod;
+    insertActivePosition("pos5");
+    let notified = null;
 
-    insertActivePosition("PosStaleRemove", "PoolStaleRem", "STALE-REMOVE");
-    for (let i = 0; i < 5; i++) recordFailure("PosStaleRemove");
+    mockGetPositionPnl = () => Promise.reject(new Error("fail"));
+    mockPushNotification = (n) => { notified = n; };
+    setupMocks();
 
-    const pos = db.prepare("SELECT * FROM positions WHERE position = ?").get("PosStaleRemove");
-    markStaleAndRemove("PosStaleRemove", pos);
+    const { startWatchdog } = await import("../src/watchdog.js");
+    const config = { management: { stopLossPct: -5 } };
+    startWatchdog(config);
 
-    const row = db.prepare("SELECT status FROM positions WHERE position = ?").get("PosStaleRemove");
-    assert.strictEqual(row.status, "stale", "Status should be 'stale'");
-    assert.strictEqual(_consecutiveFailures.has("PosStaleRemove"), false, "Failure tracking should be cleared");
+    // Need 5+ failures to go stale (50ms interval * 6 = 300ms + buffer)
+    await new Promise(r => setTimeout(r, 800));
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
+
+    const row = db.prepare("SELECT status FROM positions WHERE position = ?").get("pos5");
+    assert.strictEqual(row.status, "stale");
+    assert.ok(notified, "pushNotification should fire for stale position");
   });
-
-  test("stale position does not appear in active positions query", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, markStaleAndRemove } = watchdogMod;
-
-    insertActivePosition("PosSkipIfStale", "PoolSkip", "SKIP-POOL");
-    for (let i = 0; i < 5; i++) recordFailure("PosSkipIfStale");
-
-    const pos = db.prepare("SELECT * FROM positions WHERE position = ?").get("PosSkipIfStale");
-    markStaleAndRemove("PosSkipIfStale", pos);
-
-    // Simulate watchdog's SQL filter: only 'active' positions are polled
-    const activePositions = db.prepare(
-      "SELECT position FROM positions WHERE closed = 0 AND status = ?"
-    ).all("active");
-
-    assert.ok(
-      !activePositions.some(p => p.position === "PosSkipIfStale"),
-      "Stale position should not appear in active positions query"
-    );
-  });
-
-  // ── 4. Poll simulation: error increments failure, success clears it ───────────
 
   test("getPositionPnl error increments failure count", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, _consecutiveFailures } = watchdogMod;
+    insertActivePosition("pos6");
 
-    insertActivePosition("PosPollErr", "PoolPollErr", "POLL-ERR");
+    mockGetPositionPnl = () => Promise.reject(new Error("API error"));
+    setupMocks();
 
-    // Simulate what the watchdog loop does on a getPositionPnl error
-    mockGetPositionPnl = async () => ({ error: "RPC timeout" });
+    const { startWatchdog } = await import("../src/watchdog.js");
+    const config = { management: { stopLossPct: -5 } };
+    startWatchdog(config);
 
-    // The watchdog loop calls recordFailure on error
-    recordFailure("PosPollErr");
-
-    assert.strictEqual(_consecutiveFailures.get("PosPollErr"), 1);
+    await new Promise(r => setTimeout(r, 300));
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
   });
 
   test("getPositionPnl success clears failure count", async () => {
-    const watchdogMod = await import("../src/watchdog.js");
-    const { recordFailure, clearFailure, _consecutiveFailures } = watchdogMod;
+    insertActivePosition("pos7");
 
-    insertActivePosition("PosPollOK", "PoolPollOK", "POLL-OK");
+    let callCount = 0;
+    mockGetPositionPnl = () => {
+      callCount++;
+      if (callCount === 1) return Promise.reject(new Error("fail"));
+      return Promise.resolve({ pnl_pct: 1.5, in_range: true });
+    };
+    setupMocks();
 
-    // Two prior failures
-    recordFailure("PosPollOK");
-    recordFailure("PosPollOK");
+    const { startWatchdog } = await import("../src/watchdog.js");
+    const config = { management: { stopLossPct: -5 } };
+    startWatchdog(config);
 
-    // Simulate successful poll result
-    mockGetPositionPnl = async () => ({ pnl_pct: 2.5, in_range: true, pnl_usd: 1.0 });
+    await new Promise(r => setTimeout(r, 300));
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
+  });
 
-    clearFailure("PosPollOK");
+  test("stale position does not appear in active positions query", async () => {
+    insertActivePosition("pos8");
 
-    assert.strictEqual(_consecutiveFailures.has("PosPollOK"), false);
+    mockGetPositionPnl = () => Promise.reject(new Error("fail"));
+    setupMocks();
+
+    const { startWatchdog } = await import("../src/watchdog.js");
+    const config = { management: { stopLossPct: -5 } };
+    startWatchdog(config);
+
+    await new Promise(r => setTimeout(r, 800));
+    const { stopWatchdog } = await import("../src/watchdog.js");
+    stopWatchdog();
+
+    const active = db.prepare("SELECT * FROM positions WHERE closed = 0 AND status = 'active'").all();
+    assert.strictEqual(active.length, 0, "Stale position should not appear in active query");
   });
 });

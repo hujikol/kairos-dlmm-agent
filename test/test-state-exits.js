@@ -10,13 +10,10 @@ import { fileURLToPath } from "url";
 import path from "path";
 import { makeMemDB } from "./mem-db.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ___dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function makeTestDB() {
-  const db = new Database(":memory:");
-  db.pragma("journal_mode = WAL");
-  db.pragma("synchronous = NORMAL");
-  db.pragma("foreign_keys = ON");
+async function makeTestDB() {
+  const db = await makeMemDB();
   db.exec(`CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)`);
   db.exec(`CREATE TABLE IF NOT EXISTS recent_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, action TEXT,
@@ -52,10 +49,10 @@ function makeTestDB() {
   return db;
 }
 
-const testDb = makeTestDB();
+const testDb = await makeTestDB();
 const { _injectDB } = await import("../src/core/db.js");
 _injectDB(testDb);
-const { updatePnlAndCheckExits } = await import("../src/core/state.js");
+const { updatePnlAndCheckExits } = await import("../src/core/state/index.js");
 
 function insertPosition(overrides = {}) {
   const pos = {

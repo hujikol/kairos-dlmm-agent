@@ -21,15 +21,14 @@ import {
   getPool,
   getDLMM,
   DLMM_PROGRAM,
-  applyPriorityFee,
   sendTx,
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { METEORA_POSITIONS_CACHE_TTL_MS } from "../../core/constants.js";
 
 // ─── Constants ───────────────────────────────────────────────────
-/** Default slippage in basis points (10 bps = 0.1%) */
-const DEFAULT_SLIPPAGE_BPS = 10;
+/** Default slippage in basis points (1000 bps = 10%) — raised from 10 bps to fix ExceededBinSlippageTolerance on wide-range positions */
+const DEFAULT_SLIPPAGE_BPS = 1000;
 import { positionsCache } from "../../core/cache-manager.js";
 import { roundTo } from "../../utils/round.js";
 

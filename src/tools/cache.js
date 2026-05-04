@@ -23,6 +23,8 @@ const TTL_MAP = {
   get_wallet_balance: 5 * 60,
 };
 
+const MAX_CACHE_SIZE = 100;
+
 /**
  * Get cached tool result or compute + cache it.
  * @param {string} name - tool name
@@ -44,6 +46,7 @@ export async function cachedTool(name, key, fn, ttlOverride) {
 
   // Compute and cache
   const promise = fn().then((value) => {
+    if (CACHE.size >= MAX_CACHE_SIZE) CACHE.delete(CACHE.keys().next().value);
     CACHE.set(cacheKey, { value, exp: now + (ttlOverride ?? TTL_MAP[name] ?? 120) * 1000 });
     PENDING.delete(cacheKey);
     return value;
@@ -79,6 +82,7 @@ export function clearCache() {
 const _evictionTimer = setInterval(() => {
   const now = Date.now();
   for (const [k, v] of CACHE) if (v.exp < now) CACHE.delete(k);
+  if (CACHE.size > 50) log("warn", "cache", `CACHE size is ${CACHE.size}`);
 }, 60_000);
 
 // Allow callers to stop the eviction timer (e.g., during shutdown)

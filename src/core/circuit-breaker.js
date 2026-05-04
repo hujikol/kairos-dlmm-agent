@@ -35,7 +35,7 @@ export function createCircuitBreaker(name, options = {}) {
 
   let state         = CircuitBreakerState.CLOSED;
   let failures      = 0;
-  let lastFailureAt = null;
+  let _lastFailureAt = null;
   let probesUsed    = 0;
   let openAt        = null;   // timestamp when we transitioned to OPEN
 

@@ -4,7 +4,7 @@
  */
 
 export const DEFAULT_MODEL = process.env.LLM_MODEL || "hermes-3-405b";
-export const FALLBACK_MODEL = process.env.LLM_FALLBACK_MODEL || "minimax/minimax-01";
+export const FALLBACK_MODEL = process.env.LLM_FALLBACK_MODEL || "MiniMax-M2.7";
 
 export const INTENT_PATTERNS = [
   { intent: "deploy",      re: /\b(deploy|open|add liquidity|lp into|invest in)\b/i },

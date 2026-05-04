@@ -3,6 +3,7 @@
  */
 import Database from "better-sqlite3";
 import { initSchema, closeDB } from "../src/core/db.js";
+import { migrate } from "../migrations/index.js";
 import crypto from "crypto";
 
 const db = new Database(":memory:");

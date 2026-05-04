@@ -67,12 +67,12 @@
   "maxSteps": 10,
   "screenerMaxSteps": 5,
   "managerMaxSteps": 4,
-  "llmModel": "minimax/minimax-01",
+  "llmModel": "MiniMax-M2.7",
   "models": {
-    "manager": "minimax/minimax-01",
-    "screener": "minimax/minimax-01",
-    "general": "minimax/minimax-01",
-    "evolve": "minimax/minimax-01"
+    "manager": "MiniMax-M2.7",
+    "screener": "MiniMax-M2.7",
+    "general": "MiniMax-M2.7",
+    "evolve": "MiniMax-M2.7"
   },
 
   "─── Config Format Note ────────────────────────────────────────": "",

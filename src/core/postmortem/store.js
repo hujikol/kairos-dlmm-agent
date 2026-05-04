@@ -156,6 +156,7 @@ export function saveRules(rules) {
  * @returns {{ cleared: boolean }}
  */
 export function clearRules() {
-  saveRules([]);
+  const db = getDB();
+  db.prepare("DELETE FROM postmortem_rules").run();
   return { cleared: true };
 }

@@ -87,7 +87,7 @@ export function listLessons({ role = null, pinned = null, tag = null, limit = 30
       parsedTags = JSON.parse(l.tags || '[]');
       if (typeof parsedTags === "string") parsedTags = JSON.parse(parsedTags);
       if (!Array.isArray(parsedTags)) parsedTags = [];
-    } catch (e) { parsedTags = []; }
+    } catch { parsedTags = []; }
     return { ...l, tags: parsedTags };
   });
   if (tag) lessons = lessons.filter(l => l.tags.includes(tag));
@@ -163,7 +163,7 @@ export function getRelevantLessons(context = {}, limit = 3) {
 
   const parsed = allRows.map(l => {
     let parsedTags = [];
-    try { parsedTags = JSON.parse(l.tags || '[]'); } catch (e) { log("warn", "lessons", `Failed to parse tags: ${e?.message}`); parsedTags = []; }
+    try { parsedTags = JSON.parse(l.tags || '[]'); } catch { log("warn", "lessons", `Failed to parse tags: ${e?.message}`); parsedTags = []; }
     return { ...l, tags: parsedTags };
   });
 
@@ -183,7 +183,7 @@ export function getRelevantLessons(context = {}, limit = 3) {
 
   const tagged = rows.map(l => {
     let parsedTags = [];
-    try { parsedTags = JSON.parse(l.tags || '[]'); } catch (e) { log("warn", "lessons", `Failed to parse tags: ${e?.message}`); parsedTags = []; }
+    try { parsedTags = JSON.parse(l.tags || '[]'); } catch { log("warn", "lessons", `Failed to parse tags: ${e?.message}`); parsedTags = []; }
     return { ...l, tags: parsedTags };
   });
 

@@ -3,13 +3,13 @@ import BN from "bn.js";
 import { CLAIM_DEDUP_MS, METEORA_CLOSE_SYNC_WAIT_MS, METEORA_CLOSE_RETRY_DELAY_MS } from "../../core/constants.js";
 import { recordClaim, recordClose, getTrackedPosition } from "../../core/state/registry.js";
 import { recordPerformance } from "../../core/lessons.js";
-import { config, isDryRun } from "../../config.js";
+import { isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
 import { getPool, getWallet, getDLMM, getConnection, sendTx, lookupPoolForPosition } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
-import { getMyPositions, invalidatePositionsCache } from "./positions.js";
+import { getMyPositions as _getMyPositions, invalidatePositionsCache } from "./positions.js";
 import { positionsCache, poolCache } from "../../core/cache-manager.js";
 
 // ─── claimFees ────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ export async function claimFees({ position_address }) {
   try {
     log("info", "claim", `Claiming fees for position: ${position_address}`);
     const wallet = getWallet();
-    const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
+    poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
 
@@ -195,8 +195,8 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
   await new Promise(r => setTimeout(r, METEORA_CLOSE_SYNC_WAIT_MS));
   invalidatePositionsCache();
 
-  let closedConfirmed = false;
-  let lastError = null;
+  let _closedConfirmed = false;
+  let _lastError = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       // Use getAllLbPairPositionsByUser directly — do NOT trust getMyPositions (relay/Meteora API has stale data)
@@ -210,9 +210,9 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
         return key === position_address;
       });
       log("debug", "close", `Close verification attempt ${attempt + 1}/3: ${stillOpen ? "still open" : "confirmed closed"} (${allPos.length} on-chain positions)`);
-      if (!stillOpen) { closedConfirmed = true; break; }
+      if (!stillOpen) { _closedConfirmed = true; break; }
     } catch (e) {
-      lastError = e;
+      _lastError = e;
       log("warn", "close", `Close verification failed (attempt ${attempt + 1}/3): ${e?.message ?? e}`);
     }
     if (attempt < 2) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
@@ -446,10 +446,11 @@ export async function closePosition({ position_address, reason }) {
 
   // Get wallet BEFORE try block so it's always in scope for catch verification
   const wallet = getWallet();
+  let poolAddress = null;
 
   try {
     log("debug", "close", `Closing position: ${position_address}`);
-    const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
+    poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
     const positionPubKey = new PublicKey(position_address);
@@ -463,7 +464,7 @@ export async function closePosition({ position_address, reason }) {
     const { closeTxHashes } = await closeRemoveLiquidity(ctx);
 
     // Phase 3: Verify & record
-    const { closedConfirmed, result } = await closeVerifyAndRecord(
+    const { closedConfirmed: _closedConfirmed, result } = await closeVerifyAndRecord(
       ctx, { claimTxHashes, closeTxHashes }, reason,
     );
 
@@ -502,7 +503,7 @@ export async function closePosition({ position_address, reason }) {
     const trackedVerify = getTrackedPosition(position_address);
     if (trackedVerify) {
       await recordPerformance({
-        position: position_address, pool: trackedVerify.pool || poolAddress,
+        position: position_address, pool: trackedVerify?.pool || poolAddress || position_address,
         pool_name: trackedVerify.pool_name || null,
         strategy: trackedVerify.strategy, bin_range: trackedVerify.bin_range,
         bin_step: trackedVerify.bin_step || null, volatility: trackedVerify.volatility || null,

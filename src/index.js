@@ -14,27 +14,22 @@ if (isHiveMindEnabled()) {
 import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
 import { config, isDryRun } from "./config.js";
-import { timers } from "./core/state/scheduler-state.js";
 import {
   startCronJobs,
-  stopCronJobs,
-  nextRunIn,
-  formatCountdown,
   maybeRunMissedBriefing,
 } from "./core/scheduler.js";
-import { stopPolling } from "./notifications/telegram.js";
 import { runScreeningCycle } from "./core/cycles.js";
-import { getMyPositions } from "./integrations/meteora.js";
 import { initSentry } from "./instrument.js";
 import { registerCronRestarter } from "./tools/executor.js";
 import { createHealthServer, startHealthServer } from "./server/health.js";
 import { setHealthServer, setPromptRefreshInterval, shutdown } from "./server/shutdown.js";
 
 // Imports from extracted files
-import { telegramHandler, startPolling, drainTelegramQueue, _telegramBusy } from "./telegram-handlers.js";
 import { runStartupFetch, setupReplLineHandler, launchCron, cronStarted } from "./repl.js";
+import { startPolling, telegramHandler } from "./telegram/index.js";
 import { swapAllTokensToSol } from "./integrations/helius.js";
 import { setRl, buildPrompt } from "./rl-shared.js";
+import { startMemoryWatchdog } from "./core/memory-watchdog.js";
 
 // Initialize Sentry after config loads
 initSentry();
@@ -47,6 +42,7 @@ log("info", "startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
 const healthServer = createHealthServer();
 startHealthServer(healthServer);
 setHealthServer(healthServer);
+startMemoryWatchdog();
 
 // ─── Shutdown ─────────────────────────────────────────────────────────────────
 

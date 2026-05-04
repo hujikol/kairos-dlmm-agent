@@ -471,7 +471,7 @@ Centralized relay client. Routes PnL, Top-LP, and position queries through `http
 
 ## Model Configuration
 
-- Default: `process.env.LLM_MODEL` or `minimax/minimax-01`
+- Default: `process.env.LLM_MODEL` or `MiniMax-M2.7`
 - Fallback on 502/503/529: `stepfun/step-3.5-flash:free`
 - Per-role: `models.manager`, `models.screener`, `models.general`, `models.evolve` (nested) or flat keys
 - LM Studio: `LLM_BASE_URL=http://localhost:1234/v1`, `LLM_API_KEY=lm-studio`
