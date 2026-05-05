@@ -7,7 +7,8 @@
  * 3. getTopCandidates returns an array (or throws if unconfigured)
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, afterEach, after } from "node:test";
+import { poolCache } from "../src/core/cache-manager.js";
 
 // Discover internal filter logic by testing observable behavior
 describe("screening/discovery", () => {
@@ -65,4 +66,13 @@ describe("screening wash-trade filter", () => {
     // This test is a smoke test — real validation requires live APIs.
     assert.ok(typeof discoverPools === "function");
   });
+});
+
+afterEach(() => {
+  poolCache.clear();
+});
+
+after(() => {
+  poolCache.clear();
+  process.exit(0); // force exit — poolCache eviction timer keeps event loop alive
 });

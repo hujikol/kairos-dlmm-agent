@@ -7,12 +7,29 @@
  * Run: node --test test/test-registry.js
  */
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert";
 import { makeSchemaDB } from "./mem-db.js";
-import { _injectDB } from "../src/core/db.js";
+import { _injectDB, closeDB } from "../src/core/db.js";
 import { _resetPositionsCache, _injectPositionsCache } from "../src/integrations/meteora/positions.js";
 import { _injectBalances } from "../src/integrations/helius.js";
+
+// ─── Per-suite cleanup ─────────────────────────────────────────────────
+
+after(() => {
+  _resetPositionsCache();
+  _injectPositionsCache(null);
+  _injectBalances(null);
+  closeDB();
+});
+
+// Also clean up after each describe block to catch any unclosed handles
+afterEach(() => {
+  _resetPositionsCache();
+  _injectPositionsCache(null);
+  _injectBalances(null);
+  closeDB();
+});
 
 describe("core/state/registry.js", () => {
 
@@ -24,12 +41,6 @@ describe("core/state/registry.js", () => {
     _resetPositionsCache();
     _injectPositionsCache(null);
     _injectBalances(null);
-  });
-
-  afterEach(async () => {
-    _resetPositionsCache();
-    const { closeDB } = await import("../src/core/db.js");
-    closeDB();
   });
 
   // ── trackPosition stores position ────────────────────────────────────────────
@@ -182,3 +193,5 @@ describe("core/state/registry.js", () => {
     assert.strictEqual(row.total_fees_claimed_usd, 4.20);
   });
 });
+
+after(() => { process.exit(0); });

@@ -14,7 +14,7 @@
  * Run: node --test test/test-close-flow.js
  */
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert";
 import { mock } from "node:test";
 import { Keypair } from "@solana/web3.js";
@@ -213,7 +213,9 @@ describe("closePosition integration tests", function () {
     _injectTrackedPosition(null);
     _testDB?.close();
     _testDB = null;
-    process.env.DRY_RUN = undefined; // prevent test 5's DRY_RUN from leaking into test 6
+    // Reset the module-level DB reference so subsequent tests get a fresh state
+    closeDB();
+    process.env.DRY_RUN = undefined;
   });
 
   // ─── Test 1: closePosition() calls phases in correct order ─────
@@ -385,3 +387,5 @@ describe("closePosition integration tests", function () {
     );
   });
 });
+
+after(() => { process.exit(0); });

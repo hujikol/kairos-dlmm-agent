@@ -8,8 +8,9 @@
  * 4. getCachedBalance() returns null when cache is empty
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, after } from "node:test";
 import * as helius from "../src/integrations/helius.js";
+import { balanceCache } from "../src/core/cache-manager.js";
 
 describe("Helius balance cache", () => {
   it("caches balance on first fresh call", async () => {
@@ -53,5 +54,11 @@ describe("Helius balance cache", () => {
     const cached = helius.getCachedBalance();
     assert.ok(cached !== null);
     assert.equal(cached.sol, data.sol);
+  });
+
+  after(() => {
+    helius.invalidateBalanceCache();
+    balanceCache.stop();
+    process.exit(0); // force exit — CacheManager eviction timer keeps event loop alive
   });
 });

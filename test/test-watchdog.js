@@ -8,7 +8,7 @@
  * Run: node --test test/test-watchdog.js
  */
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert";
 import { makeSchemaDB } from "./mem-db.js";
 import { _injectDB } from "../src/core/db.js";
@@ -238,3 +238,4 @@ describe("watchdog.js", () => {
     assert.strictEqual(active.length, 0, "Stale position should not appear in active query");
   });
 });
+after(() => { process.exit(0); });

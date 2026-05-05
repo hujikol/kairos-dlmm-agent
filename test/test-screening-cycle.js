@@ -7,15 +7,38 @@
  * Run: node --test test/test-screening-cycle.js
  */
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert";
 
 import Database from "better-sqlite3";
-import { _injectDB } from "../src/core/db.js";
+import { _injectDB, closeDB } from "../src/core/db.js";
 import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";
 import { _injectBalances } from "../src/integrations/helius.js";
 import { _injectDiscovery } from "../src/screening/discovery.js";
 import { _injectDailyPnL, _injectCircuitBreaker } from "../src/core/daily-tracker.js";
+
+// ─── Per-suite cleanup ─────────────────────────────────────────────────
+
+after(() => {
+  _injectPositionsCache(null);
+  _injectBalances(null);
+  _resetPositionsCache();
+  _injectDiscovery(null);
+  _injectDailyPnL(null);
+  _injectCircuitBreaker(null);
+  closeDB();
+  delete process.env.DRY_RUN;
+});
+
+afterEach(() => {
+  _injectPositionsCache(null);
+  _injectBalances(null);
+  _resetPositionsCache();
+  _injectDiscovery(null);
+  _injectDailyPnL(null);
+  _injectCircuitBreaker(null);
+  closeDB();
+});
 
 function freshDB() {
   const db = new Database(":memory:");
@@ -43,18 +66,6 @@ describe("runScreeningCycle pre-checks", () => {
     _injectDailyPnL({ realized: 0, unrealized: 0 });
     _injectCircuitBreaker({ action: "trade", reason: "normal" });
     if (!process.env.DRY_RUN) process.env.DRY_RUN = "true";
-  });
-
-  afterEach(async () => {
-    _injectPositionsCache(null);
-    _injectBalances(null);
-    _resetPositionsCache();
-    _injectDiscovery(null); // reset — null forces real API call
-    _injectDailyPnL(null);
-    _injectCircuitBreaker(null);
-    const { closeDB } = await import("../src/core/db.js");
-    closeDB();
-    delete process.env.DRY_RUN;
   });
 
   // ── Pre-check: max positions reached ───────────────────────────────
@@ -139,3 +150,5 @@ describe("runScreeningCycle pre-checks", () => {
     assert.ok(true, "reached screening logic");
   });
 });
+
+after(() => { process.exit(0); });

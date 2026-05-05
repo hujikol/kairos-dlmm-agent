@@ -6,12 +6,12 @@
  * Run: node --test test/test-deploy-safety.js
  */
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert";
 
 // ─── In-memory test DB ─────────────────────────────────────────────────────────
 import Database from "better-sqlite3";
-import { _injectDB, initSchema } from "../src/core/db.js";
+import { _injectDB, initSchema, closeDB } from "../src/core/db.js";
 import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";
 import { _injectBalances } from "../src/integrations/helius.js";
 
@@ -37,12 +37,13 @@ describe("deploy_position safety checks", () => {
     if (!process.env.DRY_RUN) process.env.DRY_RUN = "true";
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     _injectPositionsCache(null);
     _injectBalances(null);
     _resetPositionsCache();
-    const { closeDB } = await import("../src/core/db.js");
     closeDB();
+    // Close the underlying real DB and reset module-level reference
+    if (db?.close) db.close();
     delete process.env.DRY_RUN;
   });
 
@@ -184,5 +185,9 @@ describe("deploy_position safety checks", () => {
 
     // Should not be blocked
     assert.notStrictEqual(result.blocked, true, `Should not be blocked with sufficient SOL, got: ${JSON.stringify(result)}`);
+  });
+
+  after(() => {
+    process.exit(0);
   });
 });

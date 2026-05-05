@@ -10,9 +10,32 @@
  */
 
 import { readFileSync } from "fs";
-import { resolve } from "path";
-import { test, describe } from "node:test";
+import { resolve, dirname as pathDirname } from "path";
+import { fileURLToPath } from "url";
 import assert from "node:assert";
+import { test, describe, after } from "node:test";
+
+const __dirname = pathDirname(fileURLToPath(import.meta.url));
+
+// ─── Per-suite cleanup ─────────────────────────────────────────────────
+// Close any cached module state that could leak between test runs.
+
+async function cleanup() {
+  try {
+    const { _resetCallWithRetry } = await import("../src/agent/fallback.js");
+    _resetCallWithRetry();
+  } catch (_) {}
+  try {
+    const { _resetExecuteTool } = await import("../src/tools/executor.js");
+    _resetExecuteTool();
+  } catch (_) {}
+  try {
+    const { _resetSleep } = await import("../src/agent/rate.js");
+    _resetSleep();
+  } catch (_) {}
+}
+
+after(() => cleanup());
 
 // ─── Test suite ───────────────────────────────────────────────────────
 
@@ -21,7 +44,7 @@ describe("agent/react.js core logic", () => {
   // ── 1. MAX_REACT_DEPTH guard kicks in at depth 10 ───────────────────
 
   test("MAX_REACT_DEPTH constant is 10 in constants.js", async () => {
-    const src = readFileSync(resolve("G:/Meridian/kairos-dllm-agent/src/core/constants.js"), "utf8");
+    const src = readFileSync(resolve(__dirname, "../src/core/constants.js"), "utf8");
     const match = src.match(/export const MAX_REACT_DEPTH\s*=\s*(\d+)/);
     assert.ok(match, "MAX_REACT_DEPTH constant should exist in constants.js");
     assert.strictEqual(parseInt(match[1]), 10, "MAX_REACT_DEPTH should be 10");
@@ -268,7 +291,7 @@ describe("agent/react.js core logic", () => {
     const fallbackMod = await import("../src/agent/fallback.js");
     const rateMod = await import("../src/agent/rate.js");
 
-    let _attempt = 0;
+    let attempt = 0;
 
     // Mock sleep to avoid real delays
     rateMod._setSleep(async () => {});
@@ -318,3 +341,5 @@ describe("agent/react.js core logic", () => {
     }
   });
 });
+
+after(() => { process.exit(0); });

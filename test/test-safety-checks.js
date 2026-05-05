@@ -7,13 +7,30 @@
  * Run: node --test test/test-safety-checks.js
  */
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert";
 
 import Database from "better-sqlite3";
-import { _injectDB } from "../src/core/db.js";
+import { _injectDB, closeDB } from "../src/core/db.js";
 import { _injectPositionsCache, _resetPositionsCache } from "../src/integrations/meteora/positions.js";
 import { _injectBalances } from "../src/integrations/helius.js";
+
+// ─── Per-suite cleanup ─────────────────────────────────────────────────
+
+after(() => {
+  _injectPositionsCache(null);
+  _injectBalances(null);
+  _resetPositionsCache();
+  closeDB();
+  delete process.env.DRY_RUN;
+});
+
+afterEach(() => {
+  _injectPositionsCache(null);
+  _injectBalances(null);
+  _resetPositionsCache();
+  closeDB();
+});
 
 function freshDB() {
   const db = new Database(":memory:");
@@ -32,15 +49,6 @@ describe("runSafetyChecks — deploy_position", () => {
     _injectBalances(null);
     _resetPositionsCache();
     if (!process.env.DRY_RUN) process.env.DRY_RUN = "true";
-  });
-
-  afterEach(async () => {
-    _injectPositionsCache(null);
-    _injectBalances(null);
-    _resetPositionsCache();
-    const { closeDB } = await import("../src/core/db.js");
-    closeDB();
-    delete process.env.DRY_RUN;
   });
 
   // ── Helper: call executeTool with deploy_position ──────────────────
@@ -175,3 +183,5 @@ describe("runSafetyChecks — deploy_position", () => {
     assert.notStrictEqual(result.blocked, true, `Should not block token-only deploy: ${JSON.stringify(result)}`);
   });
 });
+
+after(() => { process.exit(0); });

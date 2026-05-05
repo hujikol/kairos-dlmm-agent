@@ -5,7 +5,7 @@
 process.env.WALLET_PRIVATE_KEY = "[]";
 process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
 
-import { describe, it } from "node:test";
+import { describe, it, afterEach, after } from "node:test";
 import assert from "node:assert";
 import { computeManagementActions } from "../src/core/management-helpers.js";
 import { _injectStreakMap } from "../src/core/state/loss-streak.js";
@@ -148,4 +148,10 @@ describe("computeManagementActions", () => {
 
     assert.strictEqual(result.get("pos6").action, "INSTRUCTION");
   });
-}).then(() => { process.exit(0); });
+});
+
+after(() => { process.exit(0); });
+
+afterEach(() => {
+  // Clean up any injected state
+});

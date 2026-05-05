@@ -48,12 +48,21 @@ export async function makeMemDB() {
       db.close();
     },
 
+    transaction(fn) {
+      // Execute immediately — better-sqlite3's db.transaction(fn) returns a callable
+      // Statement wrapper; calling it with () runs the transaction and returns undefined.
+      // Matching better-sqlite3 semantics: const rows = db.transaction(fn)() — the
+      // outer () is what executes, not a separate wrapper object.
+      return db.transaction(fn)();
+    },
+
     // pragma support (better-sqlite3 style)
     pragma(name) {
       return db.pragma(name);
     },
 
-    // For accessing the underlying db if needed
+    // Expose underlying better-sqlite3 db directly.
+    // Some tests (test-evolve.js) need full better-sqlite3 API including transaction().
     _db: db,
   };
 
@@ -91,6 +100,15 @@ export async function makeSchemaDB() {
       initial_value_usd REAL, minutes_in_range REAL, minutes_held REAL, close_reason TEXT,
       pnl_usd REAL, pnl_pct REAL, range_efficiency REAL, deployed_at TEXT, closed_at TEXT,
       recorded_at TEXT, base_mint TEXT
+    );
+    CREATE TABLE IF NOT EXISTS lessons (
+      id TEXT PRIMARY KEY, rule TEXT, tags TEXT, outcome TEXT, context TEXT,
+      pnl_pct REAL, range_efficiency REAL, pool TEXT, created_at TEXT,
+      pinned INTEGER DEFAULT 0, role TEXT, rating TEXT, rating_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS oor_registry (
+      position TEXT PRIMARY KEY, pool TEXT, detected_at TEXT,
+      oor_since TEXT, last_checked_at TEXT, evicted INTEGER DEFAULT 0
     );
   `);
 

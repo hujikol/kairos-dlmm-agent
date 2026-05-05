@@ -55,4 +55,4 @@ async function main() {
   console.log("\n=== Screening tests complete ===");
 }
 
-main().catch(console.error);
+main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });

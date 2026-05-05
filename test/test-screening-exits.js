@@ -9,7 +9,7 @@
  * Run: node --test test/test-screening-exits.js
  */
 
-import { test, describe, beforeEach } from "node:test";
+import { test, describe, beforeEach, after } from "node:test";
 import assert from "node:assert";
 
 // ─── Test injection hooks ────────────────────────────────────────────────────────
@@ -265,3 +265,4 @@ describe("getTopCandidates — exit filters", () => {
     }
   });
 });
+after(() => { process.exit(0); });

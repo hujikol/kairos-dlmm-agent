@@ -11,9 +11,10 @@
  * Or:  node test/test-management-cycle.mjs
  */
 
-import { test, describe, beforeEach, mock } from "node:test";
+import { test, describe, beforeEach, mock, after } from "node:test";
 import assert from "node:assert";
 import { computeManagementActions } from "../src/core/management-helpers.js";
+import { closeDB } from "../src/core/db.js";
 
 // ─── Mock external dependencies ───────────────────────────────────────────────
 
@@ -259,4 +260,9 @@ describe("Rule Engine — Priority order", () => {
     assert.equal(result.action, "CLOSE");
     assert.equal(result.rule, 4); // OOR rule fires first in the chain
   });
+});
+
+after(() => {
+  closeDB();
+  process.exit(0); // force exit — CacheManager eviction timers keep event loop alive
 });

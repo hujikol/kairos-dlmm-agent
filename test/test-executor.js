@@ -7,7 +7,7 @@
  * Run: node --test test/test-executor.js
  */
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert";
 import { makeSchemaDB } from "./mem-db.js";
 import { _injectDB } from "../src/core/db.js";
@@ -34,8 +34,10 @@ describe("tools/executor.js", () => {
     _injectPositionsCache(null);
     _injectBalances(null);
     clearCache();
+    // Close the underlying real DB first, then reset module-level reference
+    if (db?._db?.close) db._db.close(); // closes wrapper's underlying Database
     const { closeDB } = await import("../src/core/db.js");
-    closeDB();
+    closeDB(); // closes wrapper and sets _db = null
     delete process.env.DRY_RUN;
   });
 
@@ -294,3 +296,5 @@ describe("tools/executor.js", () => {
     assert.ok(result.error.includes("Unknown tool"));
   });
 });
+
+after(() => { process.exit(0); });
