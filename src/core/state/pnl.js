@@ -78,6 +78,7 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   }
 
   // Re-fetch position to ensure subsequent reads see DB-committed state
+  // (markOutOfRange/markInRange already write to DB and update pos.out_of_range_since directly)
   const pos2 = getTrackedPosition(position_address);
   if (pos2) {
     pos.out_of_range_since = pos2.out_of_range_since;

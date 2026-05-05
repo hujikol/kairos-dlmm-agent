@@ -3,15 +3,23 @@
  */
 class CacheManager {
   #store = new Map();
+  #evictionTimer = null;
 
   constructor() {
     // Evict expired entries every 60s — prevents unbounded growth
-    setInterval(() => {
+    this.#evictionTimer = setInterval(() => {
       const now = Date.now();
       for (const [key, entry] of this.#store.entries()) {
         if (now > entry.expiresAt) this.#store.delete(key);
       }
     }, 60_000);
+  }
+
+  stop() {
+    if (this.#evictionTimer !== null) {
+      clearInterval(this.#evictionTimer);
+      this.#evictionTimer = null;
+    }
   }
 
   get(key) {

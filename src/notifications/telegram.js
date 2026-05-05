@@ -62,7 +62,7 @@ async function processQueue() {
     await sleep(TELEGRAM_MSG_DELAY_MS); // 1.5s delay between messages to respect Telegram limits
   }
 
-  _isSending = false;
+  _isSending = false; // ensure re-entry is possible after stall
 }
 
 function enqueueMessage(task) {
@@ -89,6 +89,7 @@ export async function sendMessage(text, parseMode = "Markdown") {
     return;
   }
   const finalText = config.cavemanEnabled ? caveman(String(text)) : String(text);
+  // Return the queue promise so callers await the actual send, not just enqueue
   return new Promise((resolve) => {
     enqueueMessage(async () => {
       try {

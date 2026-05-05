@@ -59,24 +59,21 @@ export async function safeSendError(error) {
 // NOTE: cycle busy flags are NOT checked here — queued Telegram messages (notifications,
 // chat responses) are lightweight and never start new cycles. Blocking drainage while
 // cycles run is what caused the stale queue problem.
-// This function is synchronous — call it after any async handler that may have
-// added items to the queue. It drains everything it can immediately.
+let _drainingScheduled = false;
 export function drainTelegramQueue() {
-  // Synchronously drain as many queued items as concurrency allows.
-  // NOTE: telegramHandler itself manages _count (increment on entry, decrement in finally).
-  // Do NOT increment/decrement _count here — that caused double-counting, stale queues,
-  // and infinite-loop bugs.
-  while (_telegramQueue.length > 0) {
-    if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
-    const queued = _telegramQueue.shift();
-    if (!queued) break;
-    // Fire-and-forget — telegramHandler owns _count lifecycle
-    telegramHandler(queued).then(() => {
-      drainTelegramQueue(); // recurse after handler completes to drain next
-    }).catch(() => {
-      drainTelegramQueue(); // on error, still drain next
-    });
-  }
+  if (_drainingScheduled) return;
+  _drainingScheduled = true;
+  setImmediate(() => {
+    _drainingScheduled = false;
+    while (_telegramQueue.length > 0) {
+      if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
+      const queued = _telegramQueue.shift();
+      if (!queued) break;
+      telegramHandler(queued).catch(() => {
+        // Error is already logged inside telegramHandler
+      });
+    }
+  });
 }
 
 // ─── Free-form LLM chat handler ────────────────────────────────────────────────

@@ -218,7 +218,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
     if (attempt < 2) await new Promise((r) => setTimeout(r, METEORA_CLOSE_RETRY_DELAY_MS));
   }
 
-  if (!closedConfirmed) {
+  if (!_closedConfirmed) {
     return {
       closedConfirmed: false,
       result: {

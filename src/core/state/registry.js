@@ -238,6 +238,10 @@ export function _injectTrackedPosition(pos) {
   _trackedPositionOverride = pos;
 }
 
+export function _clearTrackedPositionOverride() {
+  _trackedPositionOverride = null;
+}
+
 export function getTrackedPosition(position_address) {
   if (_trackedPositionOverride && _trackedPositionOverride.position === position_address) {
     return _trackedPositionOverride;

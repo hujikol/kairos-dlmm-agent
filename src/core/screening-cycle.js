@@ -169,12 +169,10 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     screenReport = `Screening cycle failed: ${error.message}`;
   } finally {
     _busyState._screeningBusy = false;
-    if (!silent && telegramEnabled()) {
+    if (!silent && telegramEnabled() && screenReport && /DEPLOYED/i.test(screenReport)) {
       // Only send if agent actually deployed a position (action taken)
-      if (screenReport && /DEPLOYED/i.test(screenReport)) {
-        const { escapeHTMLLocal } = await import("./cycle-helpers.js");
-        sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${escapeHTMLLocal(stripThink(screenReport))}</pre>`).catch(() => { });
-      }
+      // Note: we intentionally do NOT await this — it queues asynchronously
+      sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${stripThink(screenReport)}</pre>`).catch(() => { });
     }
   }
   return screenReport;
