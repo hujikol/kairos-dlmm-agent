@@ -1,5 +1,5 @@
 {
-  "name": "kairos-dllm-agent",
+  "name": "kairos-dlmm-agent",
   "version": "2.0.0",
   "type": "module",
   "description": "Autonomous DLMM LP agent for Meteora pools on Solana — Kairos fork of Meridian",
@@ -36,8 +36,9 @@
     "write-file-atomic": "7.0.1"
   },
   "devDependencies": {
+    "@eslint/config-array": "^0.23.5",
     "c8": "^11.0.0",
-    "eslint": "^9.39.4",
+    "eslint": "^10.3.0",
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.2.5"
   },

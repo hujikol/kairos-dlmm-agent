@@ -4,8 +4,8 @@
 >
 > Built from [Meridian](https://github.com/yunus-0x/meridian) · MIT Licensed
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/meridian-agents/kairos-dllm-agent)
-[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/meridian-agents/kairos-dllm-agent/blob/main/LICENSE)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/meridian-agents/kairos-dlmm-agent)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/meridian-agents/kairos-dlmm-agent/blob/main/LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20.17.0-brightgreen?logo=node.js&logoColor=339933)](https://nodejs.org)
 [![Solana](https://img.shields.io/badge/Solana-green?logo=solana&logoColor=blue-blue)](https://solana.com)
 [![Meteora](https://img.shields.io/badge/Meteora-red)](https://meteora.ag)
@@ -64,7 +64,7 @@ Optional:
 ## Installation
 
 ```bash
-cd kairos-dllm-agent
+cd kairos-dlmm-agent
 npm install
 cp .env.example .env
 npm run setup   # interactive wizard — creates .env and user-config.json

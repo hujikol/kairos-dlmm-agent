@@ -45,7 +45,7 @@ email/PagerDuty/Slack alerting.
 
 1. In the Better Uptime dashboard, click **Add Monitor**.
 2. **Monitor type:** HTTP(s)
-3. **Friendly name:** `kairos-dllm-agent`
+3. **Friendly name:** `kairos-dlmm-agent`
 4. **URL:** `https://your-public-hostname:3030/health`
    - Replace `https://your-public-hostname` with the publicly reachable address
      of the machine running the agent (e.g. a domain you control, or an IP with
@@ -72,7 +72,7 @@ email/PagerDuty/Slack alerting.
 | PagerDuty | Connect your PagerDuty integration. |
 | Telegram | Use a Telegram bot webhook via https://betterstack.co/community — search for "Better Stack Telegram" in the community integrations. |
 
-4. Assign the alert channel to the `kairos-dllm-agent` monitor.
+4. Assign the alert channel to the `kairos-dlmm-agent` monitor.
 
 ### Step 4 — Verify the monitor
 
