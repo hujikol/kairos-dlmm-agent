@@ -36,9 +36,8 @@
     "write-file-atomic": "7.0.1"
   },
   "devDependencies": {
-    "@eslint/config-array": "^0.23.5",
     "c8": "^11.0.0",
-    "eslint": "^10.3.0",
+    "eslint": "^9.39.4",
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.2.5"
   },
