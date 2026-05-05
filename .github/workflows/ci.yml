@@ -57,17 +57,16 @@ jobs:
       - name: Find integration test files
         id: find-integration-tests
         run: |
-          # Integration tests: files with "integration" in name, or explicit list
           INTEGRATION_TESTS=$(node -e "
             const fs = require('fs');
             const path = require('path');
             const testDir = 'test';
+            // Only run files that are actual integration tests (not helpers, debug scripts, etc.)
             const files = fs.readdirSync(testDir)
               .filter(f => f.endsWith('.js'))
-              .filter(f => !f.match(/^test-.*\.js$/) && !f.match(/^.*\.test\.js$/))
-              .filter(f => !f.match(/(helper|setup|mem-db|debug)\./))  // exclude helpers
+              .filter(f => f.includes('integration') || f.includes('_integration'))
               .map(f => path.join(testDir, f));
-            console.log(files.join(' '));
+            console.log(files.join(' ') || '');
           " || echo "")
           echo "tests=$INTEGRATION_TESTS" >> $GITHUB_OUTPUT
 
