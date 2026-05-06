@@ -19,8 +19,11 @@ import { fetchPoolIndicators } from "./pool-indicators.js";
  * pool memory, market phase, and token score.
  */
 export async function fetchAndReconCandidates(candidates) {
-  return Promise.all(candidates.map(async (pool, idx) => {
-    await new Promise(r => setTimeout(r, idx * 100)); // stagger to avoid 429s
+  // Stagger the OKX enrichment batch globally rather than per-candidate —
+  // OKX has a 60s collective timeout so the per-candidate stagger was redundant.
+  // Add a single 200ms pre-batch delay to avoid any thundering-herd on OKX endpoints.
+  await new Promise(r => setTimeout(r, 200));
+  return Promise.all(candidates.map(async (pool) => {
     const mint = pool.base?.mint;
     const [smartWallets, narrative, tokenInfo, indicators] = await Promise.allSettled([
       checkSmartWalletsOnPool({ pool_address: pool.pool }),
@@ -79,7 +82,8 @@ export function applyHardFilters(allCandidates, config, prePositions) {
 // ─── Candidate block builder ──────────────────────────────────────────────────
 
 /**
- * Build compact text blocks for each candidate, for injection into the LLM prompt.
+ * Build compact candidate blocks for injection into the LLM prompt.
+ * Uses a consistent JSON-like field order to reduce token waste and improve LLM parse reliability.
  */
 export function buildCandidateBlocks(passing, activeBinResults, simulations) {
   return passing.map(({ pool, sw, n, ti, mem, phase, score, indicators }, i) => {
@@ -110,20 +114,21 @@ export function buildCandidateBlocks(passing, activeBinResults, simulations) {
       pool.dev_sold_all       ? "dev_sold_all(bullish)" : null,
     ].filter(Boolean).join(", ");
 
+    // Compact single-line format — all key metrics on one line, sim result prominent
     const block = [
       `POOL: ${pool.name} (${pool.pool})`,
-      `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, volatility=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
-      `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
-      okxParts ? `  okx: ${okxParts}` : null,
-      okxTags  ? `  tags: ${okxTags}` : null,
-      pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
-      `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
-      `  market_phase: ${phase} | token_score: ${score.score}/${score.max} (${score.label})`,
-      activeBin != null ? `  active_bin: ${activeBin}` : null,
-      `  sim: daily_fees=$${sim.daily_fees_usd} | est_IL=$${sim.expected_il_usd} | net_daily=$${sim.net_daily_usd} | risk=${sim.risk_score}/100 | confidence=${sim.confidence}/100 | passes=${sim.passes ? "YES" : "NO"}`,
-      priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
-      n?.narrative ? `  narrative: ${n.narrative.slice(0, 500)}` : `  narrative: none`,
-      mem ? `  memory: ${mem}` : null,
+      `  METRICS: bs=${pool.bin_step} fee=${pool.fee_pct}% ftvl=${pool.fee_active_tvl_ratio} vol=$${pool.volume_window} tvl=$${pool.active_tvl} vol2=${pool.volatility} mcap=$${pool.mcap} org=${pool.organic_score}${pool.token_age_hours != null ? ` age=${pool.token_age_hours}h` : ""}`,
+      `  AUDIT: top10=${top10Pct}% bots=${botPct}% fees=${feesSol}SOL${launchpad ? ` lp=${launchpad}` : ""}`,
+      okxParts ? `  OKX: ${okxParts}` : null,
+      okxTags  ? `  TAGS: ${okxTags}` : null,
+      pool.price_vs_ath_pct != null ? `  ATH: vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? ` cluster=${pool.top_cluster_trend}` : ""}` : null,
+      `  SW: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → BOOST [${sw.in_pool.map(w => w.name).join(", ")}]` : ""}`,
+      `  PHASE: ${phase} | SCORE: ${score.score}/${score.max} (${score.label})`,
+      activeBin != null ? `  ABIN: ${activeBin}` : null,
+      `  SIM: fees=$${sim.daily_fees_usd} il=$${sim.expected_il_usd} net=$${sim.net_daily_usd} risk=${sim.risk_score} conf=${sim.confidence} pass=${sim.passes ? "YES" : "NO"}`,
+      priceChange != null ? `  1H: ${priceChange >= 0 ? "+" : ""}${priceChange}% nb=${netBuyers ?? "?"}` : null,
+      n?.narrative ? `  NARR: ${n.narrative.slice(0, 300)}` : null,
+      mem ? `  MEM: ${mem}` : null,
       indicators ? `${indicators}` : null,
     ].filter(Boolean).join("\n");
 

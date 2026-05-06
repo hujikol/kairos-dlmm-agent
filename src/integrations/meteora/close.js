@@ -320,6 +320,7 @@ async function closeVerifyAndRecord(ctx, phaseResults, reason) {
     signal_snapshot: tracked.signal_snapshot || null,
     base_mint: tracked.base_mint || pool.lbPair.tokenXMint.toString(),
     deployed_at: tracked.deployed_at || null,
+    conviction: tracked.conviction || null,
   });
 
   return {

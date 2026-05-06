@@ -10,6 +10,7 @@ import {
   MIN_POSITION_AGE_FOR_YIELD_CHECK_MS,
 } from "../../core/constants.js";
 import { getTrackedPosition } from "../state/registry.js";
+import { computeAdaptiveStopLoss, computeAdaptiveOorWait } from "../state/pnl.js";
 
 /**
  * Compute management actions for all positions using deterministic rules.
@@ -45,9 +46,13 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
       return false;
     })();
 
-    // Rule 1: stop loss
-    if (!pnlSuspect && p.pnl_pct != null && p.pnl_pct <= config.management.stopLossPct) {
-      actionMap.set(p.position, { action: "CLOSE", rule: 1, reason: "stop loss" });
+    // Rule 1: stop loss (volatility-adaptive)
+    const trackedForVol = getTrackedPositionFn ? getTrackedPositionFn(p.position) : getTrackedPosition(p.position);
+    const vol = trackedForVol?.volatility ?? 3;
+    const binCount = p.lower_bin != null && p.upper_bin != null ? Math.abs(p.upper_bin - p.lower_bin) : null;
+    const adaptiveStopLoss = computeAdaptiveStopLoss(config.management, vol, binCount);
+    if (!pnlSuspect && p.pnl_pct != null && p.pnl_pct <= adaptiveStopLoss) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 1, reason: `stop loss (vol-adaptive: ${adaptiveStopLoss}%)` });
       continue;
     }
     // Rule 2: take profit
@@ -61,11 +66,12 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
       actionMap.set(p.position, { action: "CLOSE", rule: 3, reason: "pumped far above range" });
       continue;
     }
-    // Rule 4: stale above range
+    // Rule 4: stale above range (volatility-adaptive OOR wait)
+    const adaptiveOorWait = computeAdaptiveOorWait(config.management, vol);
     if (p.active_bin != null && p.upper_bin != null &&
         p.active_bin > p.upper_bin &&
-        (p.minutes_out_of_range ?? 0) >= config.management.outOfRangeWaitMinutes) {
-      actionMap.set(p.position, { action: "CLOSE", rule: 4, reason: "OOR" });
+        (p.minutes_out_of_range ?? 0) >= adaptiveOorWait) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 4, reason: `OOR (vol-adaptive wait: ${adaptiveOorWait}m)` });
       continue;
     }
     // Rule 5: fee yield too low

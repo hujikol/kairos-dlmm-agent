@@ -20,28 +20,30 @@ const AUTO_PRUNE_THRESHOLD = 10_000;
 function ensureTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp  TEXT,
-      type       TEXT,
-      pool_address  TEXT,
-      pool_name     TEXT,
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp       TEXT,
+      type            TEXT,
+      pool_address    TEXT,
+      pool_name       TEXT,
       position_address TEXT,
-      amount_sol REAL,
-      pnl_usd   REAL,
-      pnl_pct   REAL,
-      reasoning TEXT,
-      metadata  TEXT,
-      initiated_by TEXT,
-      bin_step      REAL,
-      volatility    REAL,
-      fee_tvl_ratio REAL,
-      organic_score REAL,
-      strategy      TEXT
+      amount_sol      REAL,
+      pnl_usd         REAL,
+      pnl_pct         REAL,
+      reasoning       TEXT,
+      metadata        TEXT,
+      initiated_by    TEXT,
+      bin_step        REAL,
+      volatility      REAL,
+      fee_tvl_ratio   REAL,
+      organic_score   REAL,
+      strategy        TEXT,
+      conviction      TEXT CHECK (conviction IN ('very_high','high','normal'))
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_decision_log_timestamp ON ${TABLE}(timestamp)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_decision_log_type ON ${TABLE}(type)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_decision_log_pool ON ${TABLE}(pool_address)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_decision_log_conviction ON ${TABLE}(conviction)`);
 }
 
 // ─── Auto-prune helpers ───────────────────────────────────────────────────────
@@ -131,8 +133,9 @@ export async function recordDecision({
     INSERT INTO ${TABLE} (
       timestamp, type, pool_address, pool_name, position_address,
       amount_sol, pnl_usd, pnl_pct, reasoning, metadata,
-      initiated_by, bin_step, volatility, fee_tvl_ratio, organic_score, strategy
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      initiated_by, bin_step, volatility, fee_tvl_ratio, organic_score, strategy,
+      conviction
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     timestamp,
     type,
@@ -150,6 +153,7 @@ export async function recordDecision({
     metadata.fee_tvl_ratio ?? null,
     metadata.organic_score ?? null,
     metadata.strategy ?? null,
+    metadata.conviction ?? null,
   );
 
   // Prune old records on every write

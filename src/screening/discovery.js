@@ -4,11 +4,24 @@ import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
 import { poolCache } from "../core/cache-manager.js";
+import { okxCache, applyOkxCacheToPool, warmupOkxCache } from "../core/okx-cache.js";
 import { TOKEN_AGE_MS_PER_HOUR, OKX_ENRICHMENT_TIMEOUT_MS } from "../core/constants.js";
 
 const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 
 const POOL_DISCOVERY_BASE = process.env.POOL_DISCOVERY_API_BASE || "https://pool-discovery-api.datapi.meteora.ag";
+
+/** Wrap a promise with an AbortController timeout. */
+async function withTimeout(promise, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await promise.then(v => { clearTimeout(timer); return v; });
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
 
 // ─── Test injection ────────────────────────────────────────────────
 let _testDiscoveryResult = null;
@@ -176,25 +189,41 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     })
     .slice(0, limit);
 
-  // Enrich with OKX data — advanced info (risk/bundle/sniper) + ATH price (no API key required)
+  // Enrich with OKX data — per-endpoint timeouts (8s each) so one slow endpoint
+  // doesn't block the whole batch. Entire enrichment is non-fatal — if all OKX
+  // calls fail, candidates still proceed with pool-level data only.
+  // Cache hit: apply cached data and skip live OKX calls for repeated mints.
   if (eligible.length > 0) {
     const { getAdvancedInfo, getPriceInfo, getClusterList, getRiskFlags } = await import("../integrations/okx.js");
-    // 60-second timeout for the entire enrichment batch — a slow OKX endpoint shouldn't hang screening
-    const enrichmentPromise = Promise.allSettled(
-      eligible.map((p) => p.base?.mint
-        ? Promise.all([getAdvancedInfo(p.base.mint), getPriceInfo(p.base.mint), getClusterList(p.base.mint), getRiskFlags(p.base.mint)])
-        : Promise.resolve([null, null, [], null])
-      )
+    const OKX_PER_ENDPOINT_TIMEOUT_MS = 8_000; // 8s per OKX endpoint — fast-fail
+
+    const okxResults = await Promise.allSettled(
+      eligible.map(async (p) => {
+        if (!p.base?.mint) return [null, null, [], null];
+        // Check OKX cache first — skip live calls for cached mints
+        if (okxCache.get(p.base.mint)) {
+          applyOkxCacheToPool(p);
+          return [null, null, [], null]; // signal cache hit (no pending work)
+        }
+        // Each endpoint gets its own 8s timeout — parallel per-pool, sequential per-endpoint
+        const [adv, price, clusters, risk] = await Promise.allSettled([
+          withTimeout(getAdvancedInfo(p.base.mint), OKX_PER_ENDPOINT_TIMEOUT_MS),
+          withTimeout(getPriceInfo(p.base.mint), OKX_PER_ENDPOINT_TIMEOUT_MS),
+          withTimeout(getClusterList(p.base.mint), OKX_PER_ENDPOINT_TIMEOUT_MS),
+          withTimeout(getRiskFlags(p.base.mint), OKX_PER_ENDPOINT_TIMEOUT_MS),
+        ]);
+        return [adv, price, clusters, risk];
+      })
     );
-    const okxResults = await Promise.race([
-      enrichmentPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("OKX enrichment timeout (60s)")), OKX_ENRICHMENT_TIMEOUT_MS)),
-    ]);
     for (let i = 0; i < eligible.length; i++) {
-      const r = okxResults[i];
-      if (r.status !== "fulfilled") continue;
-      const [adv, price, clusters, risk] = r.value;
-      if (adv) {
+      const settled = okxResults[i];
+      if (settled.status !== "fulfilled") continue;
+      // settled.value is [PromiseSettledResult<Adv>, PromiseSettledResult<Price>, PromiseSettledResult<Clusters>, PromiseSettledResult<Risk>]
+      const [advR, priceR, clustersR, riskR] = settled.value;
+      const mint = eligible[i].base?.mint;
+      const ttlMs = config.screening.okxCacheTtlMs ?? 240_000;
+      if (advR?.status === "fulfilled" && advR.value) {
+        const adv = advR.value;
         eligible[i].risk_level      = adv.risk_level;
         eligible[i].bundle_pct      = adv.bundle_pct;
         eligible[i].sniper_pct      = adv.sniper_pct;
@@ -205,19 +234,30 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         eligible[i].dex_screener_paid = adv.dex_screener_paid;
         if (adv.creator && !eligible[i].dev) eligible[i].dev = adv.creator;
       }
-      if (risk) {
+      if (riskR?.status === "fulfilled" && riskR.value) {
+        const risk = riskR.value;
         eligible[i].is_rugpull = risk.is_rugpull;
         eligible[i].is_wash    = risk.is_wash;
       }
-      if (price) {
+      if (priceR?.status === "fulfilled" && priceR.value) {
+        const price = priceR.value;
         eligible[i].price_vs_ath_pct = price.price_vs_ath_pct;
         eligible[i].ath              = price.ath;
       }
-      if (clusters?.length) {
-        // Surface KOL presence and top cluster trend for LLM
+      if (clustersR?.status === "fulfilled" && clustersR.value?.length) {
+        const clusters = clustersR.value;
         eligible[i].kol_in_clusters      = clusters.some((c) => c.has_kol);
-        eligible[i].top_cluster_trend    = clusters[0]?.trend ?? null;      // buy|sell|neutral
+        eligible[i].top_cluster_trend    = clusters[0]?.trend ?? null;
         eligible[i].top_cluster_hold_pct = clusters[0]?.holding_pct ?? null;
+      }
+      // Populate cache with successful OKX data for this mint
+      if (mint) {
+        okxCache.set(mint, {
+          advanced: advR?.status === "fulfilled" ? advR.value : null,
+          price:    priceR?.status === "fulfilled" ? priceR.value : null,
+          clusters: clustersR?.status === "fulfilled" ? clustersR.value : null,
+          risk:     riskR?.status === "fulfilled" ? riskR.value : null,
+        }, ttlMs);
       }
     }
     // Wash trading hard filter — fake volume = misleading fee yield

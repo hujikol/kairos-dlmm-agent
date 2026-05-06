@@ -107,6 +107,7 @@ export function trackPosition({
   base_mint = null,
   market_phase = null,
   strategy_id = null,
+  conviction = null,
 }) {
   const db = getDB();
 
@@ -117,9 +118,10 @@ export function trackPosition({
         active_bin_at_deploy, bin_step, volatility, fee_tvl_ratio,
         organic_score, initial_value_usd, signal_snapshot, base_mint, deployed_at,
         out_of_range_since, last_claim_at, total_fees_claimed_usd, rebalance_count,
-        closed, closed_at, notes, peak_pnl_pct, prev_pnl_pct, trailing_active, instruction, status, market_phase, strategy_id
+        closed, closed_at, notes, peak_pnl_pct, prev_pnl_pct, trailing_active, instruction, status, market_phase, strategy_id,
+        conviction
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       position, pool, pool_name, strategy, JSON.stringify(bin_range), amount_sol, amount_x,
@@ -127,6 +129,7 @@ export function trackPosition({
       organic_score, initial_value_usd, JSON.stringify(signal_snapshot || null), base_mint, new Date().toISOString(),
       null, null, 0, 0,
       0, null, "[]", 0, null, 0, null, "pending", market_phase, strategy_id,
+      conviction,
     );
 
     pushEvent({ action: "deploy", position, pool_name: pool_name || pool });

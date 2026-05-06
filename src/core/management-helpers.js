@@ -246,13 +246,13 @@ export function buildAndSendConsolidatedReport({ mgmtReport, oorPositions, posit
     parts.push(`\n❌ <b>Swap failed</b> ${escapeHTMLLocal(String(f.from))} → SOL: ${escapeHTMLLocal(f.error)}`);
   }
 
-  // LLM report snippet (management cycle output, truncated)
+  // LLM report snippet — do NOT send raw LLM output to Telegram.
+  // The structured close/claim/swap/OOR notifications above are grounded in on-chain state.
+  // The LLM text can hallucinate; keep it in logs only for debugging.
   if (mgmtReport) {
     const cleaned = stripThink(mgmtReport);
     if (cleaned && cleaned.length > MIN_LLM_OUTPUT_LEN) {
-      const maxLen = MAX_LLM_OUTPUT_DISPLAY;
-      const text = cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
-      parts.push(`\n\n<pre>${escapeHTMLLocal(text)}</pre>`);
+      log("info", "telegram", `Management LLM output (${cleaned.length} chars): ${cleaned.slice(0, 300)}`);
     }
   }
 

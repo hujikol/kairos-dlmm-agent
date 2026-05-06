@@ -55,21 +55,19 @@ export async function safeSendError(error) {
   }
 }
 
-// Spawn parallel handlers up to MAX_CONCURRENT_TELEGRAM
-// NOTE: cycle busy flags are NOT checked here — queued Telegram messages (notifications,
-// chat responses) are lightweight and never start new cycles. Blocking drainage while
-// cycles run is what caused the stale queue problem.
+// Spawn queued handlers up to MAX_CONCURRENT_TELEGRAM once cycles are idle.
 let _drainingScheduled = false;
 export function drainTelegramQueue() {
-  if (_drainingScheduled) return;
+  if (_drainingScheduled) return; // drain already scheduled — it will run shortly
   _drainingScheduled = true;
   setImmediate(() => {
     _drainingScheduled = false;
+    if (_busyState._managementBusy || _busyState._screeningBusy) return;
     while (_telegramQueue.length > 0) {
       if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
       const queued = _telegramQueue.shift();
       if (!queued) break;
-      telegramHandler(queued).catch(() => {
+      processTelegramMessage(queued).catch(() => {
         // Error is already logged inside telegramHandler
       });
     }
@@ -84,6 +82,58 @@ async function handleLLMChat(text) {
   const agentModel = agentRole === "SCREENER" ? config.llm.screeningModel : config.llm.generalModel;
   const { content } = await agentLoop(text, config.llm.maxSteps, [], agentRole, agentModel, null, { requireTool: true });
   await sendHTML(`<pre>${stripThink(content)}</pre>`);
+}
+
+async function processTelegramMessage(text) {
+  // Immediate "typing" indicator + acknowledgment
+  const cmdAcks = {
+    "/briefing":   "📋 Generating morning briefing...",
+    "/balance":    "💰 Fetching wallet balance...",
+    "/status":     "📊 Fetching status report...",
+    "/candidates": "🔍 Screening for top candidates...",
+    "/screen":     "🔍 Running screening cycle...",
+    "/swap-all":   "🔄 Sweeping all tokens to SOL...",
+    "/thresholds": "⚙️ Fetching configuration...",
+    "/positions":  "📋 Fetching open positions...",
+    "/caveman":    "🗣 Toggling caveman mode...",
+    "/learn":      "🧠 Studying top LPers...",
+  };
+  const ackMsg = cmdAcks[text] ?? `🧠 Thinking...`;
+
+  // Reserve the slot before any await so queue drainage honors the cap.
+  _telegramBusyState._count++;
+  sendChatAction("typing").catch(() => {}); // non-blocking — indicator shows immediately
+  await sendMessageDirect(ackMsg);
+
+  try {
+    // Dispatch to named handlers (exact-match commands)
+    switch (text) {
+      case "/briefing":   await handleBriefing(); break;
+      case "/balance":    await handleBalance(); break;
+      case "/status":     await handleStatus(); break;
+      case "/candidates": await handleCandidates(); break;
+      case "/screen":     await handleScreen(); break;
+      case "/swap-all":   await handleSwapAll(); break;
+      case "/thresholds": await handleThresholds(); break;
+      case "/positions":  await handlePositions(); break;
+      case "/caveman":    await handleCaveman(); break;
+      case "/learn":      await handleLearn("/learn"); break;
+      default: {
+        // Regex-based handlers — return true if they handled the message
+        if (await handleClose(text)) return;
+        if (await handleSet(text)) return;
+        if (await handleTeach(text)) return;
+        if (await handleLearn(text)) return;
+        // Free-form LLM chat (default)
+        await handleLLMChat(text);
+        return;
+      }
+    }
+    // Named commands complete — the finally block below schedules the next queued item.
+  } finally {
+    _telegramBusyState._count--;
+    drainTelegramQueue();
+  }
 }
 
 // ─── Main Telegram handler (dispatcher) ────────────────────────────────────────
@@ -102,55 +152,7 @@ export async function telegramHandler(text) {
     return;
   }
 
-  // Immediate "typing" indicator + acknowledgment
-  const cmdAcks = {
-    "/briefing":   "📋 Generating morning briefing...",
-    "/balance":    "💰 Fetching wallet balance...",
-    "/status":     "📊 Fetching status report...",
-    "/candidates": "🔍 Screening for top candidates...",
-    "/screen":     "🔍 Running screening cycle...",
-    "/swap-all":   "🔄 Sweeping all tokens to SOL...",
-    "/thresholds": "⚙️ Fetching configuration...",
-    "/positions":  "📋 Fetching open positions...",
-    "/caveman":    "🗣 Toggling caveman mode...",
-    "/learn":      "🧠 Studying top LPers...",
-  };
-  const ackMsg = cmdAcks[text] ?? `🧠 Thinking...`;
-  sendChatAction("typing").catch(() => {}); // non-blocking — indicator shows immediately
-  await sendMessageDirect(ackMsg);
-
-  // Increment concurrent handler count (tracks all active handlers for parallel queue)
-  _telegramBusyState._count++;
-  try {
-    // Dispatch to named handlers (exact-match commands)
-    switch (text) {
-      case "/briefing":   await handleBriefing(); break;
-      case "/balance":    await handleBalance(); break;
-      case "/status":     await handleStatus(); break;
-      case "/candidates": await handleCandidates(); break;
-      case "/screen":     await handleScreen(); break;
-      case "/swap-all":   await handleSwapAll(); break;
-      case "/thresholds": await handleThresholds(); break;
-      case "/positions":  await handlePositions(); break;
-      case "/caveman":    await handleCaveman(); break;
-      case "/learn":      await handleLearn("/learn"); break;
-      default: {
-        // Regex-based handlers — return true if they handled the message
-        if (await handleClose(text)) { drainTelegramQueue(); return; }
-        if (await handleSet(text)) { drainTelegramQueue(); return; }
-        if (await handleTeach(text)) { drainTelegramQueue(); return; }
-        if (await handleLearn(text)) { drainTelegramQueue(); return; }
-        // Free-form LLM chat (default)
-        await handleLLMChat(text);
-        drainTelegramQueue();
-        return;
-      }
-    }
-    // Named commands drain the queue in background (don't block the user's response)
-    drainTelegramQueue();
-  } finally {
-    _telegramBusyState._count--;
-  }
+  await processTelegramMessage(text);
 }
 
 // Start polling — called from index.js after rl is set up

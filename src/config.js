@@ -35,6 +35,7 @@ export const config = {
     dailyProfitTarget:   u.risk?.dailyProfitTarget   ?? u.dailyProfitTarget   ?? 2,
     dailyLossLimit:      u.risk?.dailyLossLimit      ?? u.dailyLossLimit      ?? -5,
     maxPositionsPerToken: u.risk?.maxPositionsPerToken ?? 1,
+    unrealizedLossMultiplier: u.risk?.unrealizedLossMultiplier ?? 2.0,  // halt if unrealized > multiplier × |dailyLossLimit|
   },
 
   // ─── Pool Screening Thresholds ─ v2 nested thresholds support ───────────
@@ -66,12 +67,13 @@ export const config = {
     slippageBps:        u.screening?.slippageBps        ?? 300,
     screeningCooldownMs: u.screening?.screeningCooldownMs ?? 300_000,
     balanceCacheTtlMs:  u.screening?.balanceCacheTtlMs ?? 300_000,
+    okxCacheTtlMs:      u.screening?.okxCacheTtlMs ?? 240_000,  // 4 min TTL for OKX enrichment cache
   },
 
   // ─── Position Management ────────────────
   management: {
     minClaimAmount:        u.management?.minClaimAmount        ?? u.minClaimAmount        ?? 5,
-    autoSwapAfterClaim:    u.management?.autoSwapAfterClaim    ?? u.autoSwapAfterClaim    ?? false,
+    autoSwapAfterClaim:    u.management?.autoSwapAfterClaim    ?? u.autoSwapAfterClaim    ?? true,  // ✅ default true — swap claimed fees to SOL for compounding
     autoSwapAfterClose:    u.management?.autoSwapAfterClose    ?? u.autoSwapAfterClose    ?? true,
     outOfRangeBinsToClose: u.management?.outOfRangeBinsToClose ?? 10,
     outOfRangeWaitMinutes: u.management?.outOfRangeWaitMinutes ?? 30,
@@ -95,6 +97,16 @@ export const config = {
     minLlmOutputLen:        u.management?.minLlmOutputLen        ?? 5,
     maxLlmOutputDisplay:    u.management?.maxLlmOutputDisplay    ?? 2000,
     telegramMaxMsgLen:      u.management?.telegramMaxMsgLen      ?? 4096,
+    // ─── Volatility-adaptive thresholds (overrides for high/low vol pools) ───
+    // Example user-config.json overrides:
+    //   "management": { "volatilityAdaptive": { "stopLossHighVol": -0.25 } }
+    volatilityAdaptive: {
+      stopLossHighVol:      u.management?.volatilityAdaptive?.stopLossHighVol      ?? -0.30,  // tight stop for high-volatility pools (vol ≥ 7)
+      stopLossLowVol:       u.management?.volatilityAdaptive?.stopLossLowVol       ?? -0.20,  // loose stop for low-volatility pools (vol ≤ 2)
+      stopLossWideRange:    u.management?.volatilityAdaptive?.stopLossWideRange    ?? -0.25,  // stop for wide-range positions (>50 bins)
+      oorWaitHighVolMult:   u.management?.volatilityAdaptive?.oorWaitHighVolMult   ?? 0.50,   // multiply OOR wait by 0.5 when vol ≥ 7 (wait less — more volatile)
+      oorWaitMedVolMult:    u.management?.volatilityAdaptive?.oorWaitMedVolMult    ?? 0.75,   // multiply OOR wait by 0.75 when 4 ≤ vol < 7
+    },
   },
 
   // ─── OKX ────────────────────────────────
@@ -140,7 +152,7 @@ export const config = {
     maxSteps:    u.llm?.maxSteps    ?? u.maxSteps    ?? 10,
     screenerMaxSteps: u.llm?.screenerMaxSteps ?? 5,
     managerMaxSteps:  u.llm?.managerMaxSteps  ?? u.managerMaxSteps  ?? 4,
-    managementModel: u.llm?.models?.manager  ?? u.llm?.managementModel ?? u.models?.manager ?? process.env.LLM_MODEL ?? u.llmModel ?? "MiniMax-M2.7",
+    managementModel: u.llm?.models?.manager ?? u.llm?.managementModel ?? u.models?.manager ?? process.env.LLM_MODEL_MANAGER ?? process.env.LLM_MODEL ?? u.llmModel ?? "MiniMax-M2.1-Fast",  // MANAGER uses deterministic rules — can be cheaper/faster than SCREENER
     screeningModel:  u.llm?.models?.screener ?? u.llm?.screeningModel ?? u.models?.screener ?? u.screeningModel  ?? process.env.LLM_MODEL ?? u.llmModel ?? "MiniMax-M2.7",
     generalModel:    u.llm?.models?.general ?? u.llm?.generalModel ?? u.models?.general ?? u.generalModel    ?? process.env.LLM_MODEL ?? u.llmModel ?? "MiniMax-M2.7",
     evolveModel:     u.llm?.models?.evolve  ?? u.llm?.evolveModel ?? process.env.LLM_MODEL ?? u.llmModel ?? "MiniMax-M2.7",
@@ -156,7 +168,7 @@ export const config = {
 };
 
 /**
- * Conviction Sizing Matrix — fixed position sizing based on conviction level
+ * Conviction Sizing Matrix — position sizing based on conviction level
  * and number of open positions. 3x sizing (very_high) only when 0 positions open.
  *
  * | Positions | Conviction | Amount    |
@@ -167,18 +179,44 @@ export const config = {
  * | any       | normal     | 0.50 SOL  |
  *
  * Amounts are clamped to wallet balance minus gasReserve.
+ *
+ * The matrix values are static defaults. At runtime, after enough closed positions
+ * have been recorded, the sizing-evolver.js module evolves these multipliers based
+ * on rolling win-rate stats per conviction level. computeDeployAmount reads from
+ * the evolved matrix when available (falls back to these defaults otherwise).
  */
-const SIZING_MATRIX = {
+const DEFAULT_SIZING_MATRIX = {
   very_high: { 0: 1.50, 1: 1.00, other: 1.00 },
   high:      { 0: 1.00, 1: 1.00, other: 1.00 },
   normal:    { any: 0.50 },
 };
+
+export { DEFAULT_SIZING_MATRIX };
+
+// Cached reference to the evolved matrix loader (avoids circular import at module scope)
+let _getEffectiveMatrix = null;
+
+export function registerSizingMatrixLoader(fn) {
+  _getEffectiveMatrix = fn;
+}
+
+function getActiveMatrix() {
+  if (_getEffectiveMatrix) {
+    try {
+      return _getEffectiveMatrix();
+    } catch (_) {
+      // not ready yet
+    }
+  }
+  return DEFAULT_SIZING_MATRIX;
+}
 
 export function computeDeployAmount(walletSol, openPositions = 0, conviction = "normal") {
   const reserve  = config.management.gasReserve  ?? 0.2;
   const deployable = Math.max(0, walletSol - reserve);
   if (deployable <= 0) return { amount: 0, error: "Insufficient SOL after gas reserve" };
 
+  const SIZING_MATRIX = getActiveMatrix();
   const level = SIZING_MATRIX[conviction] ?? SIZING_MATRIX.normal;
   // For very_high: use 1.05 if 0 positions, otherwise 0.70
   const target = level[openPositions] ?? level.other ?? level.any;

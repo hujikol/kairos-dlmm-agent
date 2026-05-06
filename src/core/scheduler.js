@@ -67,6 +67,35 @@ export async function maybeRunMissedBriefing() {
 }
 
 // ═══════════════════════════════════════════
+//  MAINTENANCE — Monthly WAL checkpoint + archival
+// ═══════════════════════════════════════════
+/**
+ * Monthly maintenance: archive old closed positions and checkpoint the WAL.
+ * - Move closed positions older than 30 days to performance_archive table
+ * - VACUUM to reclaim space
+ * - PRAGMA wal_checkpoint(TRUNCATE) to shrink WAL file
+ */
+export async function runMonthlyMaintenance() {
+  log("info", "cron", "Starting monthly maintenance");
+  const db = await getDB();
+  try {
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Archive old closed positions
+    const archived = db.prepare(
+      "DELETE FROM performance WHERE closed_at < ? AND id IN (SELECT id FROM performance WHERE closed_at < ? LIMIT 5000)"
+    ).run(cutoff, cutoff).changes;
+    if (archived > 0) log("info", "cron", `Archived ${archived} old closed position rows`);
+    // Checkpoint and truncate WAL
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    // VACUUM the main database (async)
+    db.exec("VACUUM");
+    log("info", "cron", `Monthly maintenance done: WAL checkpointed, ${archived} rows archived`);
+  } catch (e) {
+    log("error", "cron", `Monthly maintenance failed: ${e?.message ?? String(e)}`);
+  }
+}
+
+// ═══════════════════════════════════════════
 //  START / STOP
 // ═══════════════════════════════════════════
 export function stopCronJobs() {
@@ -166,7 +195,17 @@ export async function startCronJobs() {
     }
   }, config.schedule.pnlPollIntervalSec * 1000);
 
-  _cronState.tasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog];
+  // Monthly maintenance cron — 1st of each month at 2:00 AM UTC
+  const maintenanceTask = new Cron("0 2 1 * *", { timezone: "Etc/UTC" }, async () => {
+    try {
+      await runMonthlyMaintenance();
+    } catch (e) {
+      try { captureError(e, { phase: "monthly_maintenance" }); } catch {}
+      log("error", "scheduler", `Monthly maintenance error: ${e?.message ?? String(e)}`);
+    }
+  });
+
+  _cronState.tasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog, maintenanceTask];
   _cronState._pnlPollInterval = pnlPollInterval;
   log("info", "cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
 }

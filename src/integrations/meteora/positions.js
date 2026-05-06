@@ -78,6 +78,7 @@ export function _resetPositionsCache() {
  * @param {number} [opts.initial_value_usd] - Initial USD value (for learning)
  * @param {string} [opts.market_phase] - Market phase at deploy (for learning)
  * @param {string} [opts.strategy_id] - Strategy identifier (for learning)
+ * @param {string} [opts.conviction] - Conviction level used for sizing (for learning)
  * @returns {Promise<Object>} { success, position, pool, bin_range, price_range, bin_step, base_fee, strategy, wide_range, txs } or { success: false, error }
  */
 export async function deployPosition({
@@ -98,6 +99,7 @@ export async function deployPosition({
   initial_value_usd,
   market_phase,
   strategy_id,
+  conviction,
 }) {
   pool_address = normalizeMint(pool_address);
   const activeStrategy = strategy || config.strategy.strategy;
@@ -132,6 +134,7 @@ export async function deployPosition({
       base_mint,
       market_phase,
       strategy_id,
+      conviction,
     });
     updatePositionStatus(fakePosition, "active");
     return {
@@ -262,6 +265,7 @@ export async function deployPosition({
       base_mint,
       market_phase,
       strategy_id,
+      conviction,
     });
     updatePositionStatus(newPositionKey, "active");
 

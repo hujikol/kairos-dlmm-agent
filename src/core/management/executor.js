@@ -77,19 +77,35 @@ export async function executeActions(closeActions, claimActions, config, actionM
   const closeResults = [];
   const mgmtReportAdditions = [];
 
-  // Execute close actions
-  for (const p of closeActions) {
-    const a = actionMap?.get(p.position) || {};
-    const reason = a?.reason || "agent decision";
-    const { notification } = await executeClose(p, reason, config);
-    mgmtReportAdditions.push(notification);
-    closeResults.push({ position: p, reason });
-  }
+  // Execute close and claim actions in parallel — each is independent
+  const [closeResultEntries, claimResultEntries] = await Promise.all([
+    Promise.allSettled(closeActions.map(async (p) => {
+      const a = actionMap?.get(p.position) || {};
+      const reason = a?.reason || "agent decision";
+      const { notification } = await executeClose(p, reason, config);
+      return { position: p, reason, notification };
+    })),
+    Promise.allSettled(claimActions.map(async (p) => {
+      const { notification } = await executeClaim(p);
+      return { notification };
+    })),
+  ]);
 
-  // Execute claim actions
-  for (const p of claimActions) {
-    const { notification } = await executeClaim(p);
-    if (notification) mgmtReportAdditions.push(notification);
+  // Collect results, preserving order
+  for (const r of closeResultEntries) {
+    if (r.status === "fulfilled") {
+      mgmtReportAdditions.push(r.value.notification);
+      closeResults.push({ position: r.value.position, reason: r.value.reason });
+    } else {
+      mgmtReportAdditions.push(`❌ Close error: ${r.reason?.message ?? r.reason}`);
+    }
+  }
+  for (const r of claimResultEntries) {
+    if (r.status === "fulfilled" && r.value.notification) {
+      mgmtReportAdditions.push(r.value.notification);
+    } else if (r.status === "rejected") {
+      mgmtReportAdditions.push(`❌ Claim error: ${r.reason?.message ?? r.reason}`);
+    }
   }
 
   return { closeResults, claimResults: [], mgmtReportAdditions };

@@ -26,7 +26,7 @@ import { setHealthServer, setPromptRefreshInterval, shutdown } from "./server/sh
 
 // Imports from extracted files
 import { runStartupFetch, setupReplLineHandler, launchCron, cronStarted } from "./repl.js";
-import { startPolling, telegramHandler } from "./telegram/index.js";
+import { startPolling, telegramHandler, _telegramBusy } from "./telegram/index.js";
 import { swapAllTokensToSol } from "./integrations/helius.js";
 import { setRl, buildPrompt } from "./rl-shared.js";
 import { startMemoryWatchdog } from "./core/memory-watchdog.js";
@@ -64,7 +64,7 @@ if (isTTY) {
   const _promptRefreshInterval = setInterval(() => {
     if (_telegramBusy._count === 0) {
       rl.setPrompt(buildPrompt());
-      rl.prompt(true);
+      rl.prompt(false); // false = place prompt on new line, don't overwrite current content
     }
   }, 10_000);
 

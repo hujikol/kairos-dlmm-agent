@@ -8,6 +8,8 @@ import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
 import { getTopCandidates } from "../screening/discovery.js";
 import { getActiveBin } from "../integrations/meteora.js";
+import { isEnabled as telegramEnabled, sendHTML, notifyDeploy, drainTelegramQueue } from "../notifications/telegram.js";
+import { captureAlert } from "../instrument.js";
 import { config, computeDeployAmount, isDryRun } from "../config.js";
 import {
   timers,
@@ -15,12 +17,10 @@ import {
   _timersState,
 } from "./state/scheduler-state.js";
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
-import { captureAlert } from "../instrument.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { detectMarketPhase, PHASE_CONFIG } from "./phases.js";
 import { findStrategiesForPhase } from "./lparmy-strategies.js";
 import { simulatePoolDeploy } from "./simulator.js";
-import { isEnabled as telegramEnabled, sendHTML } from "../notifications/telegram.js";
 import { stripThink } from "../tools/caveman.js";
 import {
   fetchAndReconCandidates,
@@ -46,12 +46,14 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     if (prePositions.total_positions >= config.risk.maxPositions) {
       log("debug", "cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
       _busyState._screeningBusy = false;
+      drainTelegramQueue();
       return null;
     }
     const minRequired = config.management.deployAmountSol + config.management.gasReserve;
     if (preBalance.sol < minRequired && !isDryRun()) {
       log("debug", "cron", `Screening skipped — insufficient SOL (${preBalance.sol.toFixed(3)} < ${minRequired} needed for deploy + gas)`);
       _busyState._screeningBusy = false;
+      drainTelegramQueue();
       return null;
     }
     if (preBalance.sol < minRequired && isDryRun()) {
@@ -60,6 +62,7 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
   } catch (e) {
     log("error", "cron", `Screening pre-check failed: ${e.message}`);
     _busyState._screeningBusy = false;
+    drainTelegramQueue();
     return null;
   }
   timers.screeningLastRun = Date.now();
@@ -70,12 +73,13 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
 
   // Daily PnL circuit breaker
   const pnl = await getDailyPnL();
-  const circuit = await checkDailyCircuitBreaker();
+  const circuit = await checkDailyCircuitBreaker({ positions: prePositions?.positions ?? null });
   log("info", "daily-pnl", `Screening circuit: ${circuit.action} (realized: $${(pnl.realized || 0).toFixed(2)}, reason: ${circuit.reason || "normal"})`);
   if (circuit.action === "halt") {
     log("warn", "daily-pnl", `CIRCUIT BREAKER (screening): daily loss limit hit — skipping screening entirely`);
     captureAlert(`CIRCUIT BREAKER HALT (screening): daily loss limit hit — screening skipped`);
     _busyState._screeningBusy = false;
+    drainTelegramQueue();
     return null;
   }
   if (circuit.action === "preserve") {
@@ -140,8 +144,10 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? "config-default"} | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}\n${phaseBlock}`
       : `No active strategy — use default bid_ask, bins_above: ${config.strategy.binsAbove} (from config), SOL only.\n${phaseBlock}`;
 
-    // Run simulator for all passing candidates
-    const simulations = passing.map(({ pool }) => simulatePoolDeploy(pool, deployAmount, preBalance.usd ?? 0));
+    // Run simulator for all passing candidates — parallel with active bin fetch since both are independent
+    const simulations = await Promise.all(
+      passing.map(({ pool }) => simulatePoolDeploy(pool, deployAmount, preBalance.usd ?? 0))
+    );
 
     // Build compact candidate blocks
     const candidateBlocks = buildCandidateBlocks(passing, activeBinResults, simulations);
@@ -169,11 +175,61 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     screenReport = `Screening cycle failed: ${error.message}`;
   } finally {
     _busyState._screeningBusy = false;
-    if (!silent && telegramEnabled() && screenReport && /DEPLOYED/i.test(screenReport)) {
-      // Only send if agent actually deployed a position (action taken)
-      // Note: we intentionally do NOT await this — it queues asynchronously
-      sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${stripThink(screenReport)}</pre>`).catch(() => { });
+    drainTelegramQueue();
+
+    if (!silent && telegramEnabled()) {
+      // ── On-chain verification before notification ─────────────────────────────
+      // Diff positions before/after the LLM run to determine what actually happened.
+      // Only send deploy notifications when a real on-chain position exists.
+      const postPositions = await getMyPositions({ force: true }).catch(() => null);
+      const deployed = detectNewlyDeployedPosition(prePositions, postPositions);
+
+      if (deployed) {
+        // ✅ Deployment confirmed on-chain — send structured notification
+        log("info", "screening", `Deploy confirmed on-chain: ${deployed.pool_name} (${deployed.position})`);
+        notifyDeploy({
+          pair: deployed.pool_name || deployed.pair,
+          amountSol: deployed.amount_sol || deployAmount,
+          position: deployed.position,
+          tx: deployed.tx_signature || null,
+          priceRange: deployed.min_price != null && deployed.max_price != null
+            ? { min: deployed.min_price, max: deployed.max_price }
+            : null,
+          binStep: deployed.bin_step || null,
+          baseFee: deployed.fee_tvl_ratio || null,
+        }).catch(e => log("error", "telegram", `notifyDeploy failed: ${e?.message}`));
+      } else if (/DEPLOYED/i.test(screenReport)) {
+        // ⚠️ LLM claimed DEPLOYED but nothing on-chain — hallucination
+        log("warn", "screening", `Hallucination detected: LLM reported DEPLOYED but no new position found on-chain`);
+        captureAlert(`Hallucination: LLM claimed DEPLOYED but no new position on-chain. Screen report: ${String(screenReport).slice(0, 300)}`);
+        sendHTML(
+          `<b>⚠️ Screening Complete — No Deployment</b>\n` +
+          `LLM reported a deployment but none was found on-chain.\n` +
+          `This may indicate the deploy was rejected by safety checks or the LLM hallucinated.\n` +
+          `Manual review recommended.`
+        ).catch(() => {});
+      } else if (screenReport) {
+        // Normal NO-DEPLOY cycle — send the report
+        sendHTML(`<b>🔍 Screening Cycle</b>\n\n<pre>${stripThink(screenReport)}</pre>`).catch(() => {});
+      }
     }
   }
   return screenReport;
+}
+
+/**
+ * Detect a newly deployed position by diffing positions before and after the LLM run.
+ * Returns the new position object if one was opened, or null otherwise.
+ */
+function detectNewlyDeployedPosition(before, after) {
+  if (!before || !after) return null;
+  const beforeAddrs = new Set((before.positions || []).map(p => p.position));
+  const newPositions = (after.positions || []).filter(p => {
+    return !beforeAddrs.has(p.position) && !p.closed;
+  });
+  if (newPositions.length === 0) return null;
+  // Return the most recently created one
+  return newPositions.sort((a, b) =>
+    new Date(b.deployed_at || b.created_at || 0) - new Date(a.deployed_at || a.created_at || 0)
+  )[0];
 }

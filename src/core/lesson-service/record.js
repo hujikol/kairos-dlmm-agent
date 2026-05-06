@@ -129,6 +129,20 @@ export async function recordPerformance(perf) {
 
     const { recalculateDarwinWeights } = await import("./evolve.js");
     await recalculateDarwinWeights(allPerformance, config);
+
+    // ── Evolve sizing matrix ─────────────────────────────────────────────────
+    try {
+      const { evolveSizingMatrix, getEffectiveMatrix } = await import("../sizing-evolver.js");
+      const { registerSizingMatrixLoader } = await import("../../config.js");
+      const sizingResult = evolveSizingMatrix({ windowDays: 60, minSamples: 8 });
+      // Make the evolved matrix available to computeDeployAmount without a restart
+      registerSizingMatrixLoader(() => sizingResult.matrix);
+      if (sizingResult.changes.length > 0) {
+        log("info", "evolve", `Sizing matrix evolved: ${JSON.stringify(sizingResult.changes)}`);
+      }
+    } catch (e) {
+      log("warn", "evolve", `Sizing matrix evolution failed: ${e?.message ?? String(e)}`);
+    }
   }
 
   // Push to Hive Mind — individual lesson + performance event
@@ -156,6 +170,7 @@ export async function recordPerformance(perf) {
       range_efficiency: entry.range_efficiency,
       minutes_held: perf.minutes_held,
       fees_earned_usd: perf.fees_earned_usd,
+      conviction: perf.conviction || null,
     },
   }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e?.message ?? String(e)}`));
 

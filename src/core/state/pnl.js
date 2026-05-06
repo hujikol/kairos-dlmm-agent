@@ -13,8 +13,9 @@ import { getDB } from "../db.js";
 import { log } from "../logger.js";
 import { markOutOfRange, markInRange } from "./oor.js";
 import { getTrackedPosition } from "./registry.js";
+import { config } from "../../config.js";
 
-// ─── Volatility-adaptive constants ───────────────────────────────────────────
+// ─── Volatility-adaptive constants (defaults — overridden by config) ───────────
 // These multiply the base outOfRangeWaitMinutes from mgmtConfig.
 
 /** Volatility >= 7: OOR wait multiplier (50%) */
@@ -23,6 +24,33 @@ const OOR_WAIT_MULT_HIGH     = 0.5;
 const OOR_WAIT_MULT_MEDIUM   = 0.75;
 /** Volatility >= 7: trailing drop multiplier (1.5x) */
 const TRAILING_DROP_MULT_HIGH = 1.5;
+
+/**
+ * Volatility-adaptive stop loss threshold.
+ * High-volatility pools (-30%) tighten faster; low-volatility pools (-20%) can ride out swings.
+ * Wide-range positions (>50 bins) use -25%.
+ * Reads from config.management.volatilityAdaptive so values are user-tunable.
+ */
+export function computeAdaptiveStopLoss(mgmtConfig, vol = 3, binCount = null) {
+  const va = config.management.volatilityAdaptive ?? {};
+  const base = mgmtConfig.stopLossPct ?? -0.50;
+  if (binCount != null && binCount > 50) return Math.max(base, va.stopLossWideRange ?? -0.25);
+  if (vol >= 7) return Math.max(base, va.stopLossHighVol ?? -0.30);
+  if (vol <= 2) return Math.min(base, va.stopLossLowVol ?? -0.20);
+  return base;
+}
+
+/**
+ * Volatility-adaptive OOR wait in minutes.
+ * Reads from config.management.volatilityAdaptive so multipliers are user-tunable.
+ */
+export function computeAdaptiveOorWait(mgmtConfig, vol = 3) {
+  const va = config.management.volatilityAdaptive ?? {};
+  const base = mgmtConfig.outOfRangeWaitMinutes ?? 30;
+  if (vol >= 7) return Math.round(base * (va.oorWaitHighVolMult ?? 0.50));
+  if (vol >= 4) return Math.round(base * (va.oorWaitMedVolMult ?? 0.75));
+  return base;
+}
 
 /**
  * Check all exit conditions for a position (trailing TP, stop loss, OOR, low yield).

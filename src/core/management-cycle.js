@@ -16,7 +16,7 @@ import { config } from "../config.js";
 import { captureAlert } from "../instrument.js";
 import { getTrackedPosition } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
-import { recordPositionSnapshot, recallForPool } from "../features/pool-memory.js";
+import { recordPositionSnapshot, recallForPool, isPoolOnCooldown } from "../features/pool-memory.js";
 import { pushNotification, hasPendingNotifications } from "../notifications/queue.js";
 import { isEnabled as telegramIsEnabled, drainTelegramQueue } from "../notifications/telegram.js";
 import {
@@ -45,16 +45,6 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
   let positions = [];
 
   try {
-    // Daily PnL circuit breaker
-    const pnl = await getDailyPnL();
-    const circuit = await checkDailyCircuitBreaker();
-    log("info", "daily-pnl", `Circuit breaker: ${circuit.action} (realized: ${pnl.realized?.toFixed(2) ?? "N/A"} USD, reason: ${circuit.reason || "normal"})`);
-    if (circuit.action === "halt") {
-      log("warn", "daily-pnl", `CIRCUIT BREAKER: daily loss limit hit — skipping new deployments this cycle`);
-      captureAlert(`CIRCUIT BREAKER HALT: daily loss limit hit (realized PnL: ${pnl.realized?.toFixed(2) ?? "N/A"} USD)`);
-      // Still manage existing positions (close/claim) in halt mode
-    }
-
     const posStart = Date.now();
     const [livePositions, currentBalance] = await Promise.all([
       getMyPositions({ force: true }).catch(e => { log("warn", "cron", `getMyPositions failed: ${e?.message ?? e}`); return null; }),
@@ -62,6 +52,16 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     ]);
     log("info", "cron", `[TIMING] getMyPositions + getWalletBalances: ${Date.now() - posStart}ms`);
     positions = livePositions?.positions || [];
+
+    // Daily PnL circuit breaker
+    const pnl = await getDailyPnL();
+    const circuit = await checkDailyCircuitBreaker({ positions: livePositions?.positions ?? null });
+    log("info", "daily-pnl", `Circuit breaker: ${circuit.action} (realized: ${pnl.realized?.toFixed(2) ?? "N/A"} USD, reason: ${circuit.reason || "normal"})`);
+    if (circuit.action === "halt") {
+      log("warn", "daily-pnl", `CIRCUIT BREAKER: daily loss limit hit — skipping new deployments this cycle`);
+      captureAlert(`CIRCUIT BREAKER HALT: daily loss limit hit (realized PnL: ${pnl.realized?.toFixed(2) ?? "N/A"} USD)`);
+      // Still manage existing positions (close/claim) in halt mode
+    }
 
     if (positions.length === 0) {
       log("debug", "cron", "No open positions — triggering screening cycle");
@@ -163,13 +163,20 @@ ${addition}`;
     const executedActions = [...closeActions, ...claimActions];
     await autoSwapAndNotify(executedActions);
 
-    // Trigger screening after management if we expect to be under max positions
-    // Skip if circuit breaker is in halt mode
+    // Trigger screening after management if we expect to be under max positions.
+    // Skip if circuit breaker is in halt mode or all closed pools are on cooldown.
     const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
     const afterCount = Math.max(0, positions.length - closesAttempted);
     const lastTriggeredAt = _timersState.screeningLastTriggered;
 
     if (afterCount < config.risk.maxPositions && Date.now() - lastTriggeredAt > SCREENING_COOLDOWN_MS && circuit.action !== "halt") {
+      // Check if all pools that were closed are on cooldown — if so, skip screening
+      const closedPools = closeActions.map(p => p.pool).filter(Boolean);
+      const allClosedPoolsOnCooldown = closedPools.length > 0 && closedPools.every(poolAddr => isPoolOnCooldown(poolAddr));
+      if (allClosedPoolsOnCooldown) {
+        log("info", "cron", `Post-management screening skipped — all ${closedPools.length} closed pool(s) are on cooldown`);
+        return;
+      }
       if (_busyState._screeningBusy) return;
       _busyState._screeningBusy = true;
       import("./screening-cycle.js").then(({ runScreeningCycle }) => {

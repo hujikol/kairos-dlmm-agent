@@ -326,9 +326,13 @@ async function runTest() {
   closeDB();
 }
 
-setupDB().then(() => runTest()).catch((err) => {
+setupDB().then(() => runTest()).then(() => {
+  closeDB();
+  process.exit(process.exitCode ?? 0);
+}).catch((err) => {
   console.error("Test error:", err);
-  process.exitCode = 1;
+  closeDB();
+  process.exit(1);
 });
 
 // ─── Edge Case Tests ────────────────────────────────────────────────────────
