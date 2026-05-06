@@ -9,9 +9,11 @@ import writeFileAtomic from "write-file-atomic";
 import fs from "fs";
 import crypto from "crypto";
 
-const MIN_EVOLVE_POSITIONS = 5;
+const MIN_EVOLVE_POSITIONS = 15;   // was 5 — too noisy with tiny sample; 15 gives stable signal
+const MIN_RECORD_AGE_MS   = 4 * 60 * 60 * 1000; // 4 h — don't re-evolve same records immediately
 const MAX_CHANGE_PER_STEP  = 0.20;
 const _evolveLock = new Set();
+let   _lastEvolvedAt = 0;        // timestamp ms of last successful evolution
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -46,6 +48,13 @@ export function evolveThresholds(perfData, config) {
   _evolveLock.add('evolve');
   try {
     if (!perfData || perfData.length < MIN_EVOLVE_POSITIONS) return null;
+
+    const now = Date.now();
+    if (now - _lastEvolvedAt < MIN_RECORD_AGE_MS) {
+      // Don't re-evolve more than once per MIN_RECORD_AGE_MS — prevents flapping
+      // when the same ~5 records keep triggering at positions 10, 15, 20, 25…
+      return null;
+    }
 
     const winners = perfData.filter((p) => p.pnl_pct > 0);
     const losers  = perfData.filter((p) => p.pnl_pct < -5);
@@ -175,6 +184,7 @@ export function evolveThresholds(perfData, config) {
 
     if (Object.keys(changes).length === 0) return { changes: {}, rationale };
 
+    _lastEvolvedAt = now;   // stamp successful evolution to enforce cooldown
     let userConfig = {};
     if (fs.existsSync(USER_CONFIG_PATH)) {
       try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* ignore */ }
