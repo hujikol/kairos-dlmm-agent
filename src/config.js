@@ -116,8 +116,8 @@ export const config = {
 
   // ─── Hive Mind ─────────────────────────
   hiveMind: {
-    url:     u.hive?.url     || process.env.AGENT_MERIDIAN_API_URL || null,
-    apiKey:  u.hive?.apiKey  || process.env.HIVE_MIND_PUBLIC_API_KEY || null,
+    url:     u.hive?.url     || process.env.AGENT_MERIDIAN_API_URL || process.env.HIVE_MIND_URL || null,
+    apiKey:  u.hive?.apiKey  || process.env.HIVE_MIND_PUBLIC_API_KEY || process.env.HIVE_MIND_API_KEY || null,
     agentId: u.hive?.agentId || null,
     pullMode: u.hive?.pullMode || "auto",
   },
