@@ -1,18 +1,16 @@
 #!/bin/bash
-# Ensure correct Node version via nvm before starting the agent
-export NVM_DIR="$HOME/.nvm"
-# shellcheck disable=SC1091
-\. "$NVM_DIR/nvm.sh" 2>/dev/null || true
+# Start the agent with the correct Node version (v24.12.0 from nvm)
+# Usage: ./start.sh npm start
+#        ./start.sh node src/index.js
 
-# Auto-switch to the version in .nvmrc (e.g. 24.12.0)
-nvm use >/dev/null 2>&1 || true
+NVM_DIR="$HOME/.nvm"
+NODE24="$NVM_DIR/versions/node/v24.12.0/bin/node"
 
-# Fallback: if nvm node is not in PATH, use explicit path
-if ! command -v node >/dev/null 2>&1 || [[ "$(node -v)" != "v24"* ]]; then
-  NODE24="$HOME/.nvm/versions/node/v24.12.0/bin/node"
-  if [ -x "$NODE24" ]; then
-    exec "$NODE24" "$@"
-  fi
+# If first arg is "npm", delegate to npm with correct node
+if [ "$1" = "npm" ]; then
+  shift
+  exec "$NODE24" "$NVM_DIR/versions/node/v24.12.0/bin/npm" "$@"
 fi
 
-exec node "$@"
+# Otherwise run node directly with args
+exec "$NODE24" "$@"

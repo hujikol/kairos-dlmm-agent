@@ -10,7 +10,7 @@
   },
   "scripts": {
     "setup": "node src/setup.js",
-    "start": "node src/index.js",
+    "start": "/Users/nicholas_nanda/.nvm/versions/node/v24.12.0/bin/node src/index.js",
     "dev": "DRY_RUN=true node src/index.js",
     "self-update": "git pull && npm install && pm2 restart kairos || true",
     "test": "c8 node --test test/test-*.js test/*.test.js",
