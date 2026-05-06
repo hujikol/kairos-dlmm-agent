@@ -101,28 +101,6 @@ function approximateHighLow(closes) {
 }
 
 /**
- * Generate simulated price history from pool metrics as last resort.
- * Uses volatility and current price to create a plausible price series.
- */
-function generateSimulatedHistory(currentPrice, volatility, periods = 30) {
-  if (!currentPrice || currentPrice <= 0) {
-    return [];
-  }
-
-  const prices = [currentPrice];
-  const vol = volatility ?? 0.02; // Default 2% volatility per period
-
-  for (let i = 1; i < periods; i++) {
-    const prev = prices[i - 1];
-    const randomReturn = (Math.random() - 0.5) * 2 * vol;
-    const newPrice = prev * (1 + randomReturn);
-    prices.push(Math.max(newPrice, prev * 0.5)); // Prevent negative/zero prices
-  }
-
-  return prices;
-}
-
-/**
  * Interpret RSI value for display.
  */
 function interpretRSI(rsi) {
@@ -161,18 +139,9 @@ export async function fetchPoolIndicators({ pool_address, poolData = {}, mint })
     // Fetch price history
     let { highs, lows, closes } = await fetchPriceHistory(tokenMint);
 
-    // If no price history, try to use pool data to construct approximate history
+    // If no price history, return insufficient data message
     if (closes.length < 5) {
-      const currentPrice = poolData.price || poolData.mint?.usdPrice;
-      const volatility = poolData.volatility;
-
-      if (currentPrice && currentPrice > 0) {
-        closes = generateSimulatedHistory(currentPrice, volatility);
-        const approximated = approximateHighLow(closes);
-        highs = approximated.highs;
-        lows = approximated.lows;
-        log("info", "indicators", `Using simulated price history for ${pool_address} (${closes.length} periods)`);
-      }
+      return "INDICATORS: insufficient price history";
     }
 
     // Compute indicators

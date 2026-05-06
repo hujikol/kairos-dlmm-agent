@@ -99,7 +99,21 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
     const activeStrategy = await getActiveStrategy();
 
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
-    const topCandidates = await getTopCandidates({ limit: 10 }).catch(e => { log("warn", "screening", `getTopCandidates failed: ${e?.message ?? e}`); return null; });
+    let topCandidates = null;
+    try {
+      topCandidates = await getTopCandidates({ limit: 10 });
+    } catch (e) {
+      log("warn", "screening", `getTopCandidates failed on first attempt: ${e?.message ?? e}`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        topCandidates = await getTopCandidates({ limit: 10 });
+      } catch (retryErr) {
+        log("error", "screening", `getTopCandidates failed after retry: ${retryErr?.message ?? retryErr}`);
+        sendHTML(
+          `<b>⚠️ Screening Degraded</b>\n\nPool discovery API unavailable after retries. Manual review recommended.`
+        ).catch(() => {});
+      }
+    }
     const candidates = (topCandidates?.candidates || topCandidates?.pools || []).slice(0, 10);
 
     const allCandidates = await fetchAndReconCandidates(candidates);

@@ -15,6 +15,13 @@ const MAX_CHANGE_PER_STEP  = 0.20;
 const _evolveLock = new Set();
 let   _lastEvolvedAt = 0;        // timestamp ms of last successful evolution
 
+// Load persisted evolution timestamp so the cooldown survives restarts.
+try {
+  const db = getDB();
+  const row = db.prepare("SELECT value FROM evolver_state WHERE key='lastEvolvedAt'").get();
+  if (row) _lastEvolvedAt = parseInt(row.value, 10);
+} catch(e) { /* table may not exist on first run */ }
+
 // ─── Helpers ────────────────────────────────────────────────────
 
 function isFiniteNum(n) { return typeof n === "number" && isFinite(n); }
@@ -185,6 +192,7 @@ export function evolveThresholds(perfData, config) {
     if (Object.keys(changes).length === 0) return { changes: {}, rationale };
 
     _lastEvolvedAt = now;   // stamp successful evolution to enforce cooldown
+    getDB().prepare("INSERT OR REPLACE INTO evolver_state (key, value) VALUES ('lastEvolvedAt', ?)").run(String(_lastEvolvedAt));
     let userConfig = {};
     if (fs.existsSync(USER_CONFIG_PATH)) {
       try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* ignore */ }

@@ -3,6 +3,7 @@ import * as m002 from "./002_add_missing_columns.js";
 import * as m003 from "./003_decision_log.js";
 import * as m004 from "./004_sizing_matrix.js";
 import * as m005 from "./005_conviction_column.js";
+import * as m006 from "./006_evolver_state.js";
 
 export const MIGRATIONS = [
   { id: 1, name: "initial_schema",     fn: m001.migrate },
@@ -10,4 +11,5 @@ export const MIGRATIONS = [
   { id: 3, name: "decision_log",      fn: m003.migrate },
   { id: 4, name: "sizing_matrix",     fn: m004.migrate },
   { id: 5, name: "conviction_column",  fn: m005.migrate },
+  { id: 6, name: "evolver_state",     fn: m006.migrate },
 ];

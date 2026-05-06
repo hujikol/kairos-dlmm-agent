@@ -110,6 +110,9 @@ export async function makeSchemaDB() {
       position TEXT PRIMARY KEY, pool TEXT, detected_at TEXT,
       oor_since TEXT, last_checked_at TEXT, evicted INTEGER DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS evolver_state (
+      key TEXT PRIMARY KEY, value TEXT
+    );
   `);
 
   return db;
