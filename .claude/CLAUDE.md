@@ -126,7 +126,7 @@ Decision types: `deploy` | `close` | `skip` | `claim` | `learn`.
 
 | File | Purpose |
 |------|---------|
-| `react.js` | Core loop: MAX_REACT_DEPTH=6, MAX_TOOL_CALLS_PER_STEP=10, caveman compression, once-per-session tool blocking, rate-limit retry, 120s wall-clock timeout |
+| `react.js` | Core loop: MAX_REACT_DEPTH=10, MAX_TOOL_CALLS_PER_STEP=10, caveman compression, once-per-session tool blocking, rate-limit retry, 120s wall-clock timeout |
 | `intent.js` | 16 intent patterns → tool subsets for GENERAL role; DEFAULT_MODEL / FALLBACK_MODEL |
 | `fallback.js` | OpenAI client (OpenRouter/LM Studio), `callWithRetry` — 3 retries, falls back to FALLBACK_MODEL on 502/503/529 |
 | `tools.js` | `MANAGER_TOOLS`, `SCREENER_TOOLS`, `getToolsForRole()` — strict schema enforcement |
@@ -163,16 +163,20 @@ Decision types: `deploy` | `close` | `skip` | `claim` | `learn`.
 
 **v1 → v2 migration:** Flat keys in `user-config.json` are automatically wrapped under their section (`screening`, `management`, `risk`, etc.).
 
-**Conviction Sizing Matrix:**
+**Conviction Sizing Matrix (evolved):**
 
-| Positions | Conviction | Amount |
-|-----------|------------|--------|
+Sizing is no longer static — `sizing-evolver.js` computes rolling win rates per conviction level (very_high/high/normal) and adjusts multipliers dynamically.
+
+`computeDeployAmount(walletSol, openPositions, conviction)` reads the evolved sizing matrix from DB.
+
+| Positions | Conviction | Base Amount |
+|-----------|------------|--------------|
 | 0 | very_high | 1.50 SOL |
 | 1+ | very_high | 1.00 SOL |
 | any | high | 1.00 SOL |
 | any | normal | 0.50 SOL |
 
-`computeDeployAmount(walletSol, openPositions, conviction)` — clamped to `gasReserve` and `maxDeployAmount`.
+These are starting values — `sizing-evolver.js` adjusts them based on observed win rates.
 
 **`validateAndCoerce(changes)`** (`src/core/config-validator.js`) — validates config keys before `update_config` applies them. Returns `{ valid, invalid }`. Invalid keys rejected before any apply.
 
@@ -183,7 +187,7 @@ Decision types: `deploy` | `close` | `skip` | `claim` | `learn`.
 1. **Deploy**: `deploy_position` → executor safety checks → `trackPosition()` → Telegram notify
 2. **Monitor**: management cron → `getMyPositions()` → `updatePnlAndCheckExits()` → OOR detection → pool-memory snapshots
 3. **Close**: `close_position` → `recordPerformance()` → auto-swap base → Telegram notify
-4. **Learn**: `evolveThresholds()` on performance data → updates config → persists to user-config.json
+4. **Learn**: `evolveThresholds()` + `evolveSizing()` on performance data → updates config + sizing matrix → persists to user-config.json
 
 ---
 
@@ -240,12 +244,10 @@ Confidence increases: older (>=48h), low volatility, high fee/TVL ratio.
 ## Pool Indicators (`core/pool-indicators.js`)
 
 `fetchPoolIndicators({ pool_address, poolData, mint })` — fetches price history from Jupiter API, computes technical indicators:
-- RSI (14-period)
-- Bollinger Bands (20-period, 2σ)
-- Supertrend (10-period ATR)
-- Fibonacci retracement levels
+- If OHLCV unavailable (< 5 data points): returns `"INDICATORS: insufficient price history"` — no fabricated data
+- When sufficient real data available: RSI (14-period), Bollinger Bands (20-period, 2σ), Supertrend (10-period ATR), Fibonacci retracement levels
 
-Used by screening to enrich pool analysis. Chart indicators available as `computeRSI`, `computeBollingerBands`, `computeSupertrend`, `computeFibonacciRetracement` in `tools/chart-indicators.js`.
+Chart indicators available as `computeRSI`, `computeBollingerBands`, `computeSupertrend`, `computeFibonacciRetracement` in `tools/chart-indicators.js`.
 
 ---
 
@@ -273,13 +275,23 @@ bins_below = round(35 + (volatility / 5) * 34), clamped to [35, 69]
 | Function | Purpose |
 |----------|---------|
 | `recordPerformance(closeResult)` | Called from executor after `close_position` |
-| `evolveThresholds()` | Adjusts thresholds from winners vs losers; persists to config + user-config.json |
+| `evolveThresholds()` | Adjusts maxBinStep/minFee/minOrganic from winners vs losers; DB-persisted via `evolver_state` table |
+| `evolveSizing()` | Adjusts conviction sizing multipliers from rolling win rates; DB-persisted to `sizing_matrix` table |
 | `getRelevantLessons(context, limit)` | Tag-ranked retrieval (infers from pair, tvl, oor, pnl_pct, binStep) |
 | `getLessonsForPrompt({ agentType })` | Injects lessons into system prompt |
 | `getPerformanceSummary()` | Win rate, avg PnL, total closed, near-miss stats |
-| `MIN_EVOLVE_POSITIONS = 5` | Minimum closed positions before evolution |
+| `MIN_EVOLVE_POSITIONS = 15` | Minimum closed positions before evolution (was 5 — too noisy) |
+| `4-hour cooldown` | `_lastEvolvedAt` persisted to `evolver_state` table — survives restarts |
 
-Lesson persistence: `core/lesson-repo.js` → `lessons.json`.
+Lesson persistence: `core/lesson-repo.js` → SQLite `lessons` table.
+
+---
+
+## Screener Improvements (v2.1)
+
+- **Retry on API failure**: `getTopCandidates()` retries once after 2s. After all retries exhausted, sends Telegram alert: `"⚠️ Screening Degraded — Pool discovery API unavailable after retries"`
+- **No fabricated indicators**: When Jupiter has no OHLCV data, returns `"INDICATORS: insufficient price history"` instead of generating fake RSI/BB/Supertrend from Math.random()
+- **OKX cache**: 4-min TTL with prewarm — eliminates redundant OKX calls between cycles
 
 ---
 
@@ -334,7 +346,7 @@ Two signals:
 
 **Thresholds:** `maxBundlersPct` (default 30%), `maxTop10Pct` (default 60%)
 
-**OKX Enrichment Cache** (`jupiter.js`): `okxEnrichmentCache` Map with 5-min TTL. `getTokenInfo()` and `getTokenHolders()` share a single OKX fetch per token per pass (was 4 calls → 2).
+**OKX Cache** (`core/okx-cache.js`): `okxCache` with 4-min TTL, prewarm on startup.
 
 ---
 
@@ -457,7 +469,7 @@ Each module exports `async function cmd(argv, flags, sub2, silent)`.
 
 ### Jupiter (`integrations/jupiter.js`)
 - Token info, holders, narrative, pool search + price history
-- Shared OKX enrichment cache (5-min TTL, eliminates redundant OKX calls)
+- OKX cache (4-min TTL, prewarm on startup) — eliminates redundant OKX calls
 
 ### Agent Meridian Relay (`tools/agent-meridian.js`)
 Centralized relay client. Routes PnL, Top-LP, and position queries through `https://api.agentmeridian.xyz/api` when `lpAgentRelayEnabled=true`. No local API key needed.
