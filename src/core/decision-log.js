@@ -198,3 +198,99 @@ export async function getDecisions({ pool, limit = 100, type, hours = 24 } = {})
 
   return db.prepare(sql).all(...params);
 }
+
+/**
+ * Shorten a pool address for display (first 6 + last 4 chars).
+ * @param {string} addr
+ * @returns {string}
+ */
+function poolShort(addr) {
+  if (!addr || addr.length < 12) return addr ?? "?";
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+/**
+ * Returns a formatted string of recent decisions for LLM prompt injection.
+ * Returns null if no decisions are found.
+ *
+ * @param {{ limit?: number, hours?: number }} opts
+ * @returns {Promise<string|null>}
+ */
+export async function getDecisionSummary({ limit = 6, hours = 72 } = {}) {
+  const decisions = await getDecisions({ limit, hours });
+  if (!decisions.length) return null;
+
+  const lines = [`RECENT DECISIONS:`];
+  decisions.forEach((d, i) => {
+    const actor = (d.initiated_by ?? "rule").toUpperCase();
+    const type = d.type?.toUpperCase() ?? "UNKNOWN";
+    const name = d.pool_name || poolShort(d.pool_address);
+
+    // Core metrics string
+    const metrics = [];
+    if (d.pnl_usd != null) metrics.push(`pnl_usd=$${Number(d.pnl_usd).toFixed(2)}`);
+    if (d.pnl_pct != null) metrics.push(`pnl_pct=${Number(d.pnl_pct).toFixed(1)}%`);
+    if (d.amount_sol != null) metrics.push(`sol=${Number(d.amount_sol).toFixed(3)}`);
+
+    const reason = d.reasoning
+      ? d.reasoning.length > 60
+        ? d.reasoning.slice(0, 57) + "…"
+        : d.reasoning
+      : "";
+
+    const parts = [
+      `${i + 1}. [${actor}] ${type} ${name}`,
+      reason,
+      metrics.length ? metrics.join(" ") : null,
+    ].filter(Boolean);
+
+    lines.push(parts.join(" — "));
+  });
+
+  return lines.join("\n");
+}
+
+/**
+ * Returns aggregate statistics for decisions within a rolling window.
+ *
+ * @param {{ hours?: number }} opts
+ * @returns {Promise<{ total: number, byType: Object, winRate: number|null, avgPnlPct: number|null }>}
+ */
+export async function getDecisionStats({ hours = 168 } = {}) {
+  const db = await getDB();
+  if (!db) {
+    return { total: 0, byType: {}, winRate: null, avgPnlPct: null };
+  }
+  await init();
+
+  const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
+
+  const rows = db
+    .prepare(`SELECT type, pnl_usd, pnl_pct FROM ${TABLE} WHERE timestamp >= ?`)
+    .all(cutoff);
+
+  if (!rows.length) {
+    return { total: 0, byType: {}, winRate: null, avgPnlPct: null };
+  }
+
+  const byType = {};
+  let winCount = 0;
+  let pnlSum = 0;
+  let pnlCount = 0;
+
+  for (const row of rows) {
+    byType[row.type] = (byType[row.type] ?? 0) + 1;
+    if (row.pnl_usd != null) {
+      if (Number(row.pnl_usd) > 0) winCount++;
+      pnlSum += Number(row.pnl_usd);
+      pnlCount++;
+    }
+  }
+
+  return {
+    total: rows.length,
+    byType,
+    winRate: pnlCount > 0 ? (winCount / pnlCount) * 100 : null,
+    avgPnlPct: pnlCount > 0 ? pnlSum / pnlCount : null,
+  };
+}

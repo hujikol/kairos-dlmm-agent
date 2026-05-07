@@ -208,6 +208,32 @@ export function getSharedLessonsForPrompt({ agentType = "GENERAL", maxLessons = 
     .join("\n");
 }
 
+/**
+ * Get formatted Hive Mind presets for LLM prompt injection.
+ * Returns a ready-to-inject string block, or null if no presets cached.
+ * @param {object} opts
+ * @param {"SCREENER"|"MANAGER"|"GENERAL"} [opts.agentType]
+ * @param {number} [opts.maxPresets]
+ * @returns {string|null}
+ */
+export function getSharedPresetsForPrompt({ agentType = "GENERAL", maxPresets = 6 } = {}) {
+  const shared = (readCache().presets || [])
+    .filter((p) => p && typeof p === "object")
+    .slice(0, maxPresets);
+
+  if (!shared.length) return null;
+
+  return shared
+    .map((preset) => {
+      const name = preset.name ? `[${preset.name}]` : "";
+      const desc = preset.description || preset.rule || preset.config_summary || "";
+      const score = preset.score != null ? ` score=${Number(preset.score).toFixed(2)}` : "";
+      return `${name} ${desc}${score}`.trim();
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function registerHiveMindAgent({ reason = "heartbeat" } = {}) {
   if (!isHiveMindEnabled()) return null;
   try {

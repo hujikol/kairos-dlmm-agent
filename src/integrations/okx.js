@@ -6,6 +6,7 @@
 
 import { config } from "../config.js";
 import { createCircuitBreaker, CircuitOpenError } from "../core/circuit-breaker.js";
+import { agentMeridianJson } from "../tools/agent-meridian.js";
 
 // OKX API breaker — protects getAdvancedInfo, getClusterList, getRiskFlags
 const okxApi = createCircuitBreaker("okxApi", {
@@ -40,6 +41,20 @@ async function okxGet(path) {
   const json = await res.json();
   if (json.code !== "0" && json.code !== 0) throw new Error(`OKX error ${json.code}: ${json.msg}`);
   return json.data;
+}
+
+/**
+ * Call Agent Meridian relay at /api/enrich/{endpoint} with { mint }.
+ * Used as fallback when direct OKX API fails (network error, timeout, non-ok).
+ * The relay has 30s TTL cached data.
+ */
+async function relayFallback(endpoint, mint) {
+  const data = await agentMeridianJson(`enrich/${endpoint}`, {
+    method: "POST",
+    body: JSON.stringify({ mint }),
+    headers: { "Content-Type": "application/json" },
+  });
+  return data;
 }
 
 // ─── Test injection ────────────────────────────────────────────────
@@ -94,7 +109,12 @@ export async function getRiskFlags(tokenAddress, chainId = CHAIN_SOLANA) {
     data = await okxGet(path);
   } catch (err) {
     okxApi.recordFailure();
-    throw err;
+    // Fallback to Agent Meridian relay (30s TTL cached data)
+    data = await relayFallback("risk-flags", tokenAddress);
+  }
+  if (data === null || data === undefined) {
+    okxApi.recordFailure();
+    throw new Error("OKX getRiskFlags: no data from OKX or relay");
   }
   okxApi.recordSuccess();
 
@@ -130,7 +150,12 @@ export async function getAdvancedInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
     data = await okxGet(path);
   } catch (err) {
     okxApi.recordFailure();
-    throw err;
+    // Fallback to Agent Meridian relay (30s TTL cached data)
+    data = await relayFallback("advanced-info", tokenAddress);
+  }
+  if (data === null || data === undefined) {
+    okxApi.recordFailure();
+    throw new Error("OKX getAdvancedInfo: no data from OKX or relay");
   }
   okxApi.recordSuccess();
   const d = Array.isArray(data) ? data[0] : data;
@@ -173,7 +198,12 @@ export async function getClusterList(tokenAddress, chainIndex = CHAIN_SOLANA, li
     data = await okxGet(path);
   } catch (err) {
     okxApi.recordFailure();
-    throw err;
+    // Fallback to Agent Meridian relay (30s TTL cached data)
+    data = await relayFallback("cluster-list", tokenAddress);
+  }
+  if (data === null || data === undefined) {
+    okxApi.recordFailure();
+    throw new Error("OKX getClusterList: no data from OKX or relay");
   }
   okxApi.recordSuccess();
   // Public endpoint returns data.clusterList (not data[0].clustList)

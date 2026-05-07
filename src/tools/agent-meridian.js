@@ -29,16 +29,18 @@ export function getAgentMeridianBase() {
 export function getAgentMeridianHeaders({ json = false } = {}) {
   const headers = {};
   if (json) headers["Content-Type"] = "application/json";
-  // Support both flat publicApiKey and nested hive.apiKey
-  const key = config.api?.publicApiKey || config.hiveMind?.apiKey || process.env.AGENT_MERIDIAN_API_KEY;
+  // Agent Meridian relay authenticates via x-api-key with the publicApiKey
+  const key = config.api?.publicApiKey || config.hiveMind?.apiKey || process.env.PUBLIC_API_KEY;
   if (key) headers["x-api-key"] = key;
-  // Pass discord signal preferences to relay
-  if (config.useDiscordSignals !== undefined) {
-    headers["x-discord-signals"] = String(config.useDiscordSignals);
+  // Discord signal preferences — relay needs these to know whether to inject Discord pools
+  if (config.screening?.useDiscordSignals !== undefined) {
+    headers["x-discord-signals"] = String(config.screening.useDiscordSignals);
   }
-  if (config.discordSignalMode) {
-    headers["x-discord-mode"] = config.discordSignalMode;
+  if (config.screening?.discordSignalMode) {
+    headers["x-discord-mode"] = config.screening.discordSignalMode;
   }
+  // LPAgent relay capability — lets the relay know this agent has an LPAGENT_API_KEY
+  // so it can use the richer LPAgent-backed endpoints (positions, PnL, top-lp)
   if (process.env.LPAGENT_API_KEY) {
     headers["x-lpagent-api-key"] = process.env.LPAGENT_API_KEY;
   }

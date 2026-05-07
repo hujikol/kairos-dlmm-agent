@@ -12,6 +12,52 @@ import { computeTokenScore } from "./token-score.js";
 import { checkTokenCorrelation } from "./correlation.js";
 import { fetchPoolIndicators } from "./pool-indicators.js";
 
+/**
+ * Format a Gmgn candidate as a concise LLM prompt string.
+ * Returns a single-line-ish format with key metrics: symbol, mint, mcap,
+ * volume, fee, holders, KOL flags, pool info, and chart bounce signal.
+ */
+export function formatGmgnCandidateForPrompt(candidate) {
+  const { pool, ti, bounceResult } = candidate;
+  const mint = pool.base?.mint ?? "";
+  const symbol = pool.name ?? mint.slice(0, 8);
+  const mcap = pool.mcap != null ? `$${pool.mcap}` : "?";
+  const volume = pool.volume_window != null ? `$${pool.volume_window}` : "?";
+  const fee = pool.fee_pct != null ? `${pool.fee_pct}%` : "?";
+  const holders = ti?.audit?.top_holders_pct ?? "?";
+
+  const kolFlags = [
+    pool.smart_money_buy ? "sm_buy" : null,
+    pool.kol_in_clusters ? "kol_clust" : null,
+    pool.dex_screener_paid ? "dex_paid" : null,
+    pool.dev_sold_all ? "dev_sold" : null,
+  ].filter(Boolean);
+
+  const poolInfo = [
+    `tvl=$${pool.active_tvl ?? "?"}`,
+    `bs=${pool.bin_step}`,
+    `vol2=${pool.volatility ?? "?"}`,
+    `org=${pool.organic_score ?? "?"}`,
+    pool.token_age_hours != null ? `age=${pool.token_age_hours}h` : null,
+  ].filter(Boolean).join(" ");
+
+  let bounceLine = "";
+  if (bounceResult && Object.keys(bounceResult).length > 0) {
+    const b = bounceResult;
+    bounceLine = ` | bounce=${b.pass ? "PASS" : "FAIL"}`;
+    if (b.signal?.rsi != null) bounceLine += ` rsi=${b.signal.rsi.toFixed(1)}`;
+    if (b.signal?.supertrendDirection) bounceLine += ` st=${b.signal.supertrendDirection}`;
+    if (b.reasons?.length) bounceLine += ` [${b.reasons.join(";")}]`;
+  }
+
+  return [
+    `${symbol} | mint=${mint.slice(0, 6)}.. | mcap=${mcap} vol=${volume} fee=${fee} holders=${holders}%`,
+    `  pool: ${poolInfo}`,
+    kolFlags.length ? `  kol: ${kolFlags.join(", ")}` : null,
+    bounceLine ? `  chart:${bounceLine}` : null,
+  ].filter(Boolean).join("\n");
+}
+
 // ─── Candidate reconstitution ────────────────────────────────────────────────
 
 /**
@@ -31,12 +77,15 @@ export async function fetchAndReconCandidates(candidates) {
       mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
       fetchPoolIndicators({ pool_address: pool.pool, poolData: pool, mint }),
     ]);
+    // indicators.value is { string: "...", bounceResult: {...} }
+    const indicatorsResult = indicators.status === "fulfilled" ? indicators.value : { string: "", bounceResult: {} };
     return {
       pool,
       sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
       n: narrative.status === "fulfilled" ? narrative.value : null,
       ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
-      indicators: indicators.status === "fulfilled" ? indicators.value : "",
+      indicators: indicatorsResult.string,
+      bounceResult: indicatorsResult.bounceResult,
       mem: recallForPool(pool.pool),
       phase: detectMarketPhase(pool),
       score: computeTokenScore(pool, tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null),
@@ -86,7 +135,7 @@ export function applyHardFilters(allCandidates, config, prePositions) {
  * Uses a consistent JSON-like field order to reduce token waste and improve LLM parse reliability.
  */
 export function buildCandidateBlocks(passing, activeBinResults, simulations) {
-  return passing.map(({ pool, sw, n, ti, mem, phase, score, indicators }, i) => {
+  return passing.map(({ pool, sw, n, ti, mem, phase, score, indicators, bounceResult }, i) => {
     const botPct = ti?.audit?.bot_holders_pct ?? "?";
     const top10Pct = ti?.audit?.top_holders_pct ?? "?";
     const feesSol = ti?.global_fees_sol ?? "?";
@@ -114,6 +163,24 @@ export function buildCandidateBlocks(passing, activeBinResults, simulations) {
       pool.dev_sold_all       ? "dev_sold_all(bullish)" : null,
     ].filter(Boolean).join(", ");
 
+    // Build bounce info for display
+    const bounceParts = [];
+    if (bounceResult && Object.keys(bounceResult).length > 0) {
+      bounceParts.push(`bounce=${bounceResult.pass ? "PASS" : "FAIL"}`);
+      if (bounceResult.signal) {
+        const { rsi, bbPosition, supertrendDirection, supertrendBreakUp, aboveSupertrend } = bounceResult.signal;
+        if (rsi != null) bounceParts.push(`rsi=${rsi.toFixed(1)}`);
+        if (bbPosition) bounceParts.push(`bbPos=${bbPosition}`);
+        if (supertrendDirection) bounceParts.push(`stDir=${supertrendDirection}`);
+        if (supertrendBreakUp != null) bounceParts.push(`stBreak=${supertrendBreakUp}`);
+        if (aboveSupertrend != null) bounceParts.push(`aboveSt=${aboveSupertrend}`);
+      }
+      if (bounceResult.reasons?.length > 0) {
+        bounceParts.push(`reasons=${bounceResult.reasons.join("; ")}`);
+      }
+    }
+    const bounceLine = bounceParts.length > 0 ? `  BOUNCE: ${bounceParts.join(" ")}` : null;
+
     // Compact single-line format — all key metrics on one line, sim result prominent
     const block = [
       `POOL: ${pool.name} (${pool.pool})`,
@@ -129,6 +196,7 @@ export function buildCandidateBlocks(passing, activeBinResults, simulations) {
       priceChange != null ? `  1H: ${priceChange >= 0 ? "+" : ""}${priceChange}% nb=${netBuyers ?? "?"}` : null,
       n?.narrative ? `  NARR: ${n.narrative.slice(0, 300)}` : null,
       mem ? `  MEM: ${mem}` : null,
+      bounceLine,
       indicators ? `${indicators}` : null,
     ].filter(Boolean).join("\n");
 

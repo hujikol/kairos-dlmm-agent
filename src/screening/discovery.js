@@ -4,8 +4,9 @@ import { isDevBlocked, getBlockedDevs } from "../features/dev-blocklist.js";
 import { log } from "../core/logger.js";
 import { addrShort } from "../tools/addrShort.js";
 import { poolCache } from "../core/cache-manager.js";
-import { okxCache, applyOkxCacheToPool, warmupOkxCache } from "../core/okx-cache.js";
+import { okxCache, applyOkxCacheToPool } from "../core/okx-cache.js";
 import { TOKEN_AGE_MS_PER_HOUR, OKX_ENRICHMENT_TIMEOUT_MS } from "../core/constants.js";
+import { getAgentMeridianBase, getAgentMeridianHeaders } from "../tools/agent-meridian.js";
 
 const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 
@@ -36,7 +37,125 @@ export function _injectMyPositions(fn) {
   _testMyPositions = fn;
 }
 
+// ─── Discord Signal Candidates via Agent Meridian relay ─────────────────────────
 
+const DISCORD_SIGNAL_CACHE_TTL_MS = 60_000; // 1 minute cache
+const _discordSignalCache = new Map();
+
+/**
+ * Fetch Discord signal candidates from the Agent Meridian relay.
+ * Returns pools mentioned in Discord channels the relay monitors.
+ * ⚠️  HIGH RISK — these are community-sourced tokens, NOT vetted.
+ *
+ * @returns {Promise<Array>} Array of pool objects with discord_signal metadata
+ */
+async function fetchDiscordSignalCandidates() {
+  if (!config.screening?.useDiscordSignals) return [];
+
+  const cacheKey = "discord_candidates";
+  const cached = _discordSignalCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < DISCORD_SIGNAL_CACHE_TTL_MS) {
+    return cached.pools;
+  }
+
+  const base = getAgentMeridianBase();
+  const headers = getAgentMeridianHeaders();
+
+  try {
+    const res = await Promise.race([
+      fetch(`${base}/signals/discord/candidates`, { headers }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("discord-signal-timeout")), 8_000)),
+    ]);
+
+    if (!res.ok) {
+      log("warn", "screening", `Discord signal candidates ${res.status}`);
+      return [];
+    }
+
+    const data = await res.json().catch(() => ({}));
+    const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+
+    const pools = candidates
+      .map((c) => {
+        const dp = c.discovery_pool;
+        if (!dp?.pool_address) return null;
+        return {
+          pool: dp.pool_address,
+          name: dp.name || dp.pool_address,
+          base: { symbol: dp.token_x?.symbol || "?", mint: dp.token_x?.address || null },
+          quote: { symbol: dp.token_y?.symbol || "SOL", mint: dp.token_y?.address || null },
+          pool_type: dp.pool_type || "dlmm",
+          launchpad: dp.launchpad || null,
+          bin_step: dp.dlmm_params?.bin_step || null,
+          fee_pct: dp.fee_pct || null,
+          active_tvl: dp.active_tvl || null,
+          volume: dp.volume || null,
+          fee_active_tvl_ratio: dp.fee_active_tvl_ratio || null,
+          volatility: dp.volatility || null,
+          holders: dp.base_token_holders || null,
+          mcap: dp.token_x?.market_cap || null,
+          organic_score: dp.token_x?.organic_score || null,
+          token_age_hours: dp.token_x?.created_at
+            ? Math.floor((Date.now() - dp.token_x.created_at) / 3_600_000)
+            : null,
+          dev: dp.token_x?.dev || null,
+          // Discord signal metadata — NOT present in normal Meteora pool objects
+          discord_signal: true,
+          discord_signal_count: c.source_count || 1,
+          discord_signal_seen_count: c.seen_count || 1,
+          discord_signal_first_seen_at: c.first_seen_at || null,
+          discord_signal_last_seen_at: c.last_seen_at || null,
+        };
+      })
+      .filter(Boolean);
+
+    _discordSignalCache.set(cacheKey, { at: Date.now(), pools });
+    log("info", "screening", `Discord signals: ${pools.length} candidate pool(s)`);
+    return pools;
+  } catch (err) {
+    if (!err.message.includes("timeout")) {
+      log("warn", "screening", `Discord signal fetch failed: ${err.message}`);
+    }
+    return [];
+  }
+}
+
+/**
+ * Merge Discord signal pools into the normal pool list.
+ * - discordSignalMode === "only":  replace rawPools with Discord pools only
+ * - discordSignalMode === "merge": add Discord pools to rawPools, mark matches
+ */
+function mergeDiscordSignalPools(rawPools, discordPools) {
+  if (!discordPools.length) return rawPools;
+
+  const mode = config.screening?.discordSignalMode ?? "merge";
+
+  if (mode === "only") {
+    log("info", "screening", `Discord mode=only: using ${discordPools.length} Discord pool(s) only`);
+    return discordPools;
+  }
+
+  // merge mode: blend Discord pools into the raw list, preserving Discord metadata on matches
+  const byPool = new Map(rawPools.map((p) => [p.pool, p]));
+
+  for (const dp of discordPools) {
+    if (byPool.has(dp.pool)) {
+      const existing = byPool.get(dp.pool);
+      byPool.set(dp.pool, {
+        ...existing,
+        discord_signal: true,
+        discord_signal_count: dp.discord_signal_count,
+        discord_signal_seen_count: dp.discord_signal_seen_count,
+        discord_signal_first_seen_at: dp.discord_signal_first_seen_at,
+        discord_signal_last_seen_at: dp.discord_signal_last_seen_at,
+      });
+    } else {
+      byPool.set(dp.pool, dp);
+    }
+  }
+
+  return Array.from(byPool.values());
+}
 
 /**
  * Fetch pools from the Meteora Pool Discovery API.
@@ -150,12 +269,24 @@ export async function discoverPools({
 export async function getTopCandidates({ limit = 10 } = {}) {
   const { config } = await import("../config.js");
   let pools = [];
+  let discordPools = [];
+
   if (_testDiscoveryResult !== null) {
     pools = _testDiscoveryResult.pools || _testDiscoveryResult;
   } else {
-    const { pools: apiPools } = await discoverPools({ page_size: 50 });
-    pools = apiPools;
+    // Fetch Discord signals in parallel with Meteora Pool Discovery
+    // Discord signals are non-fatal — if they fail/timeout, normal pools still proceed
+    const [discordResult, apiResult] = await Promise.allSettled([
+      fetchDiscordSignalCandidates(),
+      discoverPools({ page_size: 50 }),
+    ]);
+
+    discordPools = discordResult?.status === "fulfilled" ? discordResult.value : [];
+    pools = apiResult?.status === "fulfilled" ? (apiResult.value?.pools ?? []) : [];
   }
+
+  // Blend Discord pools into the normal pool list (or replace if mode=only)
+  pools = mergeDiscordSignalPools(pools, discordPools);
 
   // Exclude pools where the wallet already has an open position
   let posResult = { positions: [] };

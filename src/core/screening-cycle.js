@@ -28,8 +28,8 @@ import {
   buildCandidateBlocks,
 } from "./screening-helpers.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
-import { getSharedLessonsForPrompt } from "../features/hive-mind.js";
-import { recordDecision } from "./decision-log.js";
+import { getSharedLessonsForPrompt, getSharedPresetsForPrompt } from "../features/hive-mind.js";
+import { recordDecision, getDecisionSummary } from "./decision-log.js";
 
 export async function runScreeningCycle({ silent = false, gateway = agentGateway } = {}) {
   if (_busyState._screeningBusy) {
@@ -168,6 +168,10 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
 
     // ── Hive Mind lessons for prompt injection ─────────────────────────
     const hiveLessonsBlock = getSharedLessonsForPrompt({ agentType: "SCREENER", maxLessons: 6 });
+    const hivePresetsBlock = getSharedPresetsForPrompt({ agentType: "SCREENER", maxPresets: 4 });
+
+    // ── Decision summary for prompt injection ──────────────────────────
+    const decisionSummary = await getDecisionSummary({ limit: 6 });
 
     // ── Call LLM via agentGateway ─────────────────────────────────────
     const { content } = await gateway.runScreeningCycle({
@@ -181,7 +185,9 @@ export async function runScreeningCycle({ silent = false, gateway = agentGateway
       pnl,
       canDeploy,
       hiveLessonsBlock,
+      hivePresetsBlock,
       screeningMode,
+      decisionSummary,
     });
     screenReport = content;
   } catch (error) {

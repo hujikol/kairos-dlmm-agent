@@ -102,6 +102,8 @@ After executing, write a brief one-line result per position.
     canDeploy,
     _screeningMode,
     hiveLessonsBlock = null,
+    hivePresetsBlock = null,
+    decisionSummary = null,
     maxSteps = null,
     model = null,
   }) {
@@ -117,9 +119,17 @@ After executing, write a brief one-line result per position.
       ? `\nHIVEMIND LESSONS (from collective agents — use as supplementary signal, your own analysis takes priority):\n${hiveLessonsBlock}\n`
       : "";
 
+    const presetsBlock = hivePresetsBlock
+      ? `\nHIVEMIND PRESETS:\n${hivePresetsBlock}\n`
+      : "";
+
+    const decisionsBlock = decisionSummary
+      ? `\n${decisionSummary}\n`
+      : "";
+
     const goal = `
 SCREENING CYCLE${modeNote}
-${strategyBlock}${hiveBlock}
+${strategyBlock}${hiveBlock}${presetsBlock}${decisionsBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
 
 CONVICTION SIZING MATRIX (enforced by safety check):

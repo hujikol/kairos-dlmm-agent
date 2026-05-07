@@ -7,10 +7,14 @@ import { GAS_RESERVE_DEFAULT, BASE_DEPLOY_AMOUNT_DEFAULT, DEPLOY_AMOUNT_SOL_DEFA
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const USER_CONFIG_PATH = path.resolve(__dirname, "..", "user-config.json");
+const GMGN_CONFIG_PATH = path.resolve(__dirname, "..", "gmgn-config.json");
 
 // Load migrated (or already-v2) config
 const u = fs.existsSync(USER_CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
+  : {};
+const gmgnUserConfig = fs.existsSync(GMGN_CONFIG_PATH)
+  ? JSON.parse(fs.readFileSync(GMGN_CONFIG_PATH, "utf8"))
   : {};
 
 // Apply wallet/RPC from user-config if not already in env
@@ -20,8 +24,17 @@ if (u.llmModel)   process.env.LLM_MODEL          ??= u.llmModel;
 if (u.llmBaseUrl) process.env.LLM_BASE_URL       ??= u.llmBaseUrl;
 if (u.llmApiKey)  process.env.LLM_API_KEY        ??= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN  ??= String(u.dryRun);
-if (u.publicApiKey)          process.env.PUBLIC_API_KEY           ??= u.publicApiKey;
-if (u.agentMeridianApiUrl)   process.env.AGENT_MERIDIAN_API_URL ??= u.agentMeridianApiUrl;
+
+// ─── Agent Meridian relay + HiveMind ────────────────────────────────────────
+if (u.publicApiKey)          process.env.PUBLIC_API_KEY            ??= u.publicApiKey;
+if (u.agentMeridianApiUrl)   process.env.AGENT_MERIDIAN_API_URL   ??= u.agentMeridianApiUrl;
+if (u.hiveMindUrl)           process.env.HIVE_MIND_URL             ??= u.hiveMindUrl;
+if (u.hiveMindApiKey)        process.env.HIVE_MIND_API_KEY        ??= u.hiveMindApiKey;
+if (u.lpAgentRelayEnabled)   process.env.LPAGENT_RELAY_ENABLED    ??= String(u.lpAgentRelayEnabled);
+
+// ─── GMGN ────────────────────────────────────────────────────────────────────
+if (gmgnUserConfig.apiKey)  process.env.GMGN_API_KEY ??= gmgnUserConfig.apiKey;
+if (u.gmgnApiKey)            process.env.GMGN_API_KEY ??= u.gmgnApiKey;
 
 /** Returns true if DRY_RUN is enabled. Use this instead of inline process.env comparisons. */
 export function isDryRun() {
@@ -63,11 +76,35 @@ export const config = {
     minTokenAgeHours:   u.thresholds?.minTokenAgeHours   ?? u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:   u.thresholds?.maxTokenAgeHours   ?? u.maxTokenAgeHours   ?? null, // null = no maximum
     athFilterPct:       u.thresholds?.athFilterPct       ?? u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
+    // ─── Discord Signals (via Agent Meridian relay) ────────────────────────
+    // ⚠️  HIGH RISK — Discord signals are community-sourced tokens, NOT vetted.
+    //      Set useDiscordSignals: false to disable entirely.
+    useDiscordSignals: u.thresholds?.useDiscordSignals ?? u.useDiscordSignals ?? false,
+    discordSignalMode: u.thresholds?.discordSignalMode ?? u.discordSignalMode ?? "merge", // "merge" = add to normal pool; "only" = replace with Discord pools only
     // ─── Operational tunables ───────────────────────
     slippageBps:        u.screening?.slippageBps        ?? 300,
     screeningCooldownMs: u.screening?.screeningCooldownMs ?? 300_000,
     balanceCacheTtlMs:  u.screening?.balanceCacheTtlMs ?? 300_000,
     okxCacheTtlMs:      u.screening?.okxCacheTtlMs ?? 240_000,  // 4 min TTL for OKX enrichment cache
+  },
+
+  // ─── Chart Indicators ─────────────────────────────────────────────
+  indicators: {
+    enabled: u.indicators?.enabled ?? false,
+    intervals: u.indicators?.intervals ?? ["5m"],
+    entryPreset: u.indicators?.entryPreset ?? "rsi_reversal",
+    exitPreset: u.indicators?.exitPreset ?? "bollinger_reversion",
+    requireAllIntervals: u.indicators?.requireAllIntervals ?? false,
+    rsiOversold: u.indicators?.rsiOversold ?? 35,
+    rsiOverbought: u.indicators?.rsiOverbought ?? 65,
+    bounceRules: {
+      requireBullishSupertrend: u.indicators?.bounceRules?.requireBullishSupertrend ?? true,
+      rejectAlreadyAtBottom:    u.indicators?.bounceRules?.rejectAlreadyAtBottom    ?? true,
+      requireAboveSupertrend:    u.indicators?.bounceRules?.requireAboveSupertrend    ?? false,
+      minRsi:                   u.indicators?.bounceRules?.minRsi                   ?? null,
+      maxRsi:                   u.indicators?.bounceRules?.maxRsi                   ?? null,
+      requireBbPosition:         u.indicators?.bounceRules?.requireBbPosition         ?? null,
+    },
   },
 
   // ─── Position Management ────────────────
@@ -114,22 +151,25 @@ export const config = {
     okxApiTimeoutMs: u.okx?.okxApiTimeoutMs ?? 12_000,
   },
 
-  // ─── Hive Mind ─────────────────────────
+  // ─── Hive Mind ──────────────────────────────────────────────────────────────
+  // HiveMind server URL (separate from Agent Meridian relay API URL).
+  // HiveMind:   https://api.agentmeridian.xyz     (lesson/preset push/pull)
+  // Relay API:  https://api.agentmeridian.xyz/api (positions, PnL, top-lp)
   hiveMind: {
-    url:     u.hive?.url     || process.env.AGENT_MERIDIAN_API_URL || process.env.HIVE_MIND_URL || null,
-    apiKey:  u.hive?.apiKey  || process.env.HIVE_MIND_PUBLIC_API_KEY || process.env.HIVE_MIND_API_KEY || null,
-    agentId: u.hive?.agentId || null,
-    pullMode: u.hive?.pullMode || "auto",
+    url:     u.hiveMind?.url || u.hive?.url || process.env.HIVE_MIND_URL || "https://api.agentmeridian.xyz",
+    apiKey:  u.hiveMind?.apiKey || u.hive?.apiKey || process.env.HIVE_MIND_API_KEY || null,
+    agentId: u.hiveMind?.agentId || u.hive?.agentId || null,
+    pullMode: u.hiveMind?.pullMode || u.hive?.pullMode || "auto",
   },
 
-  // ─── Agent Meridian API ─────────────────
+  // ─── Agent Meridian API ─────────────────────────────────────────────────────
+  // Agent Meridian relay API — handles positions, PnL, top-lp, study-top-lp,
+  // Discord signal candidates, and OKX server-side enrichment.
   api: {
     url:          u.agentMeridianApiUrl || u.api?.url || process.env.AGENT_MERIDIAN_API_URL || "https://api.agentmeridian.xyz/api",
-    publicApiKey: u.publicApiKey      || u.api?.publicApiKey || process.env.PUBLIC_API_KEY || null,
+    publicApiKey: u.publicApiKey || u.api?.publicApiKey || process.env.PUBLIC_API_KEY || null,
+    lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
   },
-
-  // ─── LPAgent Relay ─────────────────────
-  lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
 
   // ─── Strategy Mapping ───────────────────
   strategy: {
@@ -164,6 +204,72 @@ export const config = {
     SOL:  SOL_MINT,
     USDC: USDC_MINT,
     USDT: USDT_MINT,
+  },
+
+  // ─── GMGN Integration ────────────────────────────────────────────────────────
+  // 5-stage pipeline: rank → token info → holders/traders + Meteora pool → chart indicators → best pool
+  gmgn: {
+    // Auth — prefer gmgn-config.json apiKey, then user-config flat key, then env
+    apiKey: (() => {
+      const k = gmgnUserConfig?.apiKey || u.gmgnApiKey || process.env.GMGN_API_KEY;
+      return typeof k === "string" && k.trim() ? k.trim() : null;
+    })(),
+    baseUrl: gmgnUserConfig?.baseUrl || u.gmgnBaseUrl || "https://openapi.gmgn.ai",
+    interval:       gmgnUserConfig?.interval       ?? u.gmgnInterval       ?? "5m",
+    orderBy:       gmgnUserConfig?.orderBy       ?? u.gmgnOrderBy       ?? "default",
+    direction:     gmgnUserConfig?.direction     ?? u.gmgnDirection     ?? "desc",
+    limit:         gmgnUserConfig?.limit         ?? u.gmgnLimit         ?? 100,
+    enrichLimit:   gmgnUserConfig?.enrichLimit   ?? u.gmgnEnrichLimit   ?? 20,
+    requestDelayMs: gmgnUserConfig?.requestDelayMs ?? u.gmgnRequestDelayMs ?? 350,
+    maxRetries:    gmgnUserConfig?.maxRetries    ?? u.gmgnMaxRetries    ?? 2,
+    holdersLimit:  gmgnUserConfig?.holdersLimit  ?? u.gmgnHoldersLimit  ?? 100,
+    klineResolution: gmgnUserConfig?.klineResolution ?? u.gmgnKlineResolution ?? "5m",
+    klineLookbackMinutes: gmgnUserConfig?.klineLookbackMinutes ?? u.gmgnKlineLookbackMinutes ?? 60,
+    filters: Array.isArray(gmgnUserConfig?.filters) ? gmgnUserConfig.filters : (Array.isArray(u.gmgnFilters) ? u.gmgnFilters : ["renounced", "frozen", "not_wash_trading"]),
+    platforms: Array.isArray(gmgnUserConfig?.platforms) ? gmgnUserConfig.platforms : (Array.isArray(u.gmgnPlatforms) ? u.gmgnPlatforms : ["Pump.fun", "meteora_virtual_curve", "pool_meteora"]),
+    // ─── Thresholds ───────────────────────────
+    minMcap:         gmgnUserConfig?.minMcap         ?? u.gmgnMinMcap         ?? u.minMcap         ?? 150_000,
+    maxMcap:         gmgnUserConfig?.maxMcap         ?? u.gmgnMaxMcap         ?? u.maxMcap         ?? 10_000_000,
+    minTvl:          gmgnUserConfig?.minTvl          ?? u.gmgnMinTvl          ?? u.minTvl          ?? 10_000,
+    minVolume:       gmgnUserConfig?.minVolume       ?? u.gmgnMinVolume       ?? 1000,
+    minHolders:     gmgnUserConfig?.minHolders     ?? u.gmgnMinHolders     ?? u.minHolders     ?? 500,
+    minTokenAgeHours: gmgnUserConfig?.minTokenAgeHours ?? u.gmgnMinTokenAgeHours ?? 2,
+    maxTokenAgeHours: gmgnUserConfig?.maxTokenAgeHours ?? u.gmgnMaxTokenAgeHours ?? 24 * 7,
+    minSmartDegenCount: gmgnUserConfig?.minSmartDegenCount ?? u.gmgnMinSmartDegenCount ?? 1,
+    requireKol:      gmgnUserConfig?.requireKol      ?? u.gmgnRequireKol      ?? true,
+    minKolCount:     gmgnUserConfig?.minKolCount     ?? u.gmgnMinKolCount     ?? 1,
+    maxRugRatio:    gmgnUserConfig?.maxRugRatio    ?? u.gmgnMaxRugRatio    ?? 0.3,
+    maxTop10HolderRate: gmgnUserConfig?.maxTop10HolderRate ?? u.gmgnMaxTop10HolderRate ?? 0.5,
+    maxBundlerRate: gmgnUserConfig?.maxBundlerRate ?? u.gmgnMaxBundlerRate ?? 0.5,
+    maxRatTraderRate: gmgnUserConfig?.maxRatTraderRate ?? u.gmgnMaxRatTraderRate ?? 0.2,
+    maxFreshWalletRate: gmgnUserConfig?.maxFreshWalletRate ?? u.gmgnMaxFreshWalletRate ?? 0.2,
+    maxDevTeamHoldRate: gmgnUserConfig?.maxDevTeamHoldRate ?? u.gmgnMaxDevTeamHoldRate ?? 0.02,
+    maxBotDegenRate: gmgnUserConfig?.maxBotDegenRate ?? u.gmgnMaxBotDegenRate ?? 0.4,
+    maxSniperCount: gmgnUserConfig?.maxSniperCount ?? u.gmgnMaxSniperCount ?? 20,
+    maxSniperHoldRate: gmgnUserConfig?.maxSniperHoldRate ?? u.gmgnMaxSniperHoldRate ?? 0.3,
+    minTotalFeeSol: gmgnUserConfig?.minTotalFeeSol ?? u.gmgnMinTotalFeeSol ?? 30,
+    athFilterPct:   gmgnUserConfig?.athFilterPct   ?? u.gmgnAthFilterPct   ?? null,
+    // ─── KOL Matching ────────────────────────
+    // Preferred KOLs: wallets you WANT following (holds your token, likely bullish)
+    preferredKolMinHoldPct: gmgnUserConfig?.preferredKolMinHoldPct ?? u.gmgnPreferredKolMinHoldPct ?? 1,
+    preferredKolNames: Array.isArray(gmgnUserConfig?.preferredKolNames) ? gmgnUserConfig.preferredKolNames : (Array.isArray(u.gmgnPreferredKolNames) ? u.gmgnPreferredKolNames : []),
+    // Dump KOLs: wallets that have a history of selling after promotion (warning flag)
+    dumpKolMinHoldPct: gmgnUserConfig?.dumpKolMinHoldPct ?? u.gmgnDumpKolMinHoldPct ?? 0.5,
+    dumpKolNames: Array.isArray(gmgnUserConfig?.dumpKolNames) ? gmgnUserConfig.dumpKolNames : (Array.isArray(u.gmgnDumpKolNames) ? u.gmgnDumpKolNames : []),
+    // ─── Chart Indicator Filter ──────────────
+    indicatorFilter:    gmgnUserConfig?.indicatorFilter    ?? u.gmgnIndicatorFilter    ?? true,
+    indicatorInterval:  gmgnUserConfig?.indicatorInterval ?? u.gmgnIndicatorInterval ?? "15_MINUTE",
+    indicatorRules: (() => {
+      const r = gmgnUserConfig?.indicatorRules || {};
+      return {
+        requireBullishSupertrend: r.requireBullishSupertrend ?? true,
+        rejectAlreadyAtBottom:    r.rejectAlreadyAtBottom    ?? true,
+        requireAboveSupertrend:   r.requireAboveSupertrend   ?? false,
+        minRsi:                  r.minRsi                  ?? null,
+        maxRsi:                  r.maxRsi                  ?? null,
+        requireBbPosition:        r.requireBbPosition        ?? null,
+      };
+    })(),
   },
 };
 

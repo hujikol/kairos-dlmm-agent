@@ -4,7 +4,7 @@
  */
 
 import { log } from "./logger.js";
-import { computeRSI, computeBollingerBands, computeSupertrend, computeFibonacciRetracement } from "../tools/chart-indicators.js";
+import { computeRSI, computeBollingerBands, computeSupertrend, computeFibonacciRetracement, checkBounceSetup } from "../tools/chart-indicators.js";
 
 const JUPITER_DATAPI_BASE = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 
@@ -127,13 +127,15 @@ function interpretBB(price, bb) {
  * @param {string} opts.pool_address - Pool address
  * @param {Object} [opts.poolData] - Optional pre-fetched pool data (may contain price, volatility, etc.)
  * @param {string} [opts.mint] - Token mint address
- * @returns {Promise<string>} Formatted indicators string, or empty string on failure
+ * @param {Object} [opts.bounceOptions] - Options passed to checkBounceSetup
+ * @returns {Promise<{ string: string, bounceResult: Object }>} Formatted indicators string with bounce result,
+ *          or empty string/bounceResult={} on failure
  */
-export async function fetchPoolIndicators({ pool_address, poolData = {}, mint }) {
+export async function fetchPoolIndicators({ pool_address, poolData = {}, mint, bounceOptions = {} }) {
   try {
     const tokenMint = mint || poolData.base?.mint;
     if (!tokenMint) {
-      return "";
+      return { string: "", bounceResult: {} };
     }
 
     // Fetch price history
@@ -141,7 +143,7 @@ export async function fetchPoolIndicators({ pool_address, poolData = {}, mint })
 
     // If no price history, return insufficient data message
     if (closes.length < 5) {
-      return "INDICATORS: insufficient price history";
+      return { string: "INDICATORS: insufficient price history", bounceResult: {} };
     }
 
     // Compute indicators
@@ -151,6 +153,15 @@ export async function fetchPoolIndicators({ pool_address, poolData = {}, mint })
     const fib = computeFibonacciRetracement(closes);
 
     const currentPrice = closes[closes.length - 1];
+
+    // Compute bounce setup confirmation
+    const bounceResult = checkBounceSetup({
+      rsi,
+      bb,
+      supertrend,
+      currentPrice,
+      options: bounceOptions,
+    });
 
     // Build formatted output
     const poolName = poolData.name || pool_address?.slice(0, 8) + "..." || "Unknown";
@@ -178,13 +189,19 @@ export async function fetchPoolIndicators({ pool_address, poolData = {}, mint })
       parts.push(`Fibonacci: 61.8% retracement at ${fib.level61_8?.toFixed(4) ?? "N/A"}`);
     }
 
-    if (parts.length === 0) {
-      return "";
+    // Bounce setup
+    if (bounceResult.pass !== undefined) {
+      parts.push(`Bounce: ${bounceResult.pass ? "PASS" : "FAIL"}${bounceResult.reasons.length > 0 ? ` — ${bounceResult.reasons.join("; ")}` : ""}`);
     }
 
-    return `INDICATORS: ${poolName}\n  ${parts.join("\n  ")}`;
+    if (parts.length === 0) {
+      return { string: "", bounceResult };
+    }
+
+    const indicatorString = `INDICATORS: ${poolName}\n  ${parts.join("\n  ")}`;
+    return { string: indicatorString, bounceResult };
   } catch (err) {
     log("warn", "indicators", `Failed to compute indicators for ${pool_address}: ${err.message}`);
-    return "";
+    return { string: "", bounceResult: {} };
   }
 }
