@@ -98,14 +98,12 @@ describe("fetchWithTimeout", () => {
   });
 
   it("resolves when fetch completes within timeout", async () => {
-    // Use a fast public endpoint that returns JSON
     const result = await fetchWithTimeout(
-      "https://api.agentmeridian.xyz/api/ping",
+      "https://httpbin.org/get",
       {},
-      5_000
+      10_000
     );
-    // pong or error — just verify it returned something (didn't timeout)
-    assert.ok(result !== undefined);
+    assert.equal(result.ok, true);
   });
 
   it("rejects when URL is unreachable within timeout", async () => {
