@@ -92,17 +92,20 @@ export async function sendMessage(text, parseMode = "Markdown") {
   // Return the queue promise so callers await the actual send, not just enqueue
   return new Promise((resolve) => {
     enqueueMessage(async () => {
+      let timeoutId;
       try {
+        const controller = new AbortController();
+        timeoutId = setTimeout(() => controller.abort(), 10_000);
         const payload = {
           chat_id: chatId,
           text: finalText.slice(0, 4096),
         };
         if (parseMode) payload.parse_mode = parseMode;
-
         const res = await fetch(`${BASE}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
         if (!res.ok) {
           const err = await res.text();
@@ -114,7 +117,13 @@ export async function sendMessage(text, parseMode = "Markdown") {
           }
         }
       } catch (e) {
-        log("error", "telegram", `sendMessage failed: ${e?.message ?? e}`);
+        if (e.name === "AbortError") {
+          log("error", "telegram", `sendMessage timed out after 10s`);
+        } else {
+          log("error", "telegram", `sendMessage failed: ${e?.message ?? e}`);
+        }
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
       }
       resolve();
     });
@@ -222,7 +231,10 @@ export async function sendHTML(html) {
   const finalText = config.cavemanEnabled ? caveman(clean) : clean;
   return new Promise((resolve) => {
     enqueueMessage(async () => {
+      let timeoutId;
       try {
+        const controller = new AbortController();
+        timeoutId = setTimeout(() => controller.abort(), 10_000);
         const res = await fetch(`${BASE}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -231,6 +243,7 @@ export async function sendHTML(html) {
             text: finalText.slice(0, 4096),
             parse_mode: "HTML",
           }),
+          signal: controller.signal,
         });
         if (!res.ok) {
           const err = await res.text();
@@ -242,7 +255,13 @@ export async function sendHTML(html) {
           }
         }
       } catch (e) {
-        log("error", "telegram", `sendHTML failed: ${e?.message ?? e}`);
+        if (e.name === "AbortError") {
+          log("error", "telegram", `sendHTML timed out after 10s`);
+        } else {
+          log("error", "telegram", `sendHTML failed: ${e?.message ?? e}`);
+        }
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
       }
       resolve();
     });

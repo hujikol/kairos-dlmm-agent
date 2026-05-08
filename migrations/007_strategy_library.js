@@ -9,15 +9,11 @@
  * This migration ensures:
  *   1. The strategies table exists with all required columns
  *   2. The `raw` column has a DEFAULT so INSERTs don't bind undefined
- *
- * up(): ensures strategies table + raw column exist
- * down(): no-op — table structure is harmless to keep
  */
 
 import { tableHasColumn } from "../src/core/db.js";
 
-export function up(db) {
-  // Ensure the table itself exists (idempotent — CREATE TABLE IF NOT EXISTS)
+export function migrate(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS strategies (
       id TEXT PRIMARY KEY,
@@ -35,17 +31,11 @@ export function up(db) {
     )
   `);
 
-  // Ensure raw column exists with DEFAULT NULL (added in v2.1.0)
   if (!tableHasColumn(db, "strategies", "raw")) {
     try {
       db.exec("ALTER TABLE strategies ADD COLUMN raw TEXT DEFAULT NULL");
     } catch (err) {
-      // Ignore "duplicate column" — table already has raw from a prior run
       if (!err?.message?.includes("duplicate column")) throw err;
     }
   }
-}
-
-export function down(db) {
-  // no-op — table structure is harmless to keep; dropping achieves nothing
 }

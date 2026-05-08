@@ -5,6 +5,19 @@ import { rotateIfNeeded } from "./rotation.js";
 import { logAction } from "./action-log.js";
 import { logSnapshot } from "./snapshot-log.js";
 
+let _telegramSender = null;
+function getTelegramSender() {
+  if (_telegramSender === null) {
+    try {
+      const mod = require("../notifications/telegram.js");
+      _telegramSender = mod.sendMessageDirect ?? mod.sendHTML ?? null;
+    } catch {
+      _telegramSender = false;
+    }
+  }
+  return _telegramSender;
+}
+
 const LOG_DIR = "./logs";
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
 const JSON_FORMAT = process.env.JSON_FORMAT === "true";
@@ -51,6 +64,13 @@ export function log(level, category, message, meta = {}) {
   }
 
   const line = `[${timestamp}] [${category.toUpperCase()}]${corrId}${caller} ${message}`;
+
+  if (level === "error") {
+    const sender = getTelegramSender();
+    if (sender) {
+      sender(`[ERROR] ${category}: ${message}${corrId}`).catch(() => {});
+    }
+  }
 
   if (JSON_FORMAT) {
     const entry = {

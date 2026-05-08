@@ -178,7 +178,6 @@ ${addition}`;
         return;
       }
       if (_busyState._screeningBusy) return;
-      _busyState._screeningBusy = true;
       import("./screening-cycle.js").then(({ runScreeningCycle }) => {
         // Re-check to avoid race: if another call set _timersState.screeningLastTriggered while we were waiting for the lock
         if (_timersState.screeningLastTriggered !== lastTriggeredAt) {

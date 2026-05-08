@@ -4,7 +4,7 @@
  *
  * Run: node --test test/test-state-exits.js
  */
-import { test, describe, beforeEach } from "node:test";
+import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -52,7 +52,7 @@ async function makeTestDB() {
 const testDb = await makeTestDB();
 const { _injectDB } = await import("../src/core/db.js");
 _injectDB(testDb);
-const { updatePnlAndCheckExits } = await import("../src/core/state/index.js");
+const { updatePnlAndCheckExits, _injectTrackedPosition, _clearTrackedPositionOverride, _invalidatePositionCache } = await import("../src/core/state/index.js");
 
 function insertPosition(overrides = {}) {
   const pos = {
@@ -78,6 +78,12 @@ beforeEach(() => {
   testDb.exec("DELETE FROM recent_events");
   testDb.exec("DELETE FROM lessons");
   testDb.exec("DELETE FROM kv_store");
+  _clearTrackedPositionOverride();
+  _invalidatePositionCache();
+});
+
+afterEach(() => {
+  _clearTrackedPositionOverride();
 });
 
 // ─── STOP LOSS ────────────────────────────────────────────────────────────────

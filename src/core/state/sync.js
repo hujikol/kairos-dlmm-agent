@@ -71,5 +71,10 @@ export async function syncOpenPositions(active_addresses) {
       _syncMissCount.delete(pos.position);
     }
   });
+
+  // Cleanup: prune _syncMissCount entries for positions that are no longer active
+  for (const addr of _syncMissCount.keys()) {
+    if (!activeSet.has(addr)) _syncMissCount.delete(addr);
+  }
 }
 

@@ -5,11 +5,14 @@
 
 let _queue = [];
 
+const MAX_QUEUE_SIZE = 100;
+
 /**
  * Push a notification onto the queue.
  * Types: "deploy", "close", "swap", "oor", "claim"
  */
 export function pushNotification(note) {
+  if (_queue.length >= MAX_QUEUE_SIZE) _queue.shift();
   _queue.push(note);
 }
 

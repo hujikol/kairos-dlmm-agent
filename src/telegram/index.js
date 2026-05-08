@@ -34,6 +34,7 @@ export const _telegramBusy = _telegramBusyState;
 const MAX_TELEGRAM_QUEUE = 10;
 const MAX_CONCURRENT_TELEGRAM = 3; // max parallel Telegram handlers
 const TOKEN_SWAP_MIN_BALANCE = 0.01;
+const READ_ONLY_COMMANDS = ['/balance', '/status', '/positions', '/thresholds'];
 
 export { MAX_TELEGRAM_QUEUE, TOKEN_SWAP_MIN_BALANCE };
 
@@ -44,6 +45,10 @@ export async function safeSend(text) {
   } catch (e) {
     log("error", "telegram-handler", "Telegram send failed", { error: e?.message });
   }
+}
+
+function isReadOnlyCommand(text) {
+  return READ_ONLY_COMMANDS.includes(text);
 }
 
 // Shared helper: send an HTML error message, logs any send failure silently
@@ -67,6 +72,7 @@ export function drainTelegramQueue() {
       if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
       const queued = _telegramQueue.shift();
       if (!queued) break;
+      if (!isReadOnlyCommand(queued) && (_busyState._managementBusy || _busyState._screeningBusy)) continue;
       processTelegramMessage(queued).catch(() => {
         // Error is already logged inside telegramHandler
       });
@@ -141,7 +147,8 @@ export async function telegramHandler(text) {
   log("info", "telegram-handler", `telegramHandler called with: "${text}"`);
 
   // Busy check first — if queuing, send queue confirmation and skip acknowledgment
-  if (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) {
+  const isReadOnly = isReadOnlyCommand(text);
+  if (!isReadOnly && (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM)) {
     sendChatAction("typing").catch(() => {});
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(text);

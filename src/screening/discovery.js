@@ -13,11 +13,11 @@ const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag
 const POOL_DISCOVERY_BASE = process.env.POOL_DISCOVERY_API_BASE || "https://pool-discovery-api.datapi.meteora.ag";
 
 /** Wrap a promise with an AbortController timeout. */
-async function withTimeout(promise, ms) {
+async function withTimeout(fn, ms) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {
-    return await promise.then(v => { clearTimeout(timer); return v; });
+    return await fn(controller.signal).then(v => { clearTimeout(timer); return v; });
   } catch (e) {
     clearTimeout(timer);
     throw e;

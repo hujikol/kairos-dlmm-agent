@@ -431,6 +431,8 @@ async function _enrichPositionsWithPnL(pools, { walletAddress, silent }) {
     }
   }
 
+  binDataByPool = null;
+  pnlMaps = null;
   return positions;
 }
 
@@ -447,6 +449,11 @@ async function _syncPositionsWithState(positions, { walletAddress }) {
   positionsCache.set("positions", result, METEORA_POSITIONS_CACHE_TTL_MS);
   return result;
 }
+
+// ─── Module-level inflight tracking for getMyPositions ──────────────
+// Prevents concurrent force-refresh calls from duplicating network requests.
+// Keyed by walletAddress so different wallets don't share promises.
+const _positionsInflight = new Map(); // walletAddress → Promise
 
 // ─── getMyPositions ─────────────────────────────────────────────────
 
@@ -466,16 +473,6 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     return Promise.resolve(testOverride);
   }
 
-  // Cache check (skip if force=true)
-  if (!force) {
-    const cached = positionsCache.get("positions");
-    if (cached !== undefined) {
-      return cached;
-    }
-  }
-
-  let inflight = null;
-
   let walletAddress;
   try {
     walletAddress = getWallet().publicKey.toString();
@@ -484,11 +481,21 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     return { wallet: null, total_positions: 0, positions: [], error: "Wallet not configured" };
   }
 
-  if (inflight) return inflight;
+  // Cache check (skip if force=true)
+  if (!force) {
+    const cached = positionsCache.get("positions");
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+
+  // Return existing in-flight promise for this wallet to deduplicate concurrent calls
+  const existing = _positionsInflight.get(walletAddress);
+  if (existing) return existing;
 
   const ctx = { walletAddress, force, silent };
 
-  inflight = (async () => { try {
+  const promise = (async () => { try {
     // Step 1: fetch raw pools from Meteora API / relay fallback
     const { pools } = await _fetchPositionsFromMeteora(ctx);
 
@@ -501,10 +508,12 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     log("error", "positions", `Portfolio fetch failed: ${error.stack || error.message}`);
     return { wallet: walletAddress, total_positions: 0, positions: [], error: error.message };
   } finally {
-    inflight = null;
+    _positionsInflight.delete(walletAddress);
   }
   })();
-  return inflight;
+
+  _positionsInflight.set(walletAddress, promise);
+  return promise;
 }
 
 // ─── getWalletPositions ────────────────────────────────────────────

@@ -102,7 +102,7 @@ export function closeDB() {
   }
 }
 
-export function tableHasColumn(tableName, columnName) {
-  const columns = _db.prepare(`PRAGMA table_info(${tableName})`).all();
+export function tableHasColumn(db, tableName, columnName) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return columns.some(col => col.name === columnName);
 }

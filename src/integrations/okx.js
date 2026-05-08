@@ -22,11 +22,11 @@ const PUBLIC_HEADERS = { "Ok-Access-Client-type": "agent-cli" };
 /**
  * Wrap a fetch call with an AbortController timeout.
  */
-async function withTimeout(fetchPromise, ms) {
+async function withTimeout(fn, ms) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ms);
   try {
-    return await fetchPromise(controller.signal);
+    return await fn(controller.signal);
   } finally {
     clearTimeout(timeout);
   }
@@ -34,7 +34,7 @@ async function withTimeout(fetchPromise, ms) {
 
 async function okxGet(path) {
   const res = await withTimeout(
-    fetch(`${BASE}${path}`, { headers: PUBLIC_HEADERS }),
+    (sig) => fetch(`${BASE}${path}`, { headers: PUBLIC_HEADERS, signal: sig }),
     config.okx?.okxApiTimeoutMs ?? 12_000,
   );
   if (!res.ok) throw new Error(`OKX API ${res.status}: ${path}`);
@@ -66,10 +66,11 @@ export function _injectOkx(fn) {
 
 async function okxPost(path, body) {
   const res = await withTimeout(
-    fetch(`${BASE}${path}`, {
+    (signal) => fetch(`${BASE}${path}`, {
       method: "POST",
       headers: { ...PUBLIC_HEADERS, "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     }),
     config.okx?.okxApiTimeoutMs ?? 12_000,
   );

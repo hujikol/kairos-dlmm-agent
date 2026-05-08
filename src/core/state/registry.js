@@ -10,6 +10,41 @@ import { pushEvent } from "./events.js";
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
+const _positionCache = new Map();
+let _cacheExpiry = 0;
+const _CACHE_TTL_MS = 30_000;
+
+function _invalidateCache() {
+  _positionCache.clear();
+  _cacheExpiry = 0;
+}
+
+export function _invalidatePositionCache() {
+  _invalidateCache();
+}
+
+function _getCachedPosition(position_address) {
+  if (_trackedPositionOverride && _trackedPositionOverride.position === position_address) {
+    return _trackedPositionOverride;
+  }
+  if (Date.now() < _cacheExpiry) {
+    const cached = _positionCache.get(position_address);
+    if (cached !== undefined) {
+      const db = getDB();
+      const row = db.prepare("SELECT position FROM positions WHERE position = ?").get(position_address);
+      if (row) return cached;
+      _positionCache.delete(position_address);
+      _cacheExpiry = 0;
+    }
+  }
+  return undefined;
+}
+
+function _setCachedPosition(position_address, pos) {
+  _positionCache.set(position_address, pos);
+  _cacheExpiry = Date.now() + _CACHE_TTL_MS;
+}
+
 export function updatePosition(position_address, updates) {
   const db = getDB();
   const keys = Object.keys(updates);
@@ -19,6 +54,7 @@ export function updatePosition(position_address, updates) {
   values.push(position_address);
   db.prepare(`UPDATE positions SET ${setCols} WHERE position = ?`).run(...values);
   touchLastUpdated();
+  _invalidateCache();
 }
 
 function touchLastUpdated() {
@@ -134,6 +170,7 @@ export function trackPosition({
 
     pushEvent({ action: "deploy", position, pool_name: pool_name || pool });
     touchLastUpdated();
+    _invalidateCache();
   });
 
   log("info", "state", `Tracked new position: ${position} in pool ${pool}`);
@@ -246,12 +283,14 @@ export function _clearTrackedPositionOverride() {
 }
 
 export function getTrackedPosition(position_address) {
-  if (_trackedPositionOverride && _trackedPositionOverride.position === position_address) {
-    return _trackedPositionOverride;
-  }
+  const override = _getCachedPosition(position_address);
+  if (override) return override;
+
   const db = getDB();
   const row = db.prepare("SELECT * FROM positions WHERE position = ?").get(position_address);
-  return row ? rowToPos(row) : null;
+  const pos = row ? rowToPos(row) : null;
+  _setCachedPosition(position_address, pos);
+  return pos;
 }
 
 // ─── Briefing KV helpers (re-exported from registry for backward compat) ─────

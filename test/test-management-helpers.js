@@ -8,7 +8,6 @@ process.env.RPC_URL = "https://api.mainnet-beta.solana.com";
 import { describe, it, afterEach, after } from "node:test";
 import assert from "node:assert";
 import { computeManagementActions } from "../src/core/management-helpers.js";
-import { _injectStreakMap } from "../src/core/state/loss-streak.js";
 
 function makeConfig() {
   return {
@@ -32,8 +31,6 @@ function makeConfig() {
 
 describe("computeManagementActions", () => {
   it("returns CLOSE when position is in exitMap", () => {
-    _injectStreakMap(new Map());
-
     const positionData = [{
       position: "pos1",
       pair: "SOL/USDC",
@@ -51,8 +48,6 @@ describe("computeManagementActions", () => {
   });
 
   it("returns CLOSE for stop loss rule", () => {
-    _injectStreakMap(new Map());
-
     const positionData = [{
       position: "pos2",
       pair: "SOL/USDC",
@@ -71,8 +66,6 @@ describe("computeManagementActions", () => {
   });
 
   it("returns CLOSE for take profit rule", () => {
-    _injectStreakMap(new Map());
-
     const positionData = [{
       position: "pos3",
       pair: "SOL/USDC",
@@ -112,8 +105,6 @@ describe("computeManagementActions", () => {
   });
 
   it("returns STAY when no rules match", () => {
-    _injectStreakMap(new Map());
-
     const positionData = [{
       position: "pos5",
       pair: "SOL/USDC",
@@ -132,8 +123,6 @@ describe("computeManagementActions", () => {
   });
 
   it("returns INSTRUCTION when position has instruction set", () => {
-    _injectStreakMap(new Map());
-
     const positionData = [{
       position: "pos6",
       pair: "SOL/USDC",

@@ -32,6 +32,8 @@ export {
   getTrackedPositions,
   getTrackedPosition,
   _injectTrackedPosition,
+  _clearTrackedPositionOverride,
+  _invalidatePositionCache,
   getStateSummary,
   touchLastUpdated,
 } from "./registry.js";

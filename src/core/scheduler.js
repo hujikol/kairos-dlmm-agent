@@ -1,7 +1,7 @@
 import { Cron } from "croner";
 import { config } from "../config.js";
 import { log } from "./logger.js";
-import { getDB } from "./db.js";
+import { getDB, runTransaction } from "./db.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { setLastBriefingDate, getLastBriefingDate } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
@@ -175,21 +175,23 @@ export async function startCronJobs() {
         return null;
       });
       if (!result?.positions?.length) return;
-      for (const p of result.positions) {
-        const exit = updatePnlAndCheckExits(p.position, p, config.management);
-        if (exit) {
-          const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
-          const sinceLastTrigger = Date.now() - _timersState.pollTriggeredAt;
-          if (sinceLastTrigger >= cooldownMs) {
-            _timersState.pollTriggeredAt = Date.now();
-            log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
-            Promise.resolve(runManagementCycle({ silent: true })).catch((e) => { log("error", "cron", `Poll-triggered management failed: ${e?.message ?? e}`); });
-          } else {
-            log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
+      await runTransaction(async () => {
+        for (const p of result.positions) {
+          const exit = updatePnlAndCheckExits(p.position, p, config.management);
+          if (exit) {
+            const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
+            const sinceLastTrigger = Date.now() - _timersState.pollTriggeredAt;
+            if (sinceLastTrigger >= cooldownMs) {
+              _timersState.pollTriggeredAt = Date.now();
+              log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
+              Promise.resolve(runManagementCycle({ silent: true })).catch((e) => { log("error", "cron", `Poll-triggered management failed: ${e?.message ?? e}`); });
+            } else {
+              log("info", "state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
+            }
+            break;
           }
-          break;
         }
-      }
+      });
     } finally {
       _busyState._pnlPollBusy = false;
     }
@@ -207,5 +209,16 @@ export async function startCronJobs() {
 
   _cronState.tasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog, maintenanceTask];
   _cronState._pnlPollInterval = pnlPollInterval;
+
+  // WAL checkpoint every 6 hours
+  const walCheckpointTask = new Cron("0 */6 * * *", { timezone: "Etc/UTC" }, async () => {
+    try {
+      getDB().pragma("wal_checkpoint(PASSIVE)");
+    } catch (e) {
+      log("error", "cron", `WAL checkpoint failed: ${e?.message}`);
+    }
+  });
+  _cronState.tasks.push(walCheckpointTask);
+
   log("info", "cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
 }
