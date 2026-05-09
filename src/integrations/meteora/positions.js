@@ -367,8 +367,8 @@ async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
  * @returns {Promise<Array>} positions - Enriched position objects
  */
 async function _enrichPositionsWithPnL(pools, { walletAddress, silent }) {
-  const binDataByPool = {};
-  const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
+  let binDataByPool = {};
+  let pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
   pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });
 
   const positions = [];
