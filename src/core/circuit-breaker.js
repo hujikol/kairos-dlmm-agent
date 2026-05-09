@@ -103,7 +103,7 @@ export function createCircuitBreaker(name, options = {}) {
 
     if (isClosed()) {
       failures++;
-      lastFailureAt = Date.now();
+      _lastFailureAt = Date.now();
       if (failures >= failureThreshold) {
         state  = CircuitBreakerState.OPEN;
         openAt = Date.now();
