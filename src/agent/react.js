@@ -193,6 +193,24 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         content: JSON.stringify({ error: r.reason?.message || "Tool call rejected" }),
       });
 
+      // Layer 2 hallucination prevention — force LLM acknowledgment of blocked deploy_position.
+      // Mode B: LLM receives blocked result but ignores it and continues.
+      // Inject a system nudge whenever a deploy_position returned blocked: true.
+      const hadBlockedDeploy = toolResults.some(r => {
+        try {
+          const parsed = JSON.parse(r.content);
+          return parsed?.blocked === true;
+        } catch { return false; }
+      });
+      if (hadBlockedDeploy) {
+        messages.push({
+          role: "system",
+          content: "A deploy_position call was blocked by safety checks and returned { blocked: true }. " +
+            "Do NOT retry deploy_position this session. Do NOT claim the deploy succeeded. " +
+            "Report the blocked result exactly as returned.",
+        });
+      }
+
       messages.push(...toolResults);
     } catch (error) {
       log("error", "agent", `Agent loop error at step ${step}: ${error.message}`);
