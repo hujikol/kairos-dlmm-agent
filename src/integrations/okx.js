@@ -49,12 +49,17 @@ async function okxGet(path) {
  * The relay has 30s TTL cached data.
  */
 async function relayFallback(endpoint, mint) {
-  const data = await agentMeridianJson(`enrich/${endpoint}`, {
-    method: "POST",
-    body: JSON.stringify({ mint }),
-    headers: { "Content-Type": "application/json" },
-  });
-  return data;
+  try {
+    const data = await agentMeridianJson(`enrich/${endpoint}`, {
+      method: "POST",
+      body: JSON.stringify({ mint }),
+      headers: { "Content-Type": "application/json" },
+    });
+    return data;
+  } catch (err) {
+    log("warn", "okx", `Relay fallback failed for ${endpoint}: ${err?.message ?? String(err)} — returning null`);
+    return null;
+  }
 }
 
 // ─── Test injection ────────────────────────────────────────────────

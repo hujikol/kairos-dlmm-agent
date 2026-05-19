@@ -22,6 +22,7 @@ import {
   handleTeach,
   handleCaveman,
   handleLearn,
+  handleSafeModeCommand,
 } from "./commands/index.js";
 
 // Module-level queue and concurrent handler counter
@@ -124,6 +125,7 @@ async function processTelegramMessage(text) {
       case "/positions":  await handlePositions(); break;
       case "/caveman":    await handleCaveman(); break;
       case "/learn":      await handleLearn("/learn"); break;
+      case "/safe-mode":  await handleSafeModeCommand(text.slice("/safe-mode".length).trim().split(/\s+/).filter(Boolean), safeSend); break;
       default: {
         // Regex-based handlers — return true if they handled the message
         if (await handleClose(text)) return;

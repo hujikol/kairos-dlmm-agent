@@ -6,7 +6,7 @@ import { bootstrapHiveMind, startHiveMindBackgroundSync, isHiveMindEnabled } fro
 if (isHiveMindEnabled()) {
   bootstrapHiveMind()
     .then(() => startHiveMindBackgroundSync())
-    .catch(e => log("warn", "hivemind", `Bootstrap failed: ${e?.message ?? e}`));
+    .catch(e => log("warn", "hivemind", `Bootstrap failed: ${e?.message ?? String(e)}`));
 } else {
   log("hivemind", "Hive Mind not configured (hive.url / hive.apiKey missing)");
 }
@@ -71,7 +71,9 @@ if (isTTY) {
   setPromptRefreshInterval(_promptRefreshInterval);
 
   // Start autonomous cycles immediately on launch
-  launchCron();
+  try { launchCron(); } catch (e) {
+    log("warn", "startup", `Cron startup failed: ${e?.message ?? String(e)}`);
+  }
   runStartupFetch().catch(e => log("error", "startup", `Startup fetch failed: ${e?.message ?? String(e)}`));
 
   // Wire up REPL slash commands

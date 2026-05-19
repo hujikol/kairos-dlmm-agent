@@ -143,6 +143,13 @@ Daily PnL today: $${(pnl.realized || 0).toFixed(2)} (profit target: $${pnl.thres
 PRE-LOADED CANDIDATES (${passingCount} pools):
 ${candidateBlocks.join("\n\n")}
 
+DECISION RULES:
+- You MUST call deploy_position if ANY candidate has pass=YES in its sim: line, OR if any candidate has smart_money_buy or kol_in_clusters=true.
+- Do NOT invent or apply filter labels not present in the candidate block (e.g. "RealTop10 filter", "Holder quality: failed"). Reject candidates only by referencing explicit fields from the candidate block.
+- If ALL candidates have pass=NO AND no smart money signal, report: *Decision:* NO DEPLOY | *analysis:* <reasons from sim failures> | *rejected:* <from candidate sim lines>
+- NEVER skip a candidate by inventing a reason not shown in the METRICS/AUDIT/SIM lines.
+- When a candidate has smart_money_buy=true or kol_in_clusters=true, treat it as a strong positive signal — do not apply additional thresholds beyond what code filters already applied.
+
 STEPS:
 1. Review each candidate's simulation results (sim: line). Prefer pools with passes=YES, low risk_score, and high confidence.
 2. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and simulation output.

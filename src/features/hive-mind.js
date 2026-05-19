@@ -247,7 +247,7 @@ export async function registerHiveMindAgent({ reason = "heartbeat" } = {}) {
         capabilities: {
           telegram: !!process.env.TELEGRAM_BOT_TOKEN,
           lpagent: !!process.env.LPAGENT_API_KEY,
-          lpAgentRelay: config.lpAgentRelayEnabled || false,
+          lpAgentRelay: config.api?.lpAgentRelayEnabled ?? false,
           dryRun: process.env.DRY_RUN === "true",
         },
       },

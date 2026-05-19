@@ -10,6 +10,7 @@ import { generateBriefing } from "../notifications/briefing.js";
 import { captureError } from "../instrument.js";
 import { timers, _busyState, _timersState } from "./state/scheduler-state.js";
 import { runManagementCycle, runScreeningCycle } from "./cycles.js";
+import { captureDailySnapshot } from "./daily-snapshot.js";
 
 // ─── Cron-only constants ─────────────────────────────────────────────────────
 // PnL polling interval driven by config (in seconds, converted to ms below)
@@ -207,7 +208,16 @@ export async function startCronJobs() {
     }
   });
 
-  _cronState.tasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog, maintenanceTask];
+  const dailySnapshotTask = new Cron("0 0 * * *", { timezone: "Asia/Jakarta" }, async () => {
+    try {
+      await captureDailySnapshot();
+    } catch (e) {
+      try { captureError(e, { phase: "daily_snapshot" }); } catch {}
+      log("error", "scheduler", `Daily snapshot error: ${e?.message ?? String(e)}`);
+    }
+  });
+
+  _cronState.tasks = [mgmtTask, screenTask, briefingTask, briefingWatchdog, maintenanceTask, dailySnapshotTask];
   _cronState._pnlPollInterval = pnlPollInterval;
 
   // WAL checkpoint every 6 hours

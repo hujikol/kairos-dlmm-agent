@@ -6,6 +6,7 @@
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
+import { getDB } from "./db.js";
 import {
   timers,
   _busyState,
@@ -34,9 +35,11 @@ import {
 } from "./management-helpers.js";
 import { SCREENING_COOLDOWN_MS } from "./constants.js";
 import { defaultGateway as agentGateway } from "./agent-gateway.js";
+import { startCycleOutcome, updateCycleOutcome, finalizeCycleOutcome } from "./cycle-outcome.js";
 
 export async function runManagementCycle({ silent = false, gateway = agentGateway } = {}) {
   const cycleStart = Date.now();
+  const cycleId = startCycleOutcome("management");
   if (_busyState._managementBusy) return null;
   _busyState._managementBusy = true;
   timers.managementLastRun = Date.now();
@@ -47,7 +50,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
   try {
     const posStart = Date.now();
     const [livePositions, currentBalance] = await Promise.all([
-      getMyPositions({ force: true }).catch(e => { log("warn", "cron", `getMyPositions failed: ${e?.message ?? e}`); return null; }),
+      getMyPositions({ force: true }).catch(e => { log("warn", "cron", `getMyPositions failed: ${e?.message ?? String(e)}`); return null; }),
       getWalletBalances(),
     ]);
     log("info", "cron", `[TIMING] getMyPositions + getWalletBalances: ${Date.now() - posStart}ms`);
@@ -65,16 +68,16 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
     if (positions.length === 0) {
       log("debug", "cron", "No open positions — triggering screening cycle");
-      import("./screening-cycle.js").then(({ runScreeningCycle }) => {
-        if (runScreeningCycle) {
-          const p = runScreeningCycle();
-          if (p && typeof p.catch === "function") {
-            p.catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
-          }
-        } else {
-          log("error", "cron", "Screening cycle module missing runScreeningCycle export");
+      try {
+        const { runScreeningCycle } = await import("./screening-cycle.js");
+        const screenReport = await runScreeningCycle({ silent: true });
+        if (screenReport) {
+          log("info", "cron", `Screening completed: ${screenReport.slice(0, 200)}`);
         }
-      }).catch(e => log("error", "cron", `Failed to load screening cycle: ${e?.message ?? e}`));
+      } catch (e) {
+        const msg = e && typeof e.message === "string" ? e.message : String(e ?? "unknown error");
+        log("error", "cron", `Failed to trigger screening: ${msg}`);
+      }
       return null;
     }
 
@@ -128,6 +131,22 @@ ${addition}`;
 ${addition}`;
     }
 
+    for (const cr of _closeResults) {
+      const pnlVal = cr.pnl_pct ?? cr.pnl_usd ?? null;
+      if (pnlVal !== null) {
+        updateCycleOutcome(cycleId, { pnl_at_close: pnlVal });
+      }
+    }
+
+    for (const position of closeActions) {
+      if (position.pool) {
+        const db = getDB();
+        db.prepare(
+          "UPDATE rejected_candidates SET pnl_at_close = ? WHERE pool_address = ? AND pnl_at_close IS NULL"
+        ).run(position.pnl_pct ?? position.pnl_usd ?? null, position.pool);
+      }
+    }
+
     // Only INSTRUCTION actions go to LLM (require interpretation)
     if (instructionActions.length > 0) {
       log("debug", "cron", `Management: ${instructionActions.length} INSTRUCTION action(s) — invoking LLM`);
@@ -178,23 +197,21 @@ ${addition}`;
         return;
       }
       if (_busyState._screeningBusy) return;
-      import("./screening-cycle.js").then(({ runScreeningCycle }) => {
-        // Re-check to avoid race: if another call set _timersState.screeningLastTriggered while we were waiting for the lock
+      try {
+        const { runScreeningCycle } = await import("./screening-cycle.js");
         if (_timersState.screeningLastTriggered !== lastTriggeredAt) {
           log("debug", "cron", `Post-management screening skipped — already triggered by concurrent call`);
-        } else if (runScreeningCycle) {
-          log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
-          const p = runScreeningCycle();
-          if (p && typeof p.catch === "function") {
-            p.catch((e) => { log("error", "cron", `Triggered screening failed: ${e?.message ?? e}`); });
-          }
         } else {
-          log("error", "cron", "Screening cycle module missing runScreeningCycle export");
+          log("info", "cron", `Post-management: ${afterCount}/${config.risk.maxPositions} positions — triggering screening`);
+          const screenReport = await runScreeningCycle({ silent: true });
+          if (screenReport) {
+            log("info", "cron", `Post-management screening result: ${screenReport.slice(0, 200)}`);
+          }
         }
-      }).catch(e => {
+      } catch (e) {
         _busyState._screeningBusy = false;
-        log("error", "cron", `Failed to import screening cycle: ${e?.message ?? String(e)}`);
-      });
+        log("error", "cron", `Failed to trigger post-management screening: ${String(e ?? "")}`);
+      }
     }
 
   } catch (error) {
@@ -236,5 +253,6 @@ ${addition}`;
       log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (silent or telegram disabled)`);
     }
   }
+  finalizeCycleOutcome(cycleId);
   return mgmtReport;
 }

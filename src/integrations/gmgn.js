@@ -31,6 +31,7 @@ import { fetchChartIndicatorsForMint, checkBounceSetup } from "../tools/chart-in
 setDefaultResultOrder("ipv4first");
 
 const METEORA_DLMM_API = "https://dlmm.datapi.meteora.ag";
+const GMGN_DELAY_MS = 2500;
 
 let _lastGmgnRequestAt = 0;
 
@@ -41,10 +42,9 @@ function sleep(ms) {
 }
 
 async function paceGmgnRequest() {
-  const delayMs = Math.max(0, Number(config.gmgn?.requestDelayMs ?? 350));
-  if (!delayMs) return;
   const elapsed = Date.now() - _lastGmgnRequestAt;
-  if (elapsed < delayMs) await sleep(delayMs - elapsed);
+  const waitMs = Math.max(0, GMGN_DELAY_MS - elapsed);
+  if (waitMs > 0) await sleep(waitMs);
   _lastGmgnRequestAt = Date.now();
 }
 

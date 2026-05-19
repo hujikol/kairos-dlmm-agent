@@ -25,6 +25,7 @@ import {
 } from "./pool.js";
 import { fetchDlmmPnlForPool } from "./pnl.js";
 import { METEORA_POSITIONS_CACHE_TTL_MS } from "../../core/constants.js";
+import { withRetry, classifyError, ErrorType } from "../../utils/retry.js";
 
 // ─── Constants ───────────────────────────────────────────────────
 /** Default slippage in basis points (1000 bps = 10%) — raised from 10 bps to fix ExceededBinSlippageTolerance on wide-range positions */
@@ -321,7 +322,10 @@ async function _fetchPositionsFromMeteora({ walletAddress, force, silent }) {
   if (!silent) log("debug", "positions", "Fetching portfolio via Meteora portfolio API...");
   try {
     const portfolioUrl = `${process.env.METEORA_DLMM_API_BASE || "https://dlmm.datapi.meteora.ag"}/portfolio/open?user=${walletAddress}`;
-    const res = await fetch(portfolioUrl);
+    const res = await withRetry(
+      (attempt) => fetch(portfolioUrl),
+      { maxRetries: 3, initialDelayMs: 2000, shouldRetry: (e) => classifyError(e) !== ErrorType.VALIDATION }
+    );
     if (res.ok) {
       const portfolio = await res.json();
       pools = portfolio.pools || [];

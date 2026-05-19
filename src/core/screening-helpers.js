@@ -124,6 +124,11 @@ export function applyHardFilters(allCandidates, config, prePositions) {
         return false;
       }
     }
+    const minSmartDegenCount = config.screening.minSmartDegenCount ?? 1;
+    if (minSmartDegenCount > 0 && !pool.smart_money_buy && !pool.kol_in_clusters) {
+      log("info", "screening", `SmartMoney filter: dropped ${pool.name} — no smart money signal (smart_money_buy=${pool.smart_money_buy}, kol_in_clusters=${pool.kol_in_clusters})`);
+      return false;
+    }
     return true;
   });
 }

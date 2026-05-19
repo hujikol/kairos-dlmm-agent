@@ -6,7 +6,7 @@
   "license": "MIT",
   "main": "src/index.js",
   "bin": {
-    "meridian": "src/cli.js"
+    "kairos": "src/cli.js"
   },
   "scripts": {
     "setup": "node src/setup.js",

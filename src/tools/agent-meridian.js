@@ -13,6 +13,7 @@
  */
 
 import { config } from "../config.js";
+import { withRetry, classifyError } from "../utils/retry.js";
 import dns from "dns";
 
 // Force IPv4 to avoid IPv6 issues with the Agent Meridian relay
@@ -192,9 +193,14 @@ async function agentMeridianFetch(pathname, options = {}, timeoutMs, attempt) {
     ...(fetchOptions.headers || {}),
   };
 
-  const res = timeoutMs
-    ? await fetchWithTimeout(url, { ...fetchOptions, headers }, timeoutMs)
-    : await fetch(url, { ...fetchOptions, headers });
+  const fetchPromise = timeoutMs
+    ? fetchWithTimeout(url, { ...fetchOptions, headers }, timeoutMs)
+    : fetch(url, { ...fetchOptions, headers });
+
+  const res = await withRetry(
+    () => fetchPromise,
+    { maxRetries: 3, initialDelayMs: 2000, shouldRetry: (e) => classifyError(e) !== ErrorType.VALIDATION }
+  );
 
   const text = await res.text().catch(() => "");
   let payload = {};

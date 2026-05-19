@@ -7,6 +7,7 @@ import { getWallet } from "./swaps.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { balanceCache } from "../../core/cache-manager.js";
 import { createCircuitBreaker, CircuitOpenError } from "../../core/circuit-breaker.js";
+import { withRetry, classifyError } from "../../utils/retry.js";
 
 // Helius API breaker — protects external API calls only, not RPC fallback path
 const heliusApi = createCircuitBreaker("heliusApi", {
@@ -150,7 +151,10 @@ export async function getWalletBalances() {
   try {
     if (heliusApi.isOpen()) throw new CircuitOpenError("heliusApi");
     const url = `https://api.helius.xyz/v1/wallet/${walletAddress}/balances?api-key=${HELIUS_KEY}`;
-    const res = await fetch(url).catch(err => { throw new Error(`fetch failed: ${err?.message}`); });
+    const res = await withRetry(
+      (attempt) => fetch(url).catch(err => { throw new Error(`fetch failed: ${err?.message}`); }),
+      { maxRetries: 3, initialDelayMs: 2000 }
+    );
 
     if (!res.ok) {
       heliusApi.recordFailure();

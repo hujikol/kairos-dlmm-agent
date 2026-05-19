@@ -11,3 +11,4 @@ export { handleSet } from "./set.js";
 export { handleTeach } from "./teach.js";
 export { handleCaveman } from "./caveman.js";
 export { handleLearn } from "./learn.js";
+export { handleSafeModeCommand } from "./safe-mode.js";

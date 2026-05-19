@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { log, logAction } from "../core/logger.js";
+import { isSafeModeActive } from "../core/safe-mode.js";
 import { BALANCE_CACHE_AGE_MS } from "../core/constants.js";
 import { cachedTool } from "./cache.js";
 import { registerCronRestarter as _registerCron } from "./admin.js";
@@ -152,6 +153,9 @@ let _executeToolImpl = async (name, args) => {
  * Run safety checks before executing write operations.
  */
 async function runSafetyChecks(name, args) {
+  if (isSafeModeActive()) {
+    return { pass: false, reason: "safe_mode_active" };
+  }
   switch (name) {
     case "deploy_position": {
       // Lazy import to avoid circular dependency
@@ -172,6 +176,17 @@ async function runSafetyChecks(name, args) {
       const alreadyInPool = positions.positions.some((p) => p.pool === args.pool_address);
       if (alreadyInPool) {
         return { pass: false, reason: `Already have an open position in pool ${args.pool_address}. Cannot open duplicate.` };
+      }
+
+      const MAX_POSITIONS_PER_BASE_MINT = 3;
+      const baseMintCounts = {};
+      for (const pos of positions.positions) {
+        const mint = (pos.base_mint || "").toLowerCase();
+        baseMintCounts[mint] = (baseMintCounts[mint] || 0) + 1;
+      }
+      const mint = (args.base_mint || "").toLowerCase();
+      if (mint && (baseMintCounts[mint] || 0) >= MAX_POSITIONS_PER_BASE_MINT) {
+        return { pass: false, reason: `exposure_cap: base mint ${mint} already has ${baseMintCounts[mint]} positions (max ${MAX_POSITIONS_PER_BASE_MINT})` };
       }
 
       if (args.base_mint) {

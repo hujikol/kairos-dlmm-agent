@@ -12,10 +12,10 @@ export function detectMarketPhase(pool) {
 }
 
 export const PHASE_CONFIG = {
-  pump:       { description: "Price surging >20%, volume high",         preferredStrategies: ["Wide BidAsk", "DAMM v2 Early", "Pump-and-Run"] },
-  runner:     { description: "Sustained uptrend, volume strong",        preferredStrategies: ["Wide BidAsk", "Pump-and-Run", "Wait-for-Pump"] },
-  pullback:   { description: "Price down >10% from recent",            preferredStrategies: ["Heart Attack", "Wait-for-Pump"] },
-  bear:       { description: "Sustained downtrend, low volume",         preferredStrategies: ["Bear Accumulation", "Slowcook", "Wide BidAsk"] },
-  consolidation: { description: "Low volatility, stable volume",        preferredStrategies: ["Slowcook", "Tight Range 10%", "Setup Switch"] },
-  normal:     { description: "Mixed signals, sideways movement",        preferredStrategies: ["Fibonacci Range", "Slowcook", "Wide BidAsk"] },
+  pump:          { rangeMultiplier: 1.5, description: "Price surging >20%, volume high",    preferredStrategies: ["Wide BidAsk", "DAMM v2 Early", "Pump-and-Run"] },
+  runner:        { rangeMultiplier: 1.2, description: "Sustained uptrend, volume strong", preferredStrategies: ["Wide BidAsk", "Pump-and-Run", "Wait-for-Pump"] },
+  pullback:      { rangeMultiplier: 0.8, description: "Price down >10% from recent",       preferredStrategies: ["Heart Attack", "Wait-for-Pump"] },
+  bear:          { rangeMultiplier: 0.6, description: "Sustained downtrend, low volume",    preferredStrategies: ["Bear Accumulation", "Slowcook", "Wide BidAsk"] },
+  consolidation: { rangeMultiplier: 1.0, description: "Low volatility, stable volume",     preferredStrategies: ["Slowcook", "Tight Range 10%", "Setup Switch"] },
+  normal:        { rangeMultiplier: 1.0, description: "Mixed signals, sideways movement",  preferredStrategies: ["Fibonacci Range", "Slowcook", "Wide BidAsk"] },
 };

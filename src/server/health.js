@@ -1,6 +1,7 @@
 import http from "http";
 import { log } from "../core/logger.js";
 import { timers } from "../core/state/scheduler-state.js";
+import { isSafeModeActive } from "../core/safe-mode.js";
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || "3030", 10);
 
@@ -36,6 +37,7 @@ export function createHealthServer() {
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         lastCycle: timers.managementLastRun || null,
+        safe_mode_active: isSafeModeActive(),
       }));
     } else {
       res.writeHead(404);

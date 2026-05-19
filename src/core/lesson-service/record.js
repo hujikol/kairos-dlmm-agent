@@ -143,12 +143,23 @@ export async function recordPerformance(perf) {
     } catch (e) {
       log("warn", "evolve", `Sizing matrix evolution failed: ${e?.message ?? String(e)}`);
     }
+
+    // ── Auto filter evolution (MIN=5, analyzes winners vs losers) ─────────────
+    try {
+      const { analyzeFilterPerformance } = await import("../auto-filter-evolver.js");
+      const filterChanges = analyzeFilterPerformance();
+      if (filterChanges?.length > 0) {
+        log("info", "evolver", `Auto-evolved ${filterChanges.length} filter parameters`);
+      }
+    } catch (e) {
+      log("warn", "evolver", `Filter evolution failed: ${e?.message ?? String(e)}`);
+    }
   }
 
   // Push to Hive Mind — individual lesson + performance event
   const { pushHiveLesson, pushHivePerformanceEvent } = await import("../../features/hive-mind.js");
-  await pushHiveLesson(lesson).catch(e => log("warn", "hivemind", `pushHiveLesson failed: ${e?.message}`));
-  await pushHivePerformanceEvent(entry).catch(e => log("warn", "hivemind", `pushHivePerformanceEvent failed: ${e?.message}`));
+  await pushHiveLesson(lesson).catch(e => log("warn", "hivemind", `pushHiveLesson failed: ${e?.message ?? String(e)}`));
+  await pushHivePerformanceEvent(entry).catch(e => log("warn", "hivemind", `pushHivePerformanceEvent failed: ${e?.message ?? String(e)}`));
 
   // Record decision log entry for the close
   const { recordDecision } = await import("../decision-log.js");
