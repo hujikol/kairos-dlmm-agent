@@ -110,3 +110,14 @@ await it("cache returns same result on second call without re-fetching holders",
 
   if (callCount !== 1) throw new Error(`Expected 1 holder call (cache hit on 2nd), got ${callCount}`);
 });
+
+await it("isTokenSafe blocks deployment when holder data is unavailable", async () => {
+  const { isTokenSafe } = await import("../src/features/token-security.js");
+  _injectHolders(() => { throw new Error("holder API unavailable"); });
+
+  const result = await isTokenSafe("UnavailableToken");
+  if (result.safe !== false) throw new Error(`Expected safe=false, got ${JSON.stringify(result)}`);
+  if (!result.reason?.includes("unavailable")) {
+    throw new Error(`Expected unavailable reason, got: ${result.reason}`);
+  }
+});

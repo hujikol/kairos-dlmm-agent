@@ -66,7 +66,7 @@ export function applyHardFilters(allCandidates, config, prePositions) {
       return false;
     }
     if (baseMint) {
-      const corr = checkTokenCorrelation(prePositions.positions || [], baseMint);
+      const corr = checkTokenCorrelation(prePositions.positions || [], baseMint, config.risk?.maxPositionsPerToken ?? 1);
       if (corr.exceeds) {
         log("info", "screening", `Correlation filter: dropped ${pool.name} — already ${corr.count} position(s) on token`);
         return false;

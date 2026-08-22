@@ -9,12 +9,10 @@ import { pushNotification } from "../notifications/queue.js";
 import { setPositionInstruction } from "../core/state/registry.js";
 import { addrShort } from "./addrShort.js";
 import { recordDecision } from "../core/decision-log.js";
-import { claimAndSweepSol } from "../integrations/solana/close-accounts.js";
 
 export const positionWriteTools = new Set([
   "deploy_position",
   "close_position",
-  "claim_position_rent",
 ]);
 
 export function registerPositions(registerTool) {
@@ -141,7 +139,4 @@ export function registerPositions(registerTool) {
   // Pool memory
   registerTool("get_pool_memory", getPoolMemory);
   registerTool("add_pool_note", addPoolNote);
-
-  // Rent reclaim
-  registerTool("claim_position_rent", claimAndSweepSol);
 }

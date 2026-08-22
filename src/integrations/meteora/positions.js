@@ -593,6 +593,18 @@ async function _enrichPositionsWithPnL(pools, { walletAddress, silent: _silent }
 }
 
 /**
+ * Sum positions' unclaimed_fees_usd (null/missing count as 0), rounded to 2 decimals.
+ * @param {Array} positions
+ * @returns {number}
+ */
+export function sumUnclaimedFeesUsd(positions) {
+  return roundTo(
+    positions.reduce((acc, p) => acc + (p?.unclaimed_fees_usd ?? 0), 0),
+    2,
+  );
+}
+
+/**
  * _syncPositionsWithState — reconciles open positions with local SQLite state
  * (auto-closes missing positions after grace period) and writes to cache.
  * @param {Array} positions - Enriched positions from _enrichPositionsWithPnL
@@ -601,7 +613,12 @@ async function _enrichPositionsWithPnL(pools, { walletAddress, silent: _silent }
  */
 async function _syncPositionsWithState(positions, { walletAddress }) {
   await syncOpenPositions(positions.map(p => p.position));
-  const result = { wallet: walletAddress, total_positions: positions.length, positions };
+  const result = {
+    wallet: walletAddress,
+    total_positions: positions.length,
+    total_unclaimed_fees_usd: sumUnclaimedFeesUsd(positions),
+    positions,
+  };
   positionsCache.set("positions", result, METEORA_POSITIONS_CACHE_TTL_MS);
   return result;
 }
@@ -624,14 +641,17 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
   // Test injection check — setForTesting uses Infinity expiry so always takes precedence
   const testOverride = positionsCache.get("positions");
   if (testOverride !== undefined) {
-    return Promise.resolve(testOverride);
+    // ponytail: aggregate at response boundary so cached/injected results built
+    // before this field existed still satisfy the response contract; drop once
+    // cache is guaranteed post-deploy.
+    return { ...testOverride, total_unclaimed_fees_usd: sumUnclaimedFeesUsd(testOverride.positions) };
   }
 
   // Cache check (skip if force=true)
   if (!force) {
     const cached = positionsCache.get("positions");
     if (cached !== undefined) {
-      return cached;
+      return { ...cached, total_unclaimed_fees_usd: sumUnclaimedFeesUsd(cached.positions) };
     }
   }
 

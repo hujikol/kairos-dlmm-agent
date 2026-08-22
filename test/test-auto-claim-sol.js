@@ -1,58 +1,50 @@
-import { describe, it, beforeEach } from "node:test";
-import assert from "node:assert";
+/**
+ * Tests for the auto-claim SOL rent removal (local-work-scan review fix).
+ *
+ * Root cause: claimAndSweepSol built a SystemProgram.transfer FROM the DLMM
+ * position PDA. A PDA cannot sign — the tx always failed with missing
+ * signature. Position rent is already reclaimed on-chain by the SDK's
+ * shouldClaimAndClose/closePosition instructions during close.
+ *
+ * Contract after fix:
+ *  - close-accounts.js no longer exports claimAndSweepSol
+ *  - meteora/close.js no longer references it
+ *  - claim_position_rent tool is gone from registrations
+ *  - auto_claim_sol_enabled flag still exists and defaults false
+ *
+ * Run: node --test test/test-auto-claim-sol.js
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "fs";
 import Database from "better-sqlite3";
 import { _injectDB } from "../src/core/db.js";
-import { isFlagEnabled, setFlag } from "../src/core/feature-flags.js";
+import { isFlagEnabled } from "../src/core/feature-flags.js";
 
-describe("auto_claim_sol_enabled flag", () => {
-  beforeEach(() => {
-    const db = new Database(":memory:");
-    _injectDB(db);
-  });
-
-  it("is initialized to false by PLANNED_FLAGS migration", () => {
-    assert.strictEqual(isFlagEnabled("auto_claim_sol_enabled"), false);
-  });
-
-  it("setFlag(true) enables the flag", () => {
-    setFlag("auto_claim_sol_enabled", true);
-    assert.strictEqual(isFlagEnabled("auto_claim_sol_enabled"), true);
-  });
-
-  it("setFlag(false) disables the flag", () => {
-    setFlag("auto_claim_sol_enabled", false);
-    assert.strictEqual(isFlagEnabled("auto_claim_sol_enabled"), false);
-  });
+test("auto_claim_sol_enabled flag still defaults to false", () => {
+  _injectDB(new Database(":memory:"));
+  assert.strictEqual(isFlagEnabled("auto_claim_sol_enabled"), false);
 });
 
-describe("claim_position_rent tool registration", () => {
-  it("claim_position_rent is in MANAGER_TOOLS", async () => {
-    const { MANAGER_TOOLS } = await import("../src/agent/tools.js");
-    assert.ok(MANAGER_TOOLS.has("claim_position_rent"), "claim_position_rent should be in MANAGER_TOOLS");
-  });
+test("close-accounts.js no longer exports claimAndSweepSol", async () => {
+  const mod = await import("../src/integrations/solana/close-accounts.js");
+  assert.strictEqual(mod.claimAndSweepSol, undefined,
+    "claimAndSweepSol must be removed — position PDA cannot sign a transfer");
 });
 
-describe("claimAndSweepSol behavior", () => {
-  // Test the logic paths without making actual Solana calls.
-  // Real Solana integration tests should be done with a test validator.
+test("meteora/close.js no longer references claimAndSweepSol", () => {
+  const src = readFileSync(new URL("../src/integrations/meteora/close.js", import.meta.url), "utf8");
+  assert.ok(!src.includes("claimAndSweepSol"),
+    "close.js must not invoke the removed sweep");
+  assert.ok(!src.includes("claimed_sol_rent"),
+    "close.js must not surface claimed_sol_rent anymore");
+});
 
-  it("null account info returns success with amount=0", () => {
-    const _accountInfo = null;
-    const result = (_accountInfo == null) ? { success: true, amount: 0 } : null;
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.amount, 0);
-  });
-
-  it("zero lamports returns success with amount=0", () => {
-    const result = { success: true, amount: 0 };
-    assert.strictEqual(result.amount, 0);
-  });
-
-  it("positive lamports returns correct amount", () => {
-    const TEST_LAMPORTS = 1000000;
-    const accountInfo = { lamports: TEST_LAMPORTS };
-    const result = { success: true, amount: accountInfo.lamports };
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.amount, TEST_LAMPORTS);
-  });
+test("claim_position_rent tool is fully deregistered", () => {
+  const positionsSrc = readFileSync(new URL("../src/tools/positions.js", import.meta.url), "utf8");
+  const defsSrc = readFileSync(new URL("../src/tools/position-tools.js", import.meta.url), "utf8");
+  const agentSrc = readFileSync(new URL("../src/agent/tools.js", import.meta.url), "utf8");
+  assert.ok(!positionsSrc.includes("claim_position_rent"), "positions.js still registers claim_position_rent");
+  assert.ok(!defsSrc.includes("claim_position_rent"), "position-tools.js still defines claim_position_rent");
+  assert.ok(!agentSrc.includes("claim_position_rent"), "agent/tools.js still lists claim_position_rent");
 });

@@ -73,6 +73,32 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
       return false;
     })();
 
+    // Rule 0: velocity stop — fast drawdown within a short window.
+    // Skipped when pnlSuspect: a single glitched API reading looks like a crash.
+    if (!pnlSuspect && config.management.velocityStopEnabled !== false) {
+      const dropPct = config.management.velocityStopDropPct ?? 15;
+      const windowMin = config.management.velocityStopWindowMin ?? 5;
+      const samples = Array.isArray(p.pnl_samples)
+        ? p.pnl_samples.filter(s =>
+            s && Number.isFinite(s.age_minutes) && s.age_minutes >= 0 && s.age_minutes <= windowMin &&
+            Number.isFinite(s.pnl_pct))
+        : [];
+      let velocityReason = null;
+      if (samples.length > 0 && p.pnl_pct != null) {
+        // oldest in-window sample = baseline, current pnl_pct = newest reading
+        const baseline = samples.reduce((a, b) => (b.age_minutes > a.age_minutes ? b : a));
+        const drop = p.pnl_pct - baseline.pnl_pct;
+        if (drop <= -dropPct) velocityReason = `velocity stop: ${drop.toFixed(1)}% within ${windowMin}m`;
+      } else if (samples.length === 0 && p.prev_pnl_pct != null && p.pnl_pct != null) {
+        const drop = p.pnl_pct - p.prev_pnl_pct;
+        if (drop <= -dropPct) velocityReason = `velocity stop (cycle delta): ${drop.toFixed(1)}%`;
+      }
+      if (velocityReason) {
+        actionMap.set(p.position, { action: "CLOSE", rule: "velocity_stop", reason: velocityReason });
+        continue;
+      }
+    }
+
     // Rule 1: stop loss
     if (!pnlSuspect && p.pnl_pct != null && p.pnl_pct <= config.management.stopLossPct) {
       actionMap.set(p.position, { action: "CLOSE", rule: 1, reason: "stop loss" });
@@ -106,6 +132,13 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
     // Claim rule
     if ((p.unclaimed_fees_usd ?? 0) >= config.management.minClaimAmount) {
       actionMap.set(p.position, { action: "CLAIM" });
+      continue;
+    }
+    // Age-based claim — strand small fees no longer than maxClaimAgeMinutes
+    if (config.management.maxClaimAgeMinutes != null &&
+        (p.unclaimed_fees_usd ?? 0) > 0 &&
+        (p.age_minutes ?? 0) >= config.management.maxClaimAgeMinutes) {
+      actionMap.set(p.position, { action: "CLAIM", reason: `max claim age (${config.management.maxClaimAgeMinutes}m)` });
       continue;
     }
     actionMap.set(p.position, { action: "STAY" });

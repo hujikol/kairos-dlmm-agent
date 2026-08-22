@@ -19,11 +19,13 @@ import {
   triggerScreen,
 } from "./core/shared-handlers.js";
 import { buildAsciiTable } from "./core/shared-formatters.js";
+import { isReadOnlyTelegramCommand } from "./telegram-queue.js";
 
 // Module-level queue and concurrent handler counter
 // _telegramBusyCount tracks active handlers (named + LLM chat), allows parallel processing
 const _telegramBusyState = { _count: 0 };
 const _telegramQueue = [];
+let _drainingScheduled = false;
 
 export const _telegramBusy = _telegramBusyState;
 
@@ -51,31 +53,17 @@ async function safeSendError(error) {
   }
 }
 
-// Spawn parallel handlers up to MAX_CONCURRENT_TELEGRAM
-// NOTE: cycle busy flags are NOT checked here — queued Telegram messages (notifications,
-// chat responses) are lightweight and never start new cycles. Blocking drainage while
-// cycles run is what caused the stale queue problem.
-// This function is synchronous — call it after any async handler that may have
-// added items to the queue. It drains everything it can immediately.
+// Schedule one queue drain. setImmediate prevents synchronous recursive re-entry.
 export function drainTelegramQueue() {
-  // Synchronously drain as many queued items as concurrency allows.
-  // NOTE: telegramHandler itself manages _count (increment on entry, decrement in finally).
-  // Do NOT increment/decrement _count here — that caused double-counting, stale queues,
-  // and infinite-loop bugs.
-  while (_telegramQueue.length > 0) {
-    if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
-    const queued = _telegramQueue.shift();
-    if (!queued) break;
-    // Fire-and-forget — telegramHandler owns _count lifecycle
-    // Pass fromDrain=true so drained commands skip the busy-state re-queuing check.
-    // Without this, drained commands see _screeningBusy/_managementBusy still true
-    // and re-queue themselves, creating an infinite drain→re-queue→drain loop.
-    telegramHandler(queued, /* fromDrain */ true).then(() => {
-      drainTelegramQueue(); // recurse after handler completes to drain next
-    }).catch(() => {
-      drainTelegramQueue(); // on error, still drain next
-    });
-  }
+  if (_drainingScheduled) return;
+  _drainingScheduled = true;
+  setImmediate(() => {
+    _drainingScheduled = false;
+    while (_telegramQueue.length > 0 && _telegramBusyState._count < MAX_CONCURRENT_TELEGRAM) {
+      const queued = _telegramQueue.shift();
+      telegramHandler(queued, true).finally(drainTelegramQueue);
+    }
+  });
 }
 
 // ─── /teach subcommand handler ─────────────────────────────────────────────────
@@ -441,7 +429,7 @@ export async function telegramHandler(text, fromDrain = false) {
   const cycleBusy = _busyState._managementBusy || _busyState._screeningBusy;
   const atConcurrencyLimit = _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM;
 
-  if (!fromDrain && (cycleBusy || atConcurrencyLimit)) {
+  if (!fromDrain && (atConcurrencyLimit || (cycleBusy && !isReadOnlyTelegramCommand(text)))) {
     sendChatAction("typing").catch(() => {});
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(text);
@@ -501,6 +489,7 @@ export async function telegramHandler(text, fromDrain = false) {
     drainTelegramQueue();
   } finally {
     _telegramBusyState._count--;
+    drainTelegramQueue();
   }
 }
 

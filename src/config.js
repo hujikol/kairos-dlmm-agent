@@ -217,6 +217,12 @@ const _rawConfig = {
     autoClaimOnSwapAll:   u.management?.autoClaimOnSwapAll     ?? true,
     autoClaimOnZapOut:    u.management?.autoClaimOnZapOut      ?? true,
     dynamicSizing:        u.management?.dynamicSizing          ?? true,
+    // ─── Exit-risk & claim policy (local-work-scan review fixes) ───
+    velocityStopEnabled:   u.management?.velocityStopEnabled   ?? true,
+    velocityStopDropPct:   u.management?.velocityStopDropPct   ?? 15,
+    velocityStopWindowMin: u.management?.velocityStopWindowMin ?? 5,
+    holderRecheckEnabled:  u.management?.holderRecheckEnabled  ?? true,
+    maxClaimAgeMinutes:    u.management?.maxClaimAgeMinutes    ?? null,
   },
 
   // ─── OKX ────────────────────────────────

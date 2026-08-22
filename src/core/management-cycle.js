@@ -18,6 +18,7 @@ import { getTrackedPosition } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
 import { getStreak, incrementStreak, resetStreak } from "./state/index.js";
 import { recordPositionSnapshot, recallForPool } from "../features/pool-memory.js";
+import { isTokenSafeFresh, shouldCloseOnSecurityRecheck } from "../features/token-security.js";
 import { pushNotification, hasPendingNotifications } from "../notifications/queue.js";
 import { isEnabled as telegramIsEnabled, drainTelegramQueue } from "../notifications/telegram.js";
 import {
@@ -143,6 +144,26 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
     // ── Deterministic rule engine ─────────────────────────────────────
     const actionMap = computeManagementActions(positionData, exitMap, config, getTrackedPosition);
+
+    // ── Holder security recheck for open positions ──────────────────
+    // Fresh (cache-bypassing) check per open position's base token;
+    // affirmatively unsafe tokens merge into the rule-driven close pass.
+    if (config.management.holderRecheckEnabled) {
+      for (const p of positionData) {
+        if (!p.base_mint) continue;
+        let verdict;
+        try {
+          verdict = await isTokenSafeFresh(p.base_mint);
+        } catch (e) {
+          log("warn", "cron", "Security recheck failed for " + p.pair + ": " + (e?.message ?? e) + " — treating as safe");
+          continue;
+        }
+        if (shouldCloseOnSecurityRecheck(verdict)) {
+          log("info", "cron", "Security recheck UNSAFE for " + p.pair + " (" + p.base_mint + "): " + verdict.reason);
+          actionMap.set(p.position, { action: "CLOSE", reason: "security recheck failed: " + verdict.reason });
+        }
+      }
+    }
 
     // ── Build JS report ──────────────────────────────────────────────
     const needsAction = [...actionMap.values()].filter(a => a.action !== "STAY");

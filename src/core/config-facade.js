@@ -89,6 +89,11 @@ export function getManagementConfig() {
     lossStreakThreshold:         m.lossStreakThreshold         ?? 3,
     lossStreakMinPnlPct:         m.lossStreakMinPnlPct         ?? -1.0,
     lossStreakMinPositionAgeCycles: m.lossStreakMinPositionAgeCycles ?? 2,
+    velocityStopEnabled:         m.velocityStopEnabled         ?? true,
+    velocityStopDropPct:         m.velocityStopDropPct         ?? 15,
+    velocityStopWindowMin:       m.velocityStopWindowMin       ?? 5,
+    holderRecheckEnabled:        m.holderRecheckEnabled        ?? true,
+    maxClaimAgeMinutes:          m.maxClaimAgeMinutes          ?? null,
   });
 }
 

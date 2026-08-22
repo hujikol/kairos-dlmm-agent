@@ -63,6 +63,30 @@ export async function isTokenSafe(tokenMint) {
   return result;
 }
 
+/**
+ * Same checks as isTokenSafe but always performs a fresh fetch (bypasses
+ * the result cache). Used to recheck OPEN positions in the management
+ * cycle, where a 5-minute-old verdict is too stale. Refreshes the cache
+ * so the deploy gate reads the freshest data next.
+ */
+export async function isTokenSafeFresh(tokenMint) {
+  if (!tokenMint) return { safe: false, reason: "no mint provided" };
+
+  const result = await _isTokenSafeImpl(tokenMint);
+  _cache.set(tokenMint, result, CACHE_TTL_MS);
+  return result;
+}
+
+/**
+ * Management-level close decision from a security recheck result.
+ * true ONLY when the token is affirmatively unsafe. "holder security
+ * data unavailable" (API errors / no data) yields false — availability
+ * is not unsafety; the deploy gate stays fail-closed.
+ */
+export function shouldCloseOnSecurityRecheck(result) {
+  return Boolean(result) && result.safe === false && result.reason !== "holder security data unavailable";
+}
+
 async function _isTokenSafeImpl(tokenMint) {
   // 1. Blacklist check — fast path, no API call needed
   if (isBlacklisted(tokenMint)) {
@@ -105,13 +129,11 @@ async function _isTokenSafeImpl(tokenMint) {
     }
   } catch (e) {
     log("warn", "token-security", `Failed to fetch holders for ${tokenMint}: ${e.message}`);
-    // Can't determine — fail open (screener will apply other filters)
-    return { safe: true };
+    return { safe: false, reason: "holder security data unavailable" };
   }
 
   if (!holders || !holders.holders || holders.holders.length === 0) {
-    // No holder data — fail open
-    return { safe: true };
+    return { safe: false, reason: "holder security data unavailable" };
   }
 
   // Filter out pool addresses from concentration calculation

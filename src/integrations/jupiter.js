@@ -1,11 +1,12 @@
 const DATAPI_BASE = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag/v1";
 import { createCircuitBreaker, CircuitOpenError } from "../core/circuit-breaker.js";
+import { CacheManager } from "../core/cache-manager.js";
 
 // ─── OKX Enrichment Cache ─────────────────────────────────────────────────────
 // Caches OKX getAdvancedInfo + getClusterList results per token to avoid
 // redundant API calls when both getTokenInfo and getTokenHolders are invoked
 // for the same token in the same enrichment pass.
-const okxEnrichmentCache = new Map();
+const okxEnrichmentCache = new CacheManager({ maxEntries: 500 });
 const OKX_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
@@ -16,16 +17,15 @@ const OKX_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
  * @returns {Promise<{advancedData: object|null, clusterList: array}>}
  */
 async function getOkxEnrichmentCached(mint, getAdvancedInfo, getClusterList) {
-  const now = Date.now();
   const cached = okxEnrichmentCache.get(mint);
-  if (cached && (now - cached.timestamp) < OKX_CACHE_TTL_MS) {
+  if (cached) {
     return { advancedData: cached.advancedData, clusterList: cached.clusterList };
   }
   const [advancedData, clusterList] = await Promise.all([
     getAdvancedInfo(mint).catch(() => null),
     getClusterList(mint).catch(() => []),
   ]);
-  okxEnrichmentCache.set(mint, { advancedData, clusterList, timestamp: now });
+  okxEnrichmentCache.set(mint, { advancedData, clusterList }, OKX_CACHE_TTL_MS);
   return { advancedData, clusterList };
 }
 

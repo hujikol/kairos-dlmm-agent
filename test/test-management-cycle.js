@@ -11,7 +11,7 @@
  * Or:  node test/test-management-cycle.mjs
  */
 
-import { _test, _describe, beforeEach as _beforeEach, mock as _mock } from "node:test";
+import { test, describe, beforeEach as _beforeEach, mock as _mock } from "node:test";
 import assert from "node:assert";
 import { computeManagementActions } from "../src/core/management-helpers.js";
 
@@ -29,7 +29,10 @@ const mockConfig = {
     trailingTakeProfit: true,
     trailingTriggerPct: 3,
     trailingDropPct: 1.5,
-  },
+    velocityStopEnabled: true,
+    velocityStopDropPct: 15,
+    velocityStopWindowMin: 5,
+    },
   risk: { maxPositions: 3 },
   schedule: { managementIntervalMin: 10 },
 };
@@ -61,11 +64,14 @@ describe("Rule Engine — pnlSuspect detection", () => {
     assert.equal(result.action, "CLOSE"); // -95% < -50% stop loss → close
   });
 
-  test("SUSPECT: API returns -95% but prev was -5% and position still has value", () => {
-    const pos = { position: "pos1", pnl_pct: -95, total_value_usd: 1.5 }; // bad API data
-    const tracked = { amount_sol: 1, prev_pnl_pct: -5 }; // prev was fine
+  test("extreme drop with healthy prev is treated as REAL loss (not suspect) — closes", () => {
+    // pnlSuspect only fires when prev was ALSO extreme (or null): a single glitched
+    // reading from -5 to -95 is treated as a genuine crash → stop loss closes.
+    // See src/core/management-helpers.js pnlSuspect: `prev == null || prev > PNL_SUSPECT_PCT`.
+    const pos = { position: "pos1", pnl_pct: -95, total_value_usd: 1.5 };
+    const tracked = { amount_sol: 1, prev_pnl_pct: -5 }; // prev was fine → drop is real
     const result = computeAction(pos, tracked, mockConfig);
-    assert.equal(result.action, "STAY"); // pnlSuspect=true → skip stop loss, stay
+    assert.equal(result.action, "CLOSE"); // stop loss fires
   });
 
   test("NOT suspect: position is genuinely near-zero value (real loss)", () => {
@@ -191,7 +197,8 @@ describe("Rule Engine — Rule 4: Stale Above Range", () => {
 describe("Rule Engine — Rule 5: Low Fee Yield", () => {
 
   test("closes when fee_per_tvl_24h below threshold and position is old enough", () => {
-    const pos = { position: "pos1", fee_per_tvl_24h: 5, age_minutes: 120, pnl_pct: 0 };
+    // Yield check requires MIN_POSITION_AGE_FOR_YIELD_CHECK_MS = 24h (constants.js:62)
+    const pos = { position: "pos1", fee_per_tvl_24h: 5, age_minutes: 1440, pnl_pct: 0 };
     const tracked = {};
     const result = computeAction(pos, tracked, mockConfig);
     assert.equal(result.action, "CLOSE");
@@ -257,5 +264,118 @@ describe("Rule Engine — Priority order", () => {
     const result = computeAction(pos, tracked, mockConfig);
     assert.equal(result.action, "CLOSE");
     assert.equal(result.rule, 4); // OOR rule fires first in the chain
+  });
+});
+
+describe("Rule Engine — Velocity Stop", () => {
+
+  test("CLOSE when drop within window meets threshold (samples newest-first)", () => {
+    // Samples: age 1m pnl -20% (newest), age 4m pnl +2% (oldest in window)
+    // → drop = -20 - 2 = -22% within 5m window
+    const pos = {
+      position: "pos1", pnl_pct: -20, total_value_usd: 1.5,
+      pnl_samples: [{ age_minutes: 1, pnl_pct: -20 }, { age_minutes: 4, pnl_pct: 2 }],
+    };
+    const tracked = {};
+    const result = computeAction(pos, tracked, mockConfig);
+    assert.equal(result.action, "CLOSE");
+    assert.equal(result.rule, "velocity_stop");
+    assert.match(result.reason, /velocity stop/);
+    assert.match(result.reason, /-22/);
+  });
+
+  test("does NOT fire when the same drop spread over longer than window", () => {
+    // Oldest sample within 5m window is age 3 (+1%); drop from newest (0%) to it is only -1%
+    // The big drop happened vs an older-than-window sample which must be ignored
+    const pos = {
+      position: "pos1", pnl_pct: 0, total_value_usd: 1.5,
+      pnl_samples: [
+        { age_minutes: 1, pnl_pct: 0 },
+        { age_minutes: 3, pnl_pct: 1 },
+        { age_minutes: 60, pnl_pct: 20 }, // outside window — ignored
+      ],
+    };
+    const tracked = {};
+    const result = computeAction(pos, tracked, mockConfig);
+    assert.notEqual(result.action, "CLOSE");
+  });
+
+  test("skips samples with missing/bad pnl_pct and empty/single-sample arrays", () => {
+    // Only one valid sample in window → no baseline → no fire
+    const pos = {
+      position: "pos1", pnl_pct: -30, total_value_usd: 1.5,
+      pnl_samples: [{ age_minutes: 2 }, { age_minutes: 4, pnl_pct: null }],
+    };
+    const tracked = {};
+    const result = computeAction(pos, tracked, mockConfig);
+    assert.notEqual(result.action, "CLOSE");
+
+    // empty array
+    const pos2 = { position: "pos2", pnl_pct: -30, total_value_usd: 1.5, pnl_samples: [] };
+    const result2 = computeAction(pos2, tracked, mockConfig);
+    assert.notEqual(result2.action, "CLOSE");
+  });
+
+  test("fallback: closes on cycle delta when no samples and prev_pnl_pct present", () => {
+    const pos = { position: "pos1", pnl_pct: -18, total_value_usd: 1.5 };
+    const tracked = {}; // getTrackedPosition returns tracked; prev read from pos.prev_pnl_pct
+    const result = computeAction({ ...pos, prev_pnl_pct: -2 }, tracked, mockConfig);
+    assert.equal(result.action, "CLOSE");
+    assert.equal(result.rule, "velocity_stop");
+    assert.match(result.reason, /cycle delta/);
+  });
+
+  test("no fallback fire when cycle delta smaller than threshold", () => {
+    const result = computeAction(
+      { position: "pos1", pnl_pct: -10, prev_pnl_pct: -5, total_value_usd: 1.5 },
+      {}, mockConfig,
+    );
+    assert.notEqual(result.action, "CLOSE");
+  });
+
+  test("disabled via velocityStopEnabled: false", () => {
+    const cfg = { ...mockConfig, management: { ...mockConfig.management, velocityStopEnabled: false } };
+    const pos = {
+      position: "pos1", pnl_pct: 2, total_value_usd: 1.5,
+      pnl_samples: [{ age_minutes: 1, pnl_pct: 30 }, { age_minutes: 4, pnl_pct: -40 }],
+    };
+    const result = computeAction(pos, {}, cfg);
+    assert.notEqual(result.action, "CLOSE");
+  });
+
+  test("boundary equality: exactly -15% drop fires", () => {
+    const pos = {
+      position: "pos1", pnl_pct: 0, total_value_usd: 1.5,
+      pnl_samples: [{ age_minutes: 2, pnl_pct: 15 }],
+    };
+    const result = computeAction(pos, {}, mockConfig);
+    assert.equal(result.action, "CLOSE"); // 0 - 15 = -15 <= -15
+    assert.equal(result.rule, "velocity_stop");
+  });
+});
+
+describe("Rule Engine — Age-based claim", () => {
+
+  test("CLAIM when age >= maxClaimAgeMinutes and fees pending", () => {
+    const cfg = { ...mockConfig, management: { ...mockConfig.management, maxClaimAgeMinutes: 240 } };
+    const pos = { position: "pos1", unclaimed_fees_usd: 2, age_minutes: 300, pnl_pct: 2 };
+    const result = computeAction(pos, {}, cfg);
+    assert.equal(result.action, "CLAIM");
+    assert.match(result.reason ?? "", /max claim age/);
+  });
+
+  test("does NOT override stop loss", () => {
+    const cfg = { ...mockConfig, management: { ...mockConfig.management, maxClaimAgeMinutes: 60 } };
+    const pos = { position: "pos1", pnl_pct: -60, unclaimed_fees_usd: 10, age_minutes: 500, total_value_usd: 0.6 };
+    const tracked = { amount_sol: 1, prev_pnl_pct: -55 };
+    const result = computeAction(pos, tracked, cfg);
+    assert.equal(result.action, "CLOSE");
+    assert.equal(result.rule, 1);
+  });
+
+  test("off when maxClaimAgeMinutes is null/absent", () => {
+    const pos = { position: "pos1", unclaimed_fees_usd: 2, age_minutes: 99999, pnl_pct: 2 };
+    const result = computeAction(pos, {}, mockConfig); // mockConfig has no maxClaimAgeMinutes
+    assert.notEqual(result.action, "CLAIM");
   });
 });
