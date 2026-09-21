@@ -3,7 +3,7 @@
  * Run: node --test test/agent-meridian.test.js
  */
 import assert from "node:assert/strict";
-import { describe, it, beforeEach, mock } from "node:test";
+import { describe, it } from "node:test";
 import {
   isRetryableStatus,
   retryDelayMs,
@@ -97,19 +97,24 @@ describe("fetchWithTimeout", () => {
     assert.equal(typeof fetchWithTimeout, "function");
   });
 
-  it("resolves when fetch completes within timeout", async () => {
+  it("resolves when fetch completes within timeout", async (t) => {
+    const response = new Response("{}", { status: 200 });
+    t.mock.method(globalThis, "fetch", async () => response);
     const result = await fetchWithTimeout(
-      "https://httpbin.org/get",
+      "https://relay.example.test/ping",
       {},
       10_000
     );
-    assert.equal(result.ok, true);
+    assert.equal(result, response);
   });
 
-  it("rejects when URL is unreachable within timeout", async () => {
+  it("aborts a pending fetch when its timeout expires", async (t) => {
+    t.mock.method(globalThis, "fetch", (_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
     await assert.rejects(
-      () => fetchWithTimeout("http://127.0.0.1:9", {}, 1_000),
-      /abort|ECONNREFUSED|timeout|fetch failed|TypeError/i
+      () => fetchWithTimeout("https://relay.example.test/ping", {}, 10),
+      { name: "AbortError" }
     );
   });
 });
@@ -121,25 +126,22 @@ describe("agentMeridianJson (no retry)", () => {
     assert.equal(typeof agentMeridianJson, "function");
   });
 
-  it("returns payload on success or handles network error gracefully", async () => {
-    // Agent Meridian relay may or may not have /ping — accept any response shape or network error
-    try {
-      const result = await agentMeridianJson("/ping", {});
-      // If it succeeds, result should be an object
-      assert.equal(typeof result, "object");
-    } catch (e) {
-      // If relay is unreachable that's also acceptable
-      assert.ok(
-        e.message.includes("127.0.0.1") ||
-        e.message.includes("ECONNREFUSED") ||
-        e.message.includes("timeout") ||
-        e.message.includes("fetch") ||
-        e.message.includes("network") ||
-        e.message.includes("Not found") ||
-        e.message.includes("404"),
-        `Unexpected error type: ${e.message}`
-      );
-    }
+  it("returns the JSON payload on success", async (t) => {
+    const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    assert.deepEqual(await agentMeridianJson("/ping", {}), { ok: true });
+    assert.equal(fetchMock.mock.callCount(), 1);
+  });
+
+  it("preserves a 502 HTTP error without retrying", async (t) => {
+    const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+      new Response("Bad Gateway", { status: 502 }));
+    await assert.rejects(() => agentMeridianJson("/ping", {}), {
+      message: "/ping 502",
+      status: 502,
+      payload: { raw: "Bad Gateway" },
+    });
+    assert.equal(fetchMock.mock.callCount(), 1);
   });
 });
 

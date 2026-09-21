@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 
 let _syncMissCount;
@@ -28,6 +28,8 @@ describe("syncOpenPositions — on-chain verification on first miss", () => {
     _db = await getMemDB();
     _syncMissCount = new Map();
   });
+
+  afterEach(() => _db?.close());
 
   it("closes immediately on first miss when on-chain confirms absence", async () => {
     _db.prepare(
@@ -110,6 +112,8 @@ describe("syncOpenPositions — on-chain verification on first miss", () => {
   });
 
   it("closes on second miss when on-chain also confirms absence", async () => {
+    // This scenario starts after one recorded miss; the next check is the second.
+    _syncMissCount.set("Pos003", REQUIRED_MISSES - 1);
     _db.prepare(
       `INSERT INTO positions (position, pool, deployed_at, closed) VALUES (?, ?, ?, 0)`
     ).run("Pos003", "PoolC", new Date(Date.now() - SYNC_GRACE_MS - 1000).toISOString());
