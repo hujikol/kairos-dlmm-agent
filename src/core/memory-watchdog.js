@@ -7,10 +7,13 @@
 import { log } from "./logger.js";
 import { clearCache } from "../tools/cache.js";
 
+import { startDiagnostics, stopDiagnostics } from "./diagnostics.js";
+
 let _timer = null;
 
 export function startMemoryWatchdog() {
   if (_timer) return; // idempotent — prevent duplicate intervals
+  startDiagnostics();
   _timer = setInterval(() => {
     const usage = process.memoryUsage();
     const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
@@ -35,5 +38,6 @@ export function startMemoryWatchdog() {
 }
 
 export function stopMemoryWatchdog() {
+  stopDiagnostics();
   if (_timer) { clearInterval(_timer); _timer = null; }
 }

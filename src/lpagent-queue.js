@@ -1,3 +1,4 @@
+import { queuedTask, diagnostic } from "./core/diagnostics.js";
 /**
  * LPAgent rate-limit queue — token-bucket at 4 rpm.
  * Prevents hammering the LPAgent API beyond rate limits.
@@ -41,7 +42,8 @@ async function drainQueue() {
  */
 export function enqueueLPAgent(fn) {
   return new Promise((resolve, reject) => {
-    queue.push({ fn, resolve, reject });
+    queue.push({ fn: queuedTask("lpagent", fn), resolve, reject });
+    diagnostic("queue_depth", { source: "lpagent", depth: queue.length, processing });
     if (!processing) drainQueue();
   });
 }

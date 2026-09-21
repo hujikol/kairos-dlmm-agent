@@ -1,3 +1,4 @@
+import { progress } from "../core/diagnostics.js";
 /**
  * LLM client and model fallback chain.
  * Supports OpenRouter (default) or any OpenAI-compatible local server (e.g. LM Studio).
@@ -37,6 +38,7 @@ export const client = new Proxy({}, {
 let _callWithRetryImpl = async (client, model, messages, tools, options = {}) => {
   let usedModel = model || DEFAULT_MODEL;
   for (let attempt = 0; attempt < 3; attempt++) {
+    progress("llm_attempt", { attempt: attempt + 1 });
     let response;
     try {
       response = await getClient().chat.completions.create({
@@ -48,6 +50,7 @@ let _callWithRetryImpl = async (client, model, messages, tools, options = {}) =>
         max_tokens: options.maxTokens,
       });
     } catch (err) {
+      progress("llm_attempt_failed", { attempt: attempt + 1, errorName: err?.name, status: err?.status });
       log("warn", "agent", `LLM call attempt ${attempt + 1} failed: ${err?.message ?? err}. Retrying...`);
       if (attempt < 2) {
         await new Promise((r) => setTimeout(r, (attempt + 1) * RETRY_DELAY_MS));

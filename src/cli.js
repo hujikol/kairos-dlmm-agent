@@ -5,6 +5,7 @@
  */
 
 import { die } from "./cli/utils.js";
+import { startDiagnostics } from "./core/diagnostics.js";
 
 // ─── DRY_RUN must be set before any tool imports ─────────────────
 if (process.argv.includes("--dry-run")) process.env.DRY_RUN = "true";
@@ -16,6 +17,8 @@ if (fs.existsSync(kairosEnv)) {
   const { config: loadDotenv } = await import("dotenv");
   loadDotenv({ path: kairosEnv, override: false });
 }
+
+startDiagnostics();
 
 // ─── SKILL.md generation ──────────────────────────────────────────
 const SKILL_MD = `# kairos — Solana DLMM LP Agent CLI

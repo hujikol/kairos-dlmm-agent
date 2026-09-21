@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { queuedTask, progress, diagnostic } from "../core/diagnostics.js";
 /**
  * Core ReAct agent loop.
  */
@@ -25,7 +27,11 @@ const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_positi
 // These lock after first attempt regardless of outcome
 const NO_RETRY_TOOLS = new Set(["deploy_position"]);
 
-export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
+export function agentLoop(...args) {
+  return queuedTask("agent", () => runAgentLoop(...args))();
+}
+
+async function runAgentLoop(goal, maxSteps = null, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
   const effectiveMaxSteps = maxSteps ?? (
     agentType === "SCREENER" ? config.llm.screenerMaxSteps ?? 5
     : agentType === "MANAGER" ? config.llm.managerMaxSteps ?? 4
@@ -57,6 +63,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
   ];
 
   const firedOnce = new Set();
+  const toolAttempts = new Map();
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, requireTool);
   let sawToolCall = false;
   let noToolRetryCount = 0;
@@ -69,24 +76,29 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
     const elapsed = Date.now() - loopStartedAt;
     if (elapsed > LOOP_TIMEOUT_MS) {
       log("warn", "agent", `Wall-clock timeout reached (${Math.round(elapsed / 1000)}s > 120s) — aborting loop`);
+      diagnostic("agent_timeout", { elapsedMs: elapsed });
       throw new Error("Agent loop timeout");
     }
     if (step >= MAX_REACT_DEPTH) {
       log("warn", "agent", `MAX_REACT_DEPTH (${MAX_REACT_DEPTH}) reached — aborting`);
       break;
     }
+    progress("agent_step", { step: step + 1, maxSteps: effectiveMaxSteps, agentType,
+      messages: messages.length, contentBytes: messages.reduce((n, m) => n + (typeof m.content === "string" ? Buffer.byteLength(m.content) : 0), 0),
+      elapsedMs: elapsed });
     log("debug", "agent", `Step ${step + 1}/${effectiveMaxSteps}`);
 
     try {
       const tools = getToolsForRole(agentType, goal);
       const options = { maxTokens: maxOutputTokens };
-      let { response, usedModel } = await callWithRetry(client, model, messages, tools, options);
+      let { response, usedModel } = await queuedTask("llm", () => callWithRetry(client, model, messages, tools, options))();
       if (!response?.choices?.length) {
         log("error", "agent", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
         throw new Error(`API returned no choices: ${response?.error?.message || JSON.stringify(response)}`);
       }
 
       const usage = response.usage;
+      progress("llm_response", { promptTokens: usage?.prompt_tokens, completionTokens: usage?.completion_tokens });
       if (usage) {
         log("debug", "token_usage", JSON.stringify({
           role: agentType,
@@ -150,6 +162,10 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
         const rawArgs = toolCall.function.arguments ?? "{}";
         const { args } = parseToolArgs(rawArgs, functionName);
+        const signature = createHash("sha256").update(functionName).update(rawArgs).digest("hex");
+        const attempts = (toolAttempts.get(signature) || 0) + 1;
+        toolAttempts.set(signature, attempts);
+        if (attempts > 1) diagnostic("repeated_tool_call", { tool: functionName, attempts, step: step + 1 });
 
         // Block once-per-session tools from firing a second time
         if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
@@ -161,7 +177,10 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
           };
         }
 
-        const result = await executeTool(functionName, args);
+        const result = await queuedTask("tool", () => {
+          progress("tool_started", { tool: functionName });
+          return executeTool(functionName, args);
+        })();
 
         // Track meaningful on-chain results so MAX_REACT_DEPTH break still returns useful info.
         // close_position returns { success, already_closed } — success=false with already_closed=true
@@ -211,6 +230,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         });
       }
 
+      progress("tool_results", { count: toolResults.length, bytes: toolResults.reduce((n, r) => n + (typeof r.content === "string" ? Buffer.byteLength(r.content) : 0), 0) });
       messages.push(...toolResults);
     } catch (error) {
       log("error", "agent", `Agent loop error at step ${step}: ${error.message}`);
@@ -219,6 +239,7 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
       if (isRateLimitError(error)) {
         rateLimitRetryCount++;
         const backoffMs = rateLimitBackoff(rateLimitRetryCount);
+        diagnostic("agent_retry", { attempt: rateLimitRetryCount, backoffMs });
         log("info", "agent", `Rate limited (429). Backing off ${backoffMs / 1000}s before retry (attempt ${rateLimitRetryCount})...`);
         if (rateLimitRetryCount >= 3) {
           throw new Error("Rate limited 3 times consecutively — aborting agent loop");
@@ -227,11 +248,13 @@ export async function agentLoop(goal, maxSteps = null, sessionHistory = [], agen
         continue;
       }
 
+      diagnostic("agent_error", { errorName: error?.name, step: step + 1 });
       log("error", "agent", `Non-retryable agent error: ${error.message}`);
       return { content: `Agent error: ${error.message}`, userMessage: goal };
     }
   }
 
+  diagnostic("agent_step_limit");
   log("info", "agent", "Max steps reached without final answer");
   // Prioritize meaningful on-chain results over generic timeout message
   if (lastMeaningfulResult) {

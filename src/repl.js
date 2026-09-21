@@ -1,3 +1,4 @@
+import { queuedTask, diagnostic } from "./core/diagnostics.js";
 import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
 import { getWalletBalances } from "./integrations/helius.js";
@@ -39,9 +40,9 @@ export function launchCron() {
 
 // ─── REPL busy guard ───────────────────────────────────────────────────────────
 export async function runBusy(fn) {
-  if (_telegramBusy._count > 0) { console.log("Agent is busy, please wait..."); return; }
+  if (_telegramBusy._count > 0) { diagnostic("repl_busy_rejected", { activeHandlers: _telegramBusy._count }); console.log("Agent is busy, please wait..."); return; }
   _telegramBusy._count++;
-  try { await fn(); }
+  try { await queuedTask("repl", fn)(); }
   catch (e) { log("warn", "repl", `REPL error: ${e?.message ?? e}`); }
   finally { _telegramBusy._count--; }
 }
