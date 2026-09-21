@@ -1,8 +1,7 @@
 import { log } from "../../core/logger.js";
 import { getCandidatesData } from "../../core/shared-handlers.js";
 import { formatCandidates } from "../../core/shared-formatters.js";
-import { sendHTML, sendMessage } from "../../notifications/telegram.js";
-import { escapeHTML } from "../../core/cycle-helpers.js";
+import { sendRichMessage, sendMessage } from "../../notifications/telegram.js";
 
 export async function handleCandidates() {
   try {
@@ -10,9 +9,7 @@ export async function handleCandidates() {
     if (!candidates?.length) { await sendMessage("No candidates found."); return; }
 
     const table = formatCandidates(candidates, "telegram");
-    await sendHTML(`<b>🔍 Top Candidates</b>
-
-<pre>${escapeHTML(table)}</pre>`);
+    await sendRichMessage(`## 🔍 Top Candidates\n\n${table}`);
   } catch (e) {
     log("warn", "telegram", `Candidates fetch failed: ${e?.message ?? e}`);
     await sendMessage(`Error: ${e?.message ?? e}`);

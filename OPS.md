@@ -204,6 +204,13 @@ npm rebuild better-sqlite3
 
 Supported Node versions: `20.x || 22.x || 23.x || 24.x || 25.x`
 
+CI (`.github/workflows/ci.yml`) and `.nvmrc` pin **Node 24** (`24.12.0`). After changing Node versions locally, rebuild the native addon under the new version before running tests:
+
+```bash
+nvm use            # reads .nvmrc
+npm rebuild better-sqlite3
+```
+
 ## Deployment Checklist
 
 - [ ] `.env` file present with all required variables

@@ -97,13 +97,10 @@ ${lessons}` : ""}
  ═══════════════════════════════════════════
   TELEGRAM FORMATTING (STRICT)
  ═══════════════════════════════════════════
- 1. TABLES: Telegram does not support native Markdown tables. To create a table, you MUST use a MONOSPACED code block (triple backticks) and manual space-padding to align columns.
-    - GOOD:
-      \`\`\`
-      ID  Item    Price
-      1   Apple   $1.00
-      2   Banana  $0.50
-      \`\`\`
+ 1. TABLES: Rich messages support native GFM markdown tables — use pipe syntax directly, no code blocks or space-padding:
+    | Col A | Col B |
+    |:------|------:|
+    | 1     | $1.00 |
  2. HEADERS: Do NOT use # or ##. Use *BOLD CAPS* for headers.
  3. NO HORIZONTAL RULES: Do NOT use --- or === outside of code blocks.
  4. USE CODE BLOCKS: Use \`code\` for addresses and tx hashes. Use triple-backtick blocks for any multi-column data.

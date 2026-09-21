@@ -49,7 +49,7 @@
 
 ## Prerequisites
 
-- **Node.js** >= 20.17.0 or >= 22.9.0
+- **Node.js** >= 20.17.0 or >= 22.9.0 (CI and `.nvmrc` pin **Node 24** — run `nvm use` before testing; rebuild `better-sqlite3` after switching Node versions)
 - **Solana wallet** with SOL for gas and position funding
 - **OpenRouter API key** for LLM decision-making
 - **Solana RPC endpoint** (Helius recommended for production)
