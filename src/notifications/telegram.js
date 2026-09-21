@@ -1,3 +1,4 @@
+import { queuedTask, diagnostic } from "../core/diagnostics.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -66,7 +67,8 @@ async function processQueue() {
 }
 
 function enqueueMessage(task) {
-  _outboundQueue.push(task);
+  _outboundQueue.push(queuedTask("telegram_outbound", task));
+  diagnostic("queue_depth", { source: "telegram_outbound", depth: _outboundQueue.length, processing: _isSending });
   processQueue();
 }
 
@@ -266,6 +268,66 @@ export async function sendHTML(html) {
       resolve();
     });
   });
+}
+
+/**
+ * Send a Rich Message (Bot API 10.x) — supports native GFM markdown tables,
+ * headings, lists, etc., rendered by Telegram clients.
+ * Queued with rate limiting. Respects DRY_RUN. Falls back to plain sendMessage
+ * when the API rejects rich messages (older local Bot API servers).
+ * @param {string} markdown - Rich Markdown content (GFM; max 32768 chars)
+ * @returns {Promise<void>}
+ */
+export async function sendRichMessage(markdown) {
+  if (!TOKEN || !chatId) { log("warn", "telegram", `sendRichMessage skipped: TOKEN=${!!TOKEN} chatId=${chatId}`); return; }
+  if (isDryRun()) {
+    log("debug", "telegram", "DRY_RUN: skipping rich message", { text: String(markdown).slice(0, 80) });
+    return;
+  }
+  const finalText = config.cavemanEnabled ? caveman(String(markdown)) : String(markdown);
+  let plainFallback = false;
+  await new Promise((resolve) => {
+    enqueueMessage(async () => {
+      let timeoutId;
+      try {
+        const controller = new AbortController();
+        timeoutId = setTimeout(() => controller.abort(), 10_000);
+        const res = await fetch(`${BASE}/sendRichMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            rich_message: { markdown: finalText.slice(0, 32768) },
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          if (res.status === 429) {
+            log("error", "telegram", `Rate limited (429). Stalling queue...`);
+            await sleep(5000);
+          } else {
+            // Older Bot API server without rich-message support → plain fallback
+            log("warn", "telegram", `sendRichMessage ${res.status} — falling back to plain text: ${err.slice(0, 100)}`);
+            plainFallback = true;
+            diagnostic("telegram_plain_fallback", { status: res.status });
+          }
+        }
+      } catch (e) {
+        if (e.name === "AbortError") {
+          log("error", "telegram", `sendRichMessage timed out after 10s`);
+        } else {
+          log("error", "telegram", `sendRichMessage failed: ${e?.message ?? e}`);
+        }
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+      resolve();
+    });
+  });
+  if (plainFallback) {
+    await sendMessage(finalText.replace(/\*\*|__|~~|==|\|\|/g, "").replace(/^#{1,6}\s+/gm, ""));
+  }
 }
 
 

@@ -1,7 +1,8 @@
+import { queuedTask, diagnostic } from "../core/diagnostics.js";
 import { log } from "../core/logger.js";
 import { config } from "../config.js";
 import { _busyState } from "../core/state/scheduler-state.js";
-import { startPolling as startTelegramPolling, stopPolling as stopTelegramPolling, sendHTML, sendMessage, sendMessageDirect, sendChatAction } from "../notifications/telegram.js";
+import { startPolling as startTelegramPolling, stopPolling as stopTelegramPolling, sendHTML, sendMessage, sendMessageDirect, sendChatAction, sendRichMessage } from "../notifications/telegram.js";
 import { stripThink } from "../tools/caveman.js";
 import { agentLoop } from "../agent/index.js";
 import { rl, buildPrompt } from "../rl-shared.js";
@@ -73,8 +74,7 @@ export function drainTelegramQueue() {
       if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
       const queued = _telegramQueue.shift();
       if (!queued) break;
-      if (!isReadOnlyCommand(queued) && (_busyState._managementBusy || _busyState._screeningBusy)) continue;
-      processTelegramMessage(queued).catch(() => {
+      queued().catch(() => {
         // Error is already logged inside telegramHandler
       });
     }
@@ -88,7 +88,7 @@ async function handleLLMChat(text) {
   const agentRole = isDeployRequest ? "SCREENER" : "GENERAL";
   const agentModel = agentRole === "SCREENER" ? config.llm.screeningModel : config.llm.generalModel;
   const { content } = await agentLoop(text, config.llm.maxSteps, [], agentRole, agentModel, null, { requireTool: true });
-  await sendHTML(`<pre>${stripThink(content)}</pre>`);
+  await sendRichMessage(stripThink(content));
 }
 
 async function processTelegramMessage(text) {
@@ -110,9 +110,9 @@ async function processTelegramMessage(text) {
   // Reserve the slot before any await so queue drainage honors the cap.
   _telegramBusyState._count++;
   sendChatAction("typing").catch(() => {}); // non-blocking — indicator shows immediately
-  await sendMessageDirect(ackMsg);
 
   try {
+    await sendMessageDirect(ackMsg);
     // Dispatch to named handlers (exact-match commands)
     switch (text) {
       case "/briefing":   await handleBriefing(); break;
@@ -153,15 +153,17 @@ export async function telegramHandler(text) {
   if (!isReadOnly && (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM)) {
     sendChatAction("typing").catch(() => {});
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
-      _telegramQueue.push(text);
+      _telegramQueue.push(queuedTask("telegram_inbound", () => processTelegramMessage(text)));
+      diagnostic("queue_depth", { source: "telegram_inbound", depth: _telegramQueue.length, activeHandlers: _telegramBusyState._count, managementBusy: _busyState._managementBusy, screeningBusy: _busyState._screeningBusy });
       await sendMessageDirect(`⏳ Queued. ${_telegramQueue.length} message(s) ahead of yours. I'll respond shortly.`);
     } else {
+      diagnostic("queue_full", { source: "telegram_inbound", depth: _telegramQueue.length });
       await sendMessageDirect(`<b>Queue full.</b> ${MAX_TELEGRAM_QUEUE} messages waiting. Try again shortly.`);
     }
     return;
   }
 
-  await processTelegramMessage(text);
+  await queuedTask("telegram_inbound", () => processTelegramMessage(text))();
 }
 
 // Start polling — called from index.js after rl is set up
