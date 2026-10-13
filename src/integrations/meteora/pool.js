@@ -1,3 +1,4 @@
+import { isDryRun } from "../../config.js";
 import {
   Keypair,
   PublicKey,
@@ -84,6 +85,7 @@ export function _injectSendTx(fn) {
 }
 
 export async function sendTx(tx, signers) {
+  if (isDryRun()) throw new Error("Transaction signing and submission disabled in paper mode");
   if (_sendTxOverride) return _sendTxOverride(tx, signers);
   const maxRetries = 3;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

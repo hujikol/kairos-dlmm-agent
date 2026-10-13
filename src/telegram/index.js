@@ -1,11 +1,8 @@
 import { queuedTask, diagnostic } from "../core/diagnostics.js";
 import { log } from "../core/logger.js";
-import { config } from "../config.js";
 import { _busyState } from "../core/state/scheduler-state.js";
 import { startPolling as startTelegramPolling, stopPolling as stopTelegramPolling, sendHTML, sendMessage, sendMessageDirect, sendChatAction, sendRichMessage } from "../notifications/telegram.js";
-import { stripThink } from "../tools/caveman.js";
 import { agentLoop } from "../agent/index.js";
-import { rl, buildPrompt } from "../rl-shared.js";
 import { escapeHTMLLocal } from "../core/cycle-helpers.js";
 
 // Import all command handlers
@@ -65,30 +62,25 @@ export async function safeSendError(error) {
 // Spawn queued handlers up to MAX_CONCURRENT_TELEGRAM once cycles are idle.
 let _drainingScheduled = false;
 export function drainTelegramQueue() {
-  if (_drainingScheduled) return; // drain already scheduled — it will run shortly
+  if (_drainingScheduled || _telegramQueue.length === 0 || _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM || _busyState._managementBusy || _busyState._screeningBusy) return; // drain already scheduled — it will run shortly
   _drainingScheduled = true;
   setImmediate(() => {
     _drainingScheduled = false;
     if (_busyState._managementBusy || _busyState._screeningBusy) return;
+    diagnostic("telegram_drain", { depth: _telegramQueue.length, activeHandlers: _telegramBusyState._count });
     while (_telegramQueue.length > 0) {
       if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM) break;
       const queued = _telegramQueue.shift();
       if (!queued) break;
-      queued().catch(() => {
-        // Error is already logged inside telegramHandler
-      });
+      queued().catch(e => log("error", "telegram-handler", `Queued command failed: ${e?.message ?? e}`));
     }
   });
 }
 
 // ─── Free-form LLM chat handler ────────────────────────────────────────────────
 async function handleLLMChat(text) {
-  const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
-  const isDeployRequest = !hasCloseIntent && /\bdeploy\b|\bopen position\b|\blp into\b|\badd liquidity\b/i.test(text);
-  const agentRole = isDeployRequest ? "SCREENER" : "GENERAL";
-  const agentModel = agentRole === "SCREENER" ? config.llm.screeningModel : config.llm.generalModel;
-  const { content } = await agentLoop(text, config.llm.maxSteps, [], agentRole, agentModel, null, { requireTool: true });
-  await sendRichMessage(stripThink(content));
+  const { content } = await agentLoop(text);
+  await sendRichMessage(content);
 }
 
 async function processTelegramMessage(text) {
@@ -128,6 +120,13 @@ async function processTelegramMessage(text) {
       case "/safe-mode":  await handleSafeModeCommand(text.slice("/safe-mode".length).trim().split(/\s+/).filter(Boolean), safeSend); break;
       default: {
         // Regex-based handlers — return true if they handled the message
+        if (/^\/rules(?:\s|$)/.test(text)) {
+          const { getActiveRules, getRuleHistory, updateRules, rollbackRules } = await import("../core/rule-memory.js");
+          const sub = text.slice(6).trim();
+          const result = sub === "update" ? await updateRules() : sub === "rollback" ? rollbackRules() : sub === "history" ? getRuleHistory() : getActiveRules();
+          await safeSend(JSON.stringify(result, null, 2));
+          return;
+        }
         if (await handleClose(text)) return;
         if (await handleSet(text)) return;
         if (await handleTeach(text)) return;
@@ -150,7 +149,7 @@ export async function telegramHandler(text) {
 
   // Busy check first — if queuing, send queue confirmation and skip acknowledgment
   const isReadOnly = isReadOnlyCommand(text);
-  if (!isReadOnly && (_busyState._managementBusy || _busyState._screeningBusy || _telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM)) {
+  if (_telegramBusyState._count >= MAX_CONCURRENT_TELEGRAM || (!isReadOnly && (_busyState._managementBusy || _busyState._screeningBusy))) {
     sendChatAction("typing").catch(() => {});
     if (_telegramQueue.length < MAX_TELEGRAM_QUEUE) {
       _telegramQueue.push(queuedTask("telegram_inbound", () => processTelegramMessage(text)));

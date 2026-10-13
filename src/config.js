@@ -6,8 +6,8 @@ import { SOL_MINT, USDC_MINT, USDT_MINT } from "./constants.js";
 import { GAS_RESERVE_DEFAULT, BASE_DEPLOY_AMOUNT_DEFAULT, DEPLOY_AMOUNT_SOL_DEFAULT, MAX_DEPLOY_AMOUNT_DEFAULT } from "./core/constants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const USER_CONFIG_PATH = path.resolve(__dirname, "..", "user-config.json");
-const GMGN_CONFIG_PATH = path.resolve(__dirname, "..", "gmgn-config.json");
+export const USER_CONFIG_PATH = path.resolve(process.env.KAIROS_USER_CONFIG_PATH || path.join(__dirname, "..", "user-config.json"));
+const GMGN_CONFIG_PATH = path.resolve(process.env.KAIROS_GMGN_CONFIG_PATH || path.join(__dirname, "..", "gmgn-config.json"));
 
 // Load migrated (or already-v2) config
 const u = fs.existsSync(USER_CONFIG_PATH)
@@ -42,6 +42,8 @@ export function isDryRun() {
 }
 
 export const config = {
+  decisionRules: u.decisionRules ?? null,
+
   // ─── Risk Limits ─────────────────────────
   risk: {
     maxPositions:        u.risk?.maxPositions        ?? u.maxPositions        ?? 3,
@@ -57,6 +59,10 @@ export const config = {
   //   nested:  { "thresholds": { "minFeeActiveTvlRatio": 0.05, "minTvl": 10000 } }
   screening: {
     minFeeActiveTvlRatio: u.thresholds?.minFeeActiveTvlRatio ?? 0.05,
+    minVolume24h: u.thresholds?.minVolume24h ?? 0,
+    minVolumeTvl24h: u.thresholds?.minVolumeTvl24h ?? 0,
+    requireTokenAudit: u.thresholds?.requireTokenAudit ?? false,
+    minSmartDegenCount: u.thresholds?.minSmartDegenCount ?? 1,
     minTvl:            u.thresholds?.minTvl            ?? u.minTvl            ?? 10_000,
     maxTvl:            u.thresholds?.maxTvl            ?? u.maxTvl            ?? 150_000,
     minVolume:         u.thresholds?.minVolume         ?? u.minVolume         ?? 500,
@@ -367,7 +373,7 @@ export function reloadScreeningThresholds() {
  * Throws a clear error if WALLET_PRIVATE_KEY or RPC_URL is missing.
  */
 export function validateEnv() {
-  if (!process.env.WALLET_PRIVATE_KEY?.trim()) {
+  if (!isDryRun() && !process.env.WALLET_PRIVATE_KEY?.trim()) {
     throw new Error("Missing required env var: WALLET_PRIVATE_KEY — set it in .env or user-config.json");
   }
   if (!process.env.RPC_URL?.trim()) {

@@ -1,0 +1,40 @@
+services:
+  kairos:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DRY_RUN: ${DRY_RUN:-true}
+      KAIROS_DB_PATH: /data/kairos.db
+      KAIROS_USER_CONFIG_PATH: /data/user-config.json
+      KAIROS_GMGN_CONFIG_PATH: /data/gmgn-config.json
+      KAIROS_DIAGNOSTICS: "true"
+      NODE_OPTIONS: --max-old-space-size=1536
+      HEALTH_PORT: "3030"
+    volumes:
+      - kairos-data:/data
+      - kairos-logs:/app/logs
+    ports:
+      - "127.0.0.1:3030:3030"
+    mem_limit: 2g
+    pids_limit: 128
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3030/live',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  kairos-data:
+  kairos-logs:

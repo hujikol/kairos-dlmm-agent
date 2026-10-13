@@ -2,7 +2,7 @@
   "name": "kairos-dlmm-agent",
   "version": "2.1.1",
   "type": "module",
-  "description": "Autonomous DLMM LP agent for Meteora pools on Solana — Kairos fork of Meridian",
+  "description": "Autonomous DLMM LP agent for Meteora pools on Solana \u2014 Kairos fork of Meridian",
   "license": "MIT",
   "main": "src/index.js",
   "bin": {
@@ -13,12 +13,13 @@
     "start": "node src/index.js",
     "dev": "DRY_RUN=true node src/index.js",
     "self-update": "git pull && npm install && pm2 restart kairos || true",
-    "test": "c8 node --test test/test-*.js test/*.test.js",
+    "test": "c8 node --experimental-test-module-mocks --test test/test-*.js test/*.test.js test/*.check.mjs",
     "test:watch": "node --test --watch test/test-*.js test/*.test.js",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
     "lint": "eslint src/ test/",
-    "postinstall": "node scripts/patch-anchor.js"
+    "postinstall": "node scripts/patch-anchor.js",
+    "paper:soak": "node scripts/paper-soak.js"
   },
   "dependencies": {
     "@meteora-ag/dlmm": "1.9.6",

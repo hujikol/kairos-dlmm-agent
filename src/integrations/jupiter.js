@@ -17,6 +17,7 @@ const OKX_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
  */
 async function getOkxEnrichmentCached(mint, getAdvancedInfo, getClusterList) {
   const now = Date.now();
+  for (const [key, value] of okxEnrichmentCache) if (now - value.timestamp >= OKX_CACHE_TTL_MS) okxEnrichmentCache.delete(key);
   const cached = okxEnrichmentCache.get(mint);
   if (cached && (now - cached.timestamp) < OKX_CACHE_TTL_MS) {
     return { advancedData: cached.advancedData, clusterList: cached.clusterList };
@@ -25,6 +26,7 @@ async function getOkxEnrichmentCached(mint, getAdvancedInfo, getClusterList) {
     getAdvancedInfo(mint).catch(() => null),
     getClusterList(mint).catch(() => []),
   ]);
+  if (!okxEnrichmentCache.has(mint) && okxEnrichmentCache.size >= 100) okxEnrichmentCache.delete(okxEnrichmentCache.keys().next().value);
   okxEnrichmentCache.set(mint, { advancedData, clusterList, timestamp: now });
   return { advancedData, clusterList };
 }
@@ -71,7 +73,7 @@ export async function getTokenInfo({ query }) {
   const url = `${DATAPI_BASE}/assets/search?query=${encodeURIComponent(query)}`;
   let res;
   try {
-    res = await fetch(url);
+    res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
   } catch (err) {
     jupiterApi.recordFailure();
     throw err;
@@ -99,6 +101,7 @@ export async function getTokenInfo({ query }) {
     graduated: !!t.graduatedPool,
     global_fees_sol: t.fees != null ? parseFloat(t.fees.toFixed(2)) : null,
     audit: t.audit ? {
+      suspicious: Object.hasOwn(t.audit, "isSus"),
       mint_disabled: t.audit.mintAuthorityDisabled,
       freeze_disabled: t.audit.freezeAuthorityDisabled,
       top_holders_pct: t.audit.topHoldersPercentage?.toFixed(2),

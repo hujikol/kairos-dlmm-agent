@@ -2,7 +2,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 
-test("rich-message fallback drains when another send arrives during an active task", { timeout: 3000 }, async () => {
+test("rich-message fallback drains when another send arrives during an active task", { timeout: 5000 }, async () => {
   process.env.TELEGRAM_BOT_TOKEN = "test-only";
   process.env.KAIROS_DIAGNOSTICS = "false";
   const stub = (relative, namedExports) => mock.module(new URL(relative, import.meta.url).href, { namedExports });
@@ -36,6 +36,20 @@ test("rich-message fallback drains when another send arrives during an active ta
     assert.deepEqual(calls.slice(1).map(c => c.body.text).sort(), ["first", "second"]);
     await sendMessage("third");
     assert.equal(calls.at(-1).body.text, "third", "queue remains usable");
+    // Hold the active worker, fill waiting slots, and reject overflow without retaining work.
+    let unblock;
+    let held = false;
+    mock.method(globalThis, "fetch", async () => {
+      if (!held) { held = true; await new Promise(r => { unblock = r; }); }
+      return { ok: true };
+    });
+    await new Promise(r => setTimeout(r, 5));
+    const active = sendMessage("held");
+    assert.equal(typeof unblock, "function");
+    const waiting = Array.from({ length: 100 }, (_, i) => sendMessage(`queued-${i}`));
+    await assert.rejects(() => sendMessage("overflow"), /queue full/);
+    unblock();
+    await Promise.all([active, ...waiting]);
   } finally {
     mock.restoreAll();
   }

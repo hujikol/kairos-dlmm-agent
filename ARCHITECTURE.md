@@ -1,4 +1,6 @@
-# Meridian — Architecture
+# Kairos — Architecture
+
+Current execution uses deterministic rules and a persistent paper wallet. AI is restricted to validated rule proposals. See [the current execution and deployment specification](docs/DECISION-RULES-AND-DEPLOYMENT.md). The module inventory below includes retained legacy ReAct components, which no longer execute runtime trades.
 
 ## System Overview
 

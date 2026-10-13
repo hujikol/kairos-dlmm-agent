@@ -10,15 +10,12 @@ async function checkExternalConnectivity() {
   const rpcUrl = process.env.RPC_URL;
   if (!rpcUrl) return false;
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
     const resp = await fetch(rpcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(2000),
     });
-    clearTimeout(timeout);
     return resp.ok;
   } catch {
     return false;
@@ -27,7 +24,10 @@ async function checkExternalConnectivity() {
 
 export function createHealthServer() {
   return http.createServer(async (req, res) => {
-    if (req.url === "/health") {
+    if (req.url === "/live") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, uptime: process.uptime() }));
+    } else if (req.url === "/health") {
       const connected = await checkExternalConnectivity();
       const statusCode = connected ? 200 : 503;
       res.writeHead(statusCode, { "Content-Type": "application/json" });

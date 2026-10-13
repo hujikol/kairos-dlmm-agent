@@ -1,3 +1,4 @@
+import { log } from "../core/logger.js";
 /**
  * OKX DEX API helpers — public endpoints (no API key required)
  * Uses Ok-Access-Client-type: agent-cli header for unauthenticated access.

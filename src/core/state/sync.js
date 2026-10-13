@@ -1,3 +1,4 @@
+import { isDryRun } from "../../config.js";
 /**
  * Sync open positions — reconciles local SQLite state with on-chain positions.
  * All functions share the same getDB() from ../db.js.
@@ -35,6 +36,7 @@ const REQUIRED_MISSES = 2;
  * @returns {void}
  */
 export async function syncOpenPositions(active_addresses) {
+  if (isDryRun()) return;
   const db = await getDB();
   const activeSet = new Set(active_addresses);
   const openPos = db.prepare("SELECT position, deployed_at FROM positions WHERE closed = 0").all();

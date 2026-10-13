@@ -61,7 +61,7 @@ export function registerPositions(registerTool) {
         pnl: { usd: result.pnl_usd ?? 0, pct: result.pnl_pct ?? 0 },
         reasoning: args.reason || "agent decision",
         metadata: {
-          initiated_by: "llm",
+          initiated_by: "rule",
         },
       }).catch(e => log("warn", "decision-log", `Failed to record close decision: ${e?.message ?? String(e)}`));
 
@@ -113,7 +113,7 @@ export function registerPositions(registerTool) {
         pnl: null,
         reasoning: `Deployed to ${args.pool_name || addrShort(args.pool_address)}`,
         metadata: {
-          initiated_by: "llm",
+          initiated_by: "rule",
           pool_name: args.pool_name,
           bin_step: args.bin_step,
           volatility: args.volatility,

@@ -49,6 +49,7 @@ export class CacheManager {
   }
 
   set(key, value, ttlMs) {
+    if (!this.#store.has(key) && this.#store.size >= 100) this.#store.delete(this.#store.keys().next().value);
     this.#store.set(key, {
       value,
       expiresAt: Date.now() + ttlMs,

@@ -4,13 +4,9 @@
  */
 
 import { log } from "./logger.js";
-import { checkSmartWalletsOnPool } from "../features/smart-wallets.js";
-import { getTokenNarrative, getTokenInfo } from "../integrations/jupiter.js";
-import { recallForPool, isTokenToxic } from "../features/pool-memory.js";
-import { detectMarketPhase } from "./phases.js";
-import { computeTokenScore } from "./token-score.js";
+import { getTokenInfo } from "../integrations/jupiter.js";
+import { isTokenToxic } from "../features/pool-memory.js";
 import { checkTokenCorrelation } from "./correlation.js";
-import { fetchPoolIndicators } from "./pool-indicators.js";
 
 /**
  * Format a Gmgn candidate as a concise LLM prompt string.
@@ -61,35 +57,12 @@ export function formatGmgnCandidateForPrompt(candidate) {
 // ─── Candidate reconstitution ────────────────────────────────────────────────
 
 /**
- * Reconstitute candidates with smart-wallet data, narrative, token info,
- * pool memory, market phase, and token score.
+ * Fetch only the matched token audit used by deterministic entry rules.
  */
 export async function fetchAndReconCandidates(candidates) {
-  // Stagger the OKX enrichment batch globally rather than per-candidate —
-  // OKX has a 60s collective timeout so the per-candidate stagger was redundant.
-  // Add a single 200ms pre-batch delay to avoid any thundering-herd on OKX endpoints.
-  await new Promise(r => setTimeout(r, 200));
-  return Promise.all(candidates.map(async (pool) => {
-    const mint = pool.base?.mint;
-    const [smartWallets, narrative, tokenInfo, indicators] = await Promise.allSettled([
-      checkSmartWalletsOnPool({ pool_address: pool.pool }),
-      mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
-      mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
-      fetchPoolIndicators({ pool_address: pool.pool, poolData: pool, mint }),
-    ]);
-    // indicators.value is { string: "...", bounceResult: {...} }
-    const indicatorsResult = indicators.status === "fulfilled" ? indicators.value : { string: "", bounceResult: {} };
-    return {
-      pool,
-      sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
-      n: narrative.status === "fulfilled" ? narrative.value : null,
-      ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
-      indicators: indicatorsResult.string,
-      bounceResult: indicatorsResult.bounceResult,
-      mem: recallForPool(pool.pool),
-      phase: detectMarketPhase(pool),
-      score: computeTokenScore(pool, tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null),
-    };
+  return Promise.all(candidates.map(async pool => {
+    const tokenInfo = pool.base?.mint ? await getTokenInfo({ query: pool.base.mint }).catch(() => null) : null;
+    return { pool, ti: tokenInfo?.results?.find(t => t.mint === pool.base?.mint) ?? null };
   }));
 }
 
@@ -101,6 +74,20 @@ export async function fetchAndReconCandidates(candidates) {
  */
 export function applyHardFilters(allCandidates, config, prePositions) {
   return allCandidates.filter(({ pool, ti }) => {
+    if (config.screening.requireTokenAudit) {
+      const audit = ti?.audit;
+      const top = Number(audit?.top_holders_pct), bots = Number(audit?.bot_holders_pct);
+      const bundle = pool.bundle_pct ?? ti?.bundle_pct;
+      if (!audit || audit.mint_disabled !== true || audit.freeze_disabled !== true || audit.suspicious === true ||
+          audit.top_holders_pct == null || audit.bot_holders_pct == null ||
+          !Number.isFinite(top) || top < 0 || top > config.screening.maxTop10Pct ||
+          !Number.isFinite(bots) || bots < 0 || bots > config.screening.maxBotHoldersPct ||
+          !Number.isFinite(bundle) || bundle < 0 || bundle > config.screening.maxBundlePct ||
+          !Number.isFinite(ti?.global_fees_sol) || ti.global_fees_sol < config.screening.minTokenFeesSol ||
+          pool.risk_level === "high" || ti?.risk_level === "high" ||
+          !Number.isFinite(pool.token_age_hours) || pool.token_age_hours < config.screening.minTokenAgeHours ||
+          !Number.isFinite(pool.holders) || pool.holders < config.screening.minHolders) return false;
+    }
     const launchpad = ti?.launchpad ?? null;
     if (launchpad && config.screening.blockedLaunchpads.includes(launchpad)) {
       log("info", "screening", `Skipping ${pool.name} — blocked launchpad (${launchpad})`);

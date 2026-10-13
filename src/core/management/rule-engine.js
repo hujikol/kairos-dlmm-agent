@@ -1,6 +1,6 @@
 /**
  * Deterministic rule engine for management cycle.
- * Computes actions for each position: CLOSE | CLAIM | STAY | INSTRUCTION
+ * Computes actions for each position: CLOSE | CLAIM | STAY
  */
 
 import { log } from "../../core/logger.js";
@@ -15,7 +15,7 @@ import { computeAdaptiveStopLoss, computeAdaptiveOorWait } from "../state/pnl.js
 /**
  * Compute management actions for all positions using deterministic rules.
  * Returns a Map of position_address → { action, rule?, reason? }
- * action: "CLOSE" | "CLAIM" | "STAY" | "INSTRUCTION"
+ * action: "CLOSE" | "CLAIM" | "STAY"
  */
 export function computeManagementActions(positionData, exitMap, config, getTrackedPositionFn) {
   const actionMap = new Map();
@@ -25,12 +25,7 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
       actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
       continue;
     }
-    // Instruction-set — pass to LLM, can't parse in JS
-    if (p.instruction) {
-      actionMap.set(p.position, { action: "INSTRUCTION" });
-      continue;
-    }
-
+    // Legacy prose instructions cannot override numeric safety and exit rules.
     // Sanity-check PnL against tracked history — API sometimes returns bad data
     const tracked = getTrackedPositionFn ? getTrackedPositionFn(p.position) : getTrackedPosition(p.position);
     const pnlSuspect = (() => {

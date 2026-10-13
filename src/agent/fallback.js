@@ -44,8 +44,7 @@ let _callWithRetryImpl = async (client, model, messages, tools, options = {}) =>
       response = await getClient().chat.completions.create({
         model: usedModel,
         messages,
-        tools,
-        tool_choice: options.toolChoice ?? "auto",
+        ...(tools?.length ? { tools, tool_choice: options.toolChoice ?? "auto" } : {}),
         temperature: options.temperature,
         max_tokens: options.maxTokens,
       });

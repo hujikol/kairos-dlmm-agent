@@ -54,13 +54,7 @@ export async function swapToken({ input_mint, output_mint, amount }) {
     return { success: true, message: "Input and output mints are the same — skipped." };
   }
 
-  if (isDryRun()) {
-    return {
-      dry_run: true,
-      would_swap: { input_mint, output_mint, amount },
-      message: "DRY RUN — no transaction sent",
-    };
-  }
+  if (isDryRun()) return (await import("../../core/paper-wallet.js")).swapPaperTokens({ input_mint, output_mint, amount });
 
   try {
     log("info", "swap", `${amount} of ${input_mint} → ${output_mint}`);

@@ -1,0 +1,14 @@
+**/node_modules
+.git
+.env*
+**/*.db*
+**/logs
+coverage
+user-config.json
+gmgn-config.json
+**/*keypair*
+**/*wallet*.json
+test
+docs
+.agents
+.codex

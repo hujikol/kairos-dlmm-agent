@@ -1,3 +1,5 @@
+import { getPaperPosition, listPaperPositions } from "../paper-wallet.js";
+import { isDryRun } from "../../config.js";
 /**
  * Position Registry — position CRUD for the local SQLite registry.
  * All functions share the same getDB() from ../db.js.
@@ -262,6 +264,7 @@ export function setPositionInstruction(position_address, instruction) {
  * @returns {Array<Object>} Array of position objects with bin_range, notes, etc. parsed from JSON
  */
 export function getTrackedPositions(openOnly = false) {
+  if (isDryRun()) return listPaperPositions(openOnly);
   const db = getDB();
   const rows = openOnly
     ? db.prepare("SELECT * FROM positions WHERE closed = 0").all()
@@ -283,6 +286,7 @@ export function _clearTrackedPositionOverride() {
 }
 
 export function getTrackedPosition(position_address) {
+  if (position_address?.startsWith("paper_")) return getPaperPosition(position_address);
   const override = _getCachedPosition(position_address);
   if (override) return override;
 

@@ -6,14 +6,13 @@
 import { log } from "./logger.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
-import { getDB } from "./db.js";
 import {
   timers,
   _busyState,
   _timersState,
 } from "./state/scheduler-state.js";
 import { checkDailyCircuitBreaker, getDailyPnL } from "./daily-tracker.js";
-import { config } from "../config.js";
+import { config, isDryRun } from "../config.js";
 import { captureAlert } from "../instrument.js";
 import { getTrackedPosition } from "./state/registry.js";
 import { updatePnlAndCheckExits } from "./state/pnl.js";
@@ -34,13 +33,12 @@ import {
   buildAndSendConsolidatedReport,
 } from "./management-helpers.js";
 import { SCREENING_COOLDOWN_MS } from "./constants.js";
-import { defaultGateway as agentGateway } from "./agent-gateway.js";
 import { startCycleOutcome, updateCycleOutcome, finalizeCycleOutcome } from "./cycle-outcome.js";
 
-export async function runManagementCycle({ silent = false, gateway = agentGateway } = {}) {
+export async function runManagementCycle({ silent = false } = {}) {
   const cycleStart = Date.now();
-  const cycleId = startCycleOutcome("management");
   if (_busyState._managementBusy) return null;
+  const cycleId = startCycleOutcome("management");
   _busyState._managementBusy = true;
   timers.managementLastRun = Date.now();
   log("debug", "cron", "Starting management cycle");
@@ -49,7 +47,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
   try {
     const posStart = Date.now();
-    const [livePositions, currentBalance] = await Promise.all([
+    const [livePositions, _currentBalance] = await Promise.all([
       getMyPositions({ force: true }).catch(e => { log("warn", "cron", `getMyPositions failed: ${e?.message ?? String(e)}`); return null; }),
       getWalletBalances(),
     ]);
@@ -83,7 +81,7 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
 
     // Snapshot + load pool memory
     const positionData = positions.map((p) => {
-      recordPositionSnapshot(p.pool, p);
+      if (!isDryRun()) recordPositionSnapshot(p.pool, p);
       return { ...p, recall: recallForPool(p.pool) };
     });
 
@@ -101,7 +99,6 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
     const actionMap = computeManagementActions(positionData, exitMap, config, getTrackedPosition);
 
     // ── Build JS report ──────────────────────────────────────────────
-    const needsAction = [...actionMap.values()].filter(a => a.action !== "STAY");
     mgmtReport = buildManagementReport(positionData, actionMap, positions, config);
 
     // ── Execute deterministic CLOSE/CLAIM directly (no LLM) ─────────
@@ -113,67 +110,20 @@ export async function runManagementCycle({ silent = false, gateway = agentGatewa
       const a = actionMap.get(p.position);
       return a?.action === "CLAIM";
     });
-    const instructionActions = positionData.filter(p => {
-      const a = actionMap.get(p.position);
-      return a?.action === "INSTRUCTION";
-    });
-
     // Execute via executor module
     const { closeResults: _closeResults, mgmtReportAdditions } = await executeActions(
       closeActions, claimActions, config, actionMap
     );
-    for (const addition of _closeResults) {
-      mgmtReport += `
-${addition}`;
-    }
     for (const addition of mgmtReportAdditions) {
       mgmtReport += `
 ${addition}`;
     }
 
     for (const cr of _closeResults) {
-      const pnlVal = cr.pnl_pct ?? cr.pnl_usd ?? null;
+      const pnlVal = cr.result?.pnl_pct ?? cr.result?.pnl_usd ?? null;
       if (pnlVal !== null) {
         updateCycleOutcome(cycleId, { pnl_at_close: pnlVal });
       }
-    }
-
-    for (const position of closeActions) {
-      if (position.pool) {
-        const db = getDB();
-        db.prepare(
-          "UPDATE rejected_candidates SET pnl_at_close = ? WHERE pool_address = ? AND pnl_at_close IS NULL"
-        ).run(position.pnl_pct ?? position.pnl_usd ?? null, position.pool);
-      }
-    }
-
-    // Only INSTRUCTION actions go to LLM (require interpretation)
-    if (instructionActions.length > 0) {
-      log("debug", "cron", `Management: ${instructionActions.length} INSTRUCTION action(s) — invoking LLM`);
-
-      const cur = config.management.solMode ? "◎" : "$";
-      const actionBlocks = instructionActions.map((p) => {
-        const _act = actionMap.get(p.position);
-        return [
-          `POSITION: ${p.pair} (${p.position})`,
-          `  pool: ${p.pool}`,
-          `  action: INSTRUCTION`,
-          `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd} | fee_per_tvl_24h: ${p.fee_per_tvl_24h ?? "?"}%`,
-          `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
-          `  instruction: "${p.instruction}"`,
-        ].filter(Boolean).join("\n");
-      }).join("\n\n");
-
-      const { content } = await gateway.runManagementCycle({
-        actionBlocks,
-        actionPositions: instructionActions,
-        currentBalance,
-        livePositions,
-      });
-
-      mgmtReport += `\n\n${content}`;
-    } else if (closeActions.length === 0 && claimActions.length === 0) {
-      log("debug", "cron", "Management: all positions STAY — skipping");
     }
 
     // ═══════════════════════════════════════════
@@ -184,7 +134,7 @@ ${addition}`;
 
     // Trigger screening after management if we expect to be under max positions.
     // Skip if circuit breaker is in halt mode or all closed pools are on cooldown.
-    const closesAttempted = needsAction.filter(a => a.action === "CLOSE" || a.action === "INSTRUCTION").length;
+    const closesAttempted = _closeResults.filter(r => r.success && !r.result?.dry_run).length;
     const afterCount = Math.max(0, positions.length - closesAttempted);
     const lastTriggeredAt = _timersState.screeningLastTriggered;
 
@@ -223,6 +173,7 @@ ${addition}`;
     _busyState._managementBusy = false;
     log("info", "cron", `Management cycle complete: ${finallyStart - cycleStart}ms total`);
     // Drain queued Telegram commands after releasing the busy flag (fire-and-forget)
+    finalizeCycleOutcome(cycleId);
     drainTelegramQueue();
     if (!silent && telegramIsEnabled()) {
       // Batch OOR positions
@@ -253,6 +204,5 @@ ${addition}`;
       log("info", "cron", `Management cycle finally complete: ${Date.now() - finallyStart}ms (silent or telegram disabled)`);
     }
   }
-  finalizeCycleOutcome(cycleId);
   return mgmtReport;
 }

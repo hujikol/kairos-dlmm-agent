@@ -1,3 +1,4 @@
+import { isDryRun } from "../../config.js";
 import { addrShort } from "../../tools/addrShort.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "../helius/normalize.js";
@@ -66,6 +67,10 @@ export async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
  * @returns {Promise<Object>} { pnl_usd, pnl_pct, current_value_usd, unclaimed_fee_usd, all_time_fees_usd, fee_per_tvl_24h, in_range, lower_bin, upper_bin, active_bin, age_minutes } or { error }
  */
 export async function getPositionPnl({ pool_address, position_address }) {
+  if (isDryRun()) {
+    const p = await (await import("../../core/paper-wallet.js")).markPaperPosition(position_address);
+    return { ...p, current_value_usd: p.total_value_usd, unclaimed_fee_usd: p.unclaimed_fees_usd, all_time_fees_usd: p.fees_earned_usd };
+  }
   pool_address = normalizeMint(pool_address);
   position_address = normalizeMint(position_address);
 

@@ -48,6 +48,7 @@ async function saveChatId(id) {
 // ─── Queue System & Rate Limiting ────────────────────────────────
 const _outboundQueue = [];
 let _isSending = false;
+const MAX_OUTBOUND_QUEUE = 100;
 
 async function processQueue() {
   if (_isSending || _outboundQueue.length === 0) return;
@@ -67,6 +68,7 @@ async function processQueue() {
 }
 
 function enqueueMessage(task) {
+  if (_outboundQueue.length >= MAX_OUTBOUND_QUEUE) throw new Error("Telegram outbound queue full");
   _outboundQueue.push(queuedTask("telegram_outbound", task));
   diagnostic("queue_depth", { source: "telegram_outbound", depth: _outboundQueue.length, processing: _isSending });
   processQueue();
@@ -86,11 +88,8 @@ export function isEnabled() {
  */
 export async function sendMessage(text, parseMode = "Markdown") {
   if (!TOKEN || !chatId) { log("warn", "telegram", `sendMessage skipped: TOKEN=${!!TOKEN} chatId=${chatId}`); return; }
-  if (isDryRun()) {
-    log("debug", "telegram", "DRY_RUN: skipping send", { text: String(text).slice(0, 80) });
-    return;
-  }
-  const finalText = config.cavemanEnabled ? caveman(String(text)) : String(text);
+  const boundedText = `${isDryRun() ? "[PAPER] " : ""}${String(text)}`.slice(0, 4096);
+  const finalText = config.cavemanEnabled ? caveman(boundedText) : boundedText;
   // Return the queue promise so callers await the actual send, not just enqueue
   return new Promise((resolve) => {
     enqueueMessage(async () => {
@@ -141,14 +140,8 @@ export async function sendMessage(text, parseMode = "Markdown") {
 export async function sendMessageDirect(text) {
   if (!TOKEN) { log("warn", "telegram", `sendMessageDirect skipped: TOKEN not set`); return; }
   if (!chatId) { log("warn", "telegram", `sendMessageDirect skipped: chatId not set`); return; }
-  if (isDryRun()) {
-    log("debug", "telegram", "DRY_RUN: skipping direct send", { text: String(text).slice(0, 80) });
-    return;
-  }
-  const safeText = escapeHTMLLocal(String(text)).slice(0, 4096);
+  const safeText = escapeHTMLLocal(`${isDryRun() ? "[PAPER] " : ""}${String(text)}`).slice(0, 4096);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
     const res = await fetch(`${BASE}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -157,9 +150,8 @@ export async function sendMessageDirect(text) {
         text: safeText,
         parse_mode: "HTML",
       }),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(8000),
     });
-    clearTimeout(timeout);
     if (!res.ok) {
       log("error", "telegram", `sendMessageDirect failed: ${res.status}`);
     }
@@ -181,17 +173,14 @@ export async function sendMessageDirect(text) {
 export async function sendChatAction(action = "typing") {
   if (!TOKEN) return;
   if (!chatId) return;
-  if (isDryRun()) return;
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+
     await fetch(`${BASE}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, action }),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(5000),
     });
-    clearTimeout(timeout);
   } catch (e) {
     // Silently ignore — chat action is non-critical
   }
@@ -225,11 +214,7 @@ function sanitizeHtmlForTelegram(html) {
  */
 export async function sendHTML(html) {
   if (!TOKEN || !chatId) { log("warn", "telegram", `sendHTML skipped: TOKEN=${!!TOKEN} chatId=${chatId}`); return; }
-  if (isDryRun()) {
-    log("debug", "telegram", "DRY_RUN: skipping send", { html: String(html).slice(0, 80) });
-    return;
-  }
-  const clean = sanitizeHtmlForTelegram(html);
+  const clean = sanitizeHtmlForTelegram(`${isDryRun() ? "[PAPER] " : ""}${String(html)}`.slice(0, 4096));
   const finalText = config.cavemanEnabled ? caveman(clean) : clean;
   return new Promise((resolve) => {
     enqueueMessage(async () => {
@@ -280,11 +265,8 @@ export async function sendHTML(html) {
  */
 export async function sendRichMessage(markdown) {
   if (!TOKEN || !chatId) { log("warn", "telegram", `sendRichMessage skipped: TOKEN=${!!TOKEN} chatId=${chatId}`); return; }
-  if (isDryRun()) {
-    log("debug", "telegram", "DRY_RUN: skipping rich message", { text: String(markdown).slice(0, 80) });
-    return;
-  }
-  const finalText = config.cavemanEnabled ? caveman(String(markdown)) : String(markdown);
+  const boundedMarkdown = `${isDryRun() ? "[PAPER] " : ""}${String(markdown)}`.slice(0, 32768);
+  const finalText = config.cavemanEnabled ? caveman(boundedMarkdown) : boundedMarkdown;
   let plainFallback = false;
   await new Promise((resolve) => {
     enqueueMessage(async () => {
@@ -381,7 +363,7 @@ async function poll(onMessage) {
  * @returns {void}
  */
 export function startPolling(onMessage) {
-  if (!TOKEN) return;
+  if (!TOKEN || _polling) return;
   _polling = true;
   poll(onMessage); // fire-and-forget
   log("info", "telegram", "Bot polling started");

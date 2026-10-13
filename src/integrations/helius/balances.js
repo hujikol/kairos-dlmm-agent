@@ -1,6 +1,6 @@
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { getConnection } from "../solana.js";
-import { config } from "../../config.js";
+import { config, isDryRun } from "../../config.js";
 import { log } from "../../core/logger.js";
 import { normalizeMint } from "./normalize.js";
 import { getWallet } from "./swaps.js";
@@ -119,10 +119,13 @@ export async function getBalancesViaRpc(walletAddress) {
 export async function getWalletBalances() {
   // ─── Check cache first (CacheManager handles TTL) ─────────────
   const cached = balanceCache.get(_CACHE_KEY);
+  if (isDryRun() && balanceCache.getWithMetadata(_CACHE_KEY)?.expiresAt !== Infinity) return (await import("../../core/paper-wallet.js")).getPaperBalances();
   if (cached !== undefined) {
     log("info", "wallet", "Using cached balance");
     return cached;
   }
+
+  if (isDryRun()) return (await import("../../core/paper-wallet.js")).getPaperBalances();
 
   let walletAddress;
   try {
@@ -208,6 +211,7 @@ export async function getWalletBalances() {
  * @returns {Promise<number>} Token balance (SOL-denominated for native SOL)
  */
 export async function getMintBalance(mint) {
+  if (isDryRun()) return (await import("../../core/paper-wallet.js")).paperMintBalance(normalizeMint(mint));
   const connection = getConnection();
   const wallet = getWallet();
   const mintPubKey = new PublicKey(normalizeMint(mint));

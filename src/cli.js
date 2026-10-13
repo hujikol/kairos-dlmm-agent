@@ -163,9 +163,9 @@ Output: { pool_address, known, name, total_deploys, win_rate, avg_pnl_pct, last_
 \`\`\`
 
 ### kairos evolve
-Runs evolveThresholds() over all closed position data and updates user-config.json.
+Proposes numeric entry rules from SQLite trade history and activates only after fixed validation gates pass.
 \`\`\`
-Output: { evolved, changes, rationale }
+Output: { activated, rules, reason, validation }
 \`\`\`
 
 ### kairos blacklist add --mint <addr> --reason <text>

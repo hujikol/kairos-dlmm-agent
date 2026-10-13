@@ -114,44 +114,10 @@ export async function deployPosition({
   }
 
   if (isDryRun()) {
-    const totalBins = activeBinsBelow + activeBinsAbove;
-    const finalAmountY = amount_y ?? amount_sol ?? 0;
-    const finalAmountX = amount_x ?? 0;
-    const fakePosition = "dry_" + addrShort(pool_address) + "_" + Date.now();
-    trackPosition({
-      position: fakePosition,
-      pool: pool_address,
-      pool_name,
-      strategy: activeStrategy || "Unknown",
-      bin_range: { lower: activeBinsBelow, upper: activeBinsAbove },
-      amount_sol: finalAmountY,
-      amount_x: finalAmountX,
-      active_bin: null,
-      bin_step,
-      volatility,
-      fee_tvl_ratio,
-      organic_score,
-      initial_value_usd,
-      base_mint,
-      market_phase,
-      strategy_id,
-      conviction,
-    });
-    updatePositionStatus(fakePosition, "active");
-    return {
-      dry_run: true,
-      position: fakePosition,
-      would_deploy: {
-        pool_address,
-        strategy: activeStrategy,
-        bins_below: activeBinsBelow,
-        bins_above: activeBinsAbove,
-        amount_x: finalAmountX,
-        amount_y: finalAmountY,
-        wide_range: totalBins > 69,
-      },
-      message: "DRY RUN — no transaction sent",
-    };
+    const { deployPaperPosition } = await import("../../core/paper-wallet.js");
+    return deployPaperPosition({ pool_address, amount_sol, amount_x, amount_y,
+      strategy: activeStrategy, bins_below: activeBinsBelow, bins_above: activeBinsAbove,
+      pool_name, bin_step, base_fee, base_mint, volatility, fee_tvl_ratio, organic_score });
   }
 
   const { StrategyType } = await getDLMM();
@@ -163,8 +129,8 @@ export async function deployPosition({
   const maxBinId = activeBin.binId + activeBinsAbove;
 
   // Sanity check: range must contain the active bin (prevent bearish setup on bullish intent)
-  if (maxBinId <= activeBin.binId) {
-    const errMsg = `Invalid bin range: maxBinId=${maxBinId} <= activeBin=${activeBin.binId} — range would be entirely below current price and go OOR immediately. Override by explicitly setting bins_above > 0.`;
+  if (maxBinId < activeBin.binId || minBinId >= maxBinId) {
+    const errMsg = `Invalid bin range: maxBinId=${maxBinId} activeBin=${activeBin.binId}, minBinId=${minBinId} — range must contain the active bin and have positive width.`;
     log("error", "deploy", errMsg);
     return { success: false, error: errMsg };
   }
@@ -473,9 +439,11 @@ const _positionsInflight = new Map(); // walletAddress → Promise
 export async function getMyPositions({ force = false, silent = false } = {}) {
   // Test injection check — setForTesting uses Infinity expiry so always takes precedence
   const testOverride = positionsCache.get("positions");
-  if (testOverride !== undefined) {
+  if (testOverride !== undefined && positionsCache.getWithMetadata("positions")?.expiresAt === Infinity) {
     return Promise.resolve(testOverride);
   }
+
+  if (isDryRun()) return (await import("../../core/paper-wallet.js")).getPaperPositions();
 
   let walletAddress;
   try {

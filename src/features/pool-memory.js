@@ -52,16 +52,12 @@ export function recordPoolDeploy(poolAddress, deployData) {
     );
 
     // 3. Update pool_memory aggregates
-    const deploys = db.prepare('SELECT pnl_pct FROM pool_deploys WHERE pool_address = ?').all(poolAddress);
-    const totalDeploys = deploys.length;
-    const withPnl = deploys.filter(d => d.pnl_pct != null);
-
-    let avgPnl = 0;
-    let winRate = 0;
-    if (withPnl.length > 0) {
-      avgPnl = Math.round((withPnl.reduce((s, d) => s + d.pnl_pct, 0) / withPnl.length) * 100) / 100;
-      winRate = Math.round((withPnl.filter(d => d.pnl_pct >= 0).length / withPnl.length) * 100) / 100;
-    }
+    const aggregate = db.prepare(`SELECT COUNT(*) AS total,
+      AVG(pnl_pct) AS avg_pnl, AVG(CASE WHEN pnl_pct IS NULL THEN NULL WHEN pnl_pct >= 0 THEN 1.0 ELSE 0.0 END) AS win_rate
+      FROM pool_deploys WHERE pool_address = ?`).get(poolAddress);
+    const totalDeploys = aggregate.total;
+    const avgPnl = Math.round((aggregate.avg_pnl ?? 0) * 100) / 100;
+    const winRate = Math.round((aggregate.win_rate ?? 0) * 100) / 100;
 
     const lastOutcome = (pnl_pct ?? 0) >= 0 ? "profit" : "loss";
 
@@ -109,7 +105,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
       WHERE pool_address = ?
     `).run(
       baseMint, totalDeploys, avgPnl, winRate, closed_at, lastOutcome,
-      JSON.stringify(notes), cooldownUntil, poolAddress
+      JSON.stringify(notes.slice(-50)), cooldownUntil, poolAddress
     );
 
     log("info", "pool-memory", `Recorded deploy for ${poolState.name || addrShort(poolAddress)}: PnL ${pnl_pct}%`);
@@ -133,18 +129,11 @@ export function isTokenToxic(baseMint) {
   if (!baseMint) return false;
   const db = getDB();
   
-  const query = `
-    SELECT d.pnl_pct 
-    FROM pool_deploys d
-    JOIN pool_memory m ON m.pool_address = d.pool_address
-    WHERE m.base_mint = ?
-  `;
-  const deploys = db.prepare(query).all(baseMint);
-  
-  if (deploys.length < 3) return false;
-  
-  const losers = deploys.filter(d => (d.pnl_pct ?? 0) < -5).length;
-  return (losers / deploys.length) > 0.66;
+  const summary = db.prepare(`SELECT COUNT(*) AS total,
+    SUM(CASE WHEN d.pnl_pct < -5 THEN 1 ELSE 0 END) AS losses
+    FROM pool_deploys d JOIN pool_memory m ON m.pool_address = d.pool_address
+    WHERE m.base_mint = ?`).get(baseMint);
+  return summary.total >= 3 && summary.losses / summary.total > 0.66;
 }
 
 // ─── Read ──────────────────────────────────────────────────────
@@ -298,7 +287,7 @@ export function addPoolNote({ pool_address, note }) {
 
     notes.push({ note, added_at: new Date().toISOString() });
 
-    db.prepare('UPDATE pool_memory SET notes = ? WHERE pool_address = ?').run(JSON.stringify(notes), pool_address);
+    db.prepare('UPDATE pool_memory SET notes = ? WHERE pool_address = ?').run(JSON.stringify(notes.slice(-50)), pool_address);
   });
 
   log("info", "pool-memory", `Note added to ${addrShort(pool_address)}: ${note}`);

@@ -41,6 +41,7 @@ async function drainQueue() {
  * @param {Function} fn - async function to execute
  */
 export function enqueueLPAgent(fn) {
+  if (queue.length >= 100) return Promise.reject(new Error("LPAgent queue full"));
   return new Promise((resolve, reject) => {
     queue.push({ fn: queuedTask("lpagent", fn), resolve, reject });
     diagnostic("queue_depth", { source: "lpagent", depth: queue.length, processing });

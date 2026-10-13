@@ -1,5 +1,5 @@
 import { getDB } from "./db.js";
-import { config } from "../config.js";
+import { config, isDryRun } from "../config.js";
 
 const DAILY_PROFIT_TARGET = config.risk.dailyProfitTarget ?? 2;
 const DAILY_LOSS_LIMIT = config.risk.dailyLossLimit ?? -5;
@@ -35,6 +35,12 @@ export async function getDailyPnL() {
   todayStart.setUTCHours(0, 0, 0, 0);
   const iso = todayStart.toISOString();
 
+  if (isDryRun()) {
+    const realized = db.prepare(`SELECT COALESCE(SUM(json_extract(data, '$.pnl_usd')), 0) AS total
+      FROM paper_positions WHERE closed = 1 AND json_extract(data, '$.closed_at') >= ?`).get(iso).total;
+    return { realized, threshold: DAILY_PROFIT_TARGET, lossLimit: DAILY_LOSS_LIMIT, source: "paper" };
+  }
+
   // Sum realized PnL from closed positions today
   const realized = db.prepare(
     "SELECT COALESCE(SUM(pnl_usd), 0) as total FROM performance WHERE closed_at >= ?",
@@ -53,7 +59,7 @@ export async function getUnrealizedPnL(positions) {
   const db = await getDB();
   const unrealized = positions.reduce((sum, p) => {
     if (p.closed) return sum;
-    const tracked = db.prepare("SELECT pnl_pct FROM positions WHERE position = ?").get(p.position);
+    const tracked = isDryRun() ? null : db.prepare("SELECT prev_pnl_pct AS pnl_pct FROM positions WHERE position = ?").get(p.position);
     const pnlPct = tracked?.pnl_pct ?? p.pnl_pct ?? 0;
     const valueUsd = p.total_value_usd ?? 0;
     return sum + (valueUsd * pnlPct / 100);

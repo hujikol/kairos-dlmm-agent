@@ -1,5 +1,7 @@
 import { stopMemoryWatchdog } from "../core/memory-watchdog.js";
 import { diagnostic } from "../core/diagnostics.js";
+import { stopAll } from "../core/cache-manager.js";
+import { stopCacheEviction } from "../tools/cache.js";
 import { closeDB } from "../core/db.js";
 import { stopCronJobs } from "../core/scheduler.js";
 import { stopPolling } from "../notifications/telegram.js";
@@ -31,6 +33,8 @@ async function shutdown(signal) {
     new Promise(r => setTimeout(r, 10_000)),
   ]);
 
+  stopAll();
+  stopCacheEviction();
   await closeDB();
   diagnostic("shutdown_completed");
   stopMemoryWatchdog();

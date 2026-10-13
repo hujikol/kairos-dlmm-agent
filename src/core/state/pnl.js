@@ -1,3 +1,4 @@
+import { savePaperPosition } from "../paper-wallet.js";
 /**
  * PnL exit signal detection — updatePnlAndCheckExits.
  *
@@ -105,7 +106,9 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     pos.out_of_range_since = null; // keep local cache in sync
   }
 
-  if (changed) {
+  if (changed && position_address.startsWith("paper_")) {
+    savePaperPosition({ ...pos, ...updates });
+  } else if (changed) {
     const db = getDB();
     const keys = Object.keys(updates);
     if (keys.length > 0) {

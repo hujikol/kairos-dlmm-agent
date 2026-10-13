@@ -229,6 +229,7 @@ async function runSafetyChecks(name, args) {
       // Override amount_y with conviction-sized amount (prevents LLM hallucination)
       const amountY = sizingResult.amount;
       args.amount_y = amountY;
+      if (Number.isFinite(balance.sol_price) && balance.sol_price > 0) args.initial_value_usd = amountY * balance.sol_price;
       if (args.amount_sol) args.amount_sol = amountY;
 
       log("info", "conviction_sizing", `Conviction: ${conviction} | Positions: ${positions.total_positions} | Deploy: ${amountY} SOL (wallet: ${balance.sol.toFixed(2)} SOL)`);

@@ -4,14 +4,12 @@ import { log } from "./core/logger.js";
 import { getWalletBalances } from "./integrations/helius.js";
 import { getMyPositions } from "./integrations/meteora.js";
 import { getTopCandidates } from "./screening/discovery.js";
-import { config, reloadScreeningThresholds } from "./config.js";
+import { config } from "./config.js";
 import { startCronJobs } from "./core/scheduler.js";
 import { startWatchdog } from "./watchdog.js";
 import { generateBriefing } from "./notifications/briefing.js";
-import { evolveThresholds, getPerformanceSummary } from "./core/lessons.js";
-import { getDB } from "./core/db.js";
 import { rl } from "./rl-shared.js";
-import { _telegramBusy } from "./telegram/index.js";
+import { _telegramBusy, drainTelegramQueue } from "./telegram/index.js";
 import {
   getStatusData,
   getBalanceData,
@@ -44,7 +42,7 @@ export async function runBusy(fn) {
   _telegramBusy._count++;
   try { await queuedTask("repl", fn)(); }
   catch (e) { log("warn", "repl", `REPL error: ${e?.message ?? e}`); }
-  finally { _telegramBusy._count--; }
+  finally { _telegramBusy._count--; drainTelegramQueue(); }
 }
 
 // ─── Session history ────────────────────────────────────────────────────────────
@@ -87,6 +85,7 @@ export async function runStartupFetch() {
     console.error(`Startup fetch failed: ${e.message}`);
   } finally {
     _telegramBusy._count--;
+    drainTelegramQueue();
   }
   return startupCandidates;
 }
@@ -99,29 +98,22 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
 
     // Number pick: deploy into pool N
     const pick = parseInt(input);
-    if (!isNaN(pick) && pick >= 1 && pick <= startupCandidates.length) {
+    if (!isNaN(pick) && pick >= 1 && pick <= (startupCandidates?.length || 0)) {
       await runBusy(async () => {
         const pool = startupCandidates[pick - 1];
         console.log(`\nDeploying ${config.management.deployAmountSol} SOL into ${pool.name}...\n`);
-        const { content: reply } = await agentLoop(
-          `Deploy ${config.management.deployAmountSol} SOL into pool ${pool.pool} (${pool.name}). Call get_active_bin first then deploy_position. Report result.`,
-          config.llm.maxSteps, [], "SCREENER", null, null, { requireTool: true }
-        );
-        console.log(`\n${reply}\n`);
+        const reply = await runScreeningCycle({ poolAddress: pool.pool });
+        console.log(`\n${reply || "No deployment passed the rules."}\n`);
         launchCron();
       });
-        startupCandidates = null;
+        startupCandidates = [];
       return;
     }
 
     if (input.toLowerCase() === "auto") {
       await runBusy(async () => {
-        console.log("\nAgent is picking and deploying...\n");
-        const { content: reply } = await agentLoop(
-          `get_top_candidates, pick the best one, get_active_bin, deploy_position with ${config.management.deployAmountSol} SOL. Execute now, don't ask.`,
-          config.llm.maxSteps, [], "SCREENER", null, null, { requireTool: true }
-        );
-        console.log(`\n${reply}\n`);
+        const reply = await runScreeningCycle();
+        console.log(`\n${reply || "No deployment passed the rules."}\n`);
         launchCron();
       });
       return;
@@ -186,7 +178,6 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
         const { candidates, total_eligible, total_screened } = await getCandidatesData({ limit: 5 });
         startupCandidates = candidates;
         console.log(`\nTop pools (${total_eligible} eligible from ${total_screened} screened):\n`);
-        startupCandidates = null;
         console.log(formatCandidates(candidates));
         console.log();
       });
@@ -219,53 +210,12 @@ export function setupReplLineHandler(buildPrompt, shutdown, runScreeningCycle, s
       return;
     }
 
-    if (input.startsWith("/learn")) {
+    if (input === "/evolve" || /^\/rules(?:\s|$)/.test(input)) {
       await runBusy(async () => {
-        const parts = input.split(" ");
-        const poolArg = parts[1] || null;
-        let poolsToStudy = [];
-        if (poolArg) {
-          poolsToStudy = [{ pool: poolArg, name: poolArg }];
-        } else {
-          console.log("\nFetching top pool candidates to study...\n");
-          const { candidates } = await getTopCandidates({ limit: 10 });
-          if (!candidates.length) { console.log("No eligible pools found to study.\n"); return; }
-          poolsToStudy = candidates.map(c => ({ pool: c.pool, name: c.name }));
-        }
-        console.log(`\nStudying top LPers across ${poolsToStudy.length} pools...\n`);
-        for (const p of poolsToStudy) console.log(`  • ${p.name || p.pool}`);
-        console.log();
-        const poolList = poolsToStudy.map((p, i) => `${i + 1}. ${p.name} (${p.pool})`).join("\n");
-        const { content: reply } = await agentLoop(
-          `Study top LPers across these ${poolsToStudy.length} pools by calling study_top_lpers for each:\n\n${poolList}\n\nFor each pool, call study_top_lpers then move to the next. After studying all pools:\n1. Identify patterns that appear across multiple pools (hold time, scalping vs holding, win rates).\n2. Note pool-specific patterns where behaviour differs significantly.\n3. Derive 4-8 concrete, actionable lessons using add_lesson. Prioritize cross-pool patterns — they're more reliable.\n4. Summarize what you learned.\n\nFocus on: hold duration, entry/exit timing, what win rates look like, whether scalpers or holders dominate.`,
-          config.llm.maxSteps, [], "GENERAL"
-        );
-        console.log(`\n${reply}\n`);
-      });
-      return;
-    }
-
-    if (input === "/evolve") {
-      await runBusy(async () => {
-        const perf = getPerformanceSummary();
-        if (!perf || perf.total_positions_closed < 5) {
-          const needed = 5 - (perf?.total_positions_closed || 0);
-          console.log(`\nNeed at least 5 closed positions to evolve. ${needed} more needed.\n`);
-          return;
-        }
-        const db = getDB();
-        const allPerformance = db.prepare('SELECT * FROM performance').all();
-        const result = evolveThresholds(allPerformance, config);
-        if (!result || Object.keys(result.changes).length === 0) {
-          console.log("\nNo threshold changes needed — current settings already match performance data.\n");
-        } else {
-          reloadScreeningThresholds();
-          console.log("\nThresholds evolved:");
-          for (const [key, val] of Object.entries(result.changes)) {
-            console.log(`  ${key}: ${result.rationale[key]}`);
-          }
-          console.log("\nSaved to user-config.json. Applied immediately.\n");
-        }
+        const { updateRules, getActiveRules, getRuleHistory, rollbackRules } = await import("./core/rule-memory.js");
+        const sub = input === "/evolve" ? "update" : input.slice(6).trim();
+        const result = sub === "update" ? await updateRules() : sub === "history" ? getRuleHistory() : sub === "rollback" ? rollbackRules() : getActiveRules();
+        console.log(JSON.stringify(result, null, 2));
       });
       return;
     }

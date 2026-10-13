@@ -22,10 +22,8 @@ import { positionsCache, poolCache } from "../../core/cache-manager.js";
  */
 export async function claimFees({ position_address }) {
   position_address = normalizeMint(position_address);
-  if (isDryRun()) {
-    recordClaim(position_address, 0);
-    return { dry_run: true, would_claim: position_address, message: "DRY RUN — no transaction sent" };
-  }
+  if (isDryRun()) return (await import("../../core/paper-wallet.js")).settlePaperPosition(position_address);
+  if (position_address.startsWith("paper_")) return { success: false, error: "Paper positions cannot be claimed in live mode" };
 
   const tracked = getTrackedPosition(position_address);
   if (tracked?.closed) {
@@ -441,9 +439,8 @@ export async function closePosition({ position_address, reason }) {
   position_address = normalizeMint(position_address);
   const tracked = getTrackedPosition(position_address);
 
-  if (isDryRun()) {
-    return { dry_run: true, would_close: position_address, message: "DRY RUN — no transaction sent" };
-  }
+  if (isDryRun()) return (await import("../../core/paper-wallet.js")).settlePaperPosition(position_address, true, reason);
+  if (position_address.startsWith("paper_")) return { success: false, error: "Paper positions cannot be closed in live mode" };
 
   // Get wallet BEFORE try block so it's always in scope for catch verification
   const wallet = getWallet();

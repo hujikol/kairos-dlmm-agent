@@ -12,6 +12,22 @@
 [![Helius](https://img.shields.io/badge/Helius%20RPC-orange)](https://helius.xyz)
 [![Telegram](https://img.shields.io/badge/Telegram-white?logo=telegram&logoColor=blue)](https://core.telegram.org)
 
+## Decision rules, paper wallet, and Docker
+
+Trading decisions now run through deterministic screening and management rules. AI only proposes three bounded numeric entry thresholds; updates activate automatically after fixed historical validation. Free-form AI trading and prose position overrides are disabled.
+
+`DRY_RUN=true` spends persistent DB money, seeded once with 10 paper SOL. Claims, closes, and swaps settle in the paper ledger. Learning persists across restarts and is available as labelled context for live rule proposals. Paper and live performance/rules remain separate.
+
+See [measured paper-run results](docs/HIGH-VOLUME-PAPER-RUN.md). Use the [high-volume paper preset](profiles/high-volume-paper.json) for three fee-ranked tokens with capped exposure. `npm run paper:soak -- 300` runs an isolated five-minute diagnostic session without wallet or Telegram credentials.
+
+Use `/rules`, `/rules update`, `/rules history`, and `/rules rollback` in Telegram or the terminal. See [Decision rules and deployment](docs/DECISION-RULES-AND-DEPLOYMENT.md) for validation limits, paper-model assumptions, migration/backup steps, and Docker deployment. Node 24 is the validated runtime.
+
+```sh
+DRY_RUN=true docker compose up -d --build
+```
+
+Docker configuration is provided. Image build/startup remains unverified on this host because the Docker daemon is unavailable.
+
 ## Feature Stack
 
 | | Core | Experimental |
@@ -30,18 +46,18 @@
 
 **Autonomous operation:** runs screening and management cycles on a cron schedule. No manual intervention required — the agent screens new pools, deploys positions, manages exits, claims fees, and swaps rewards to SOL automatically.
 
-**Screening cycle:** fetches top Meteora pools → filters by TVL, volume, organic score, holder count, bin step → checks for bot holders and common-funder bundles → simulates pool deploy for risk/confidence scoring → LLM screener picks the best candidate.
+**Screening cycle:** fetches top Meteora pools → filters by TVL, volume, organic score, holder count, bin step → checks for bot holders and common-funder bundles → simulates pool deploy for risk/confidence scoring → deterministic rules rank eligible candidates and execute the best candidate.
 
-**Management cycle:** fetches all open positions → updates PnL → checks trailing take-profit and stop-loss → detects out-of-range → deterministic rule engine decides CLOSE / CLAIM / STAY / INSTRUCTION → LLM called only when action needed.
+**Management cycle:** fetches all open positions → updates PnL → checks trailing take-profit and stop-loss → detects out-of-range → deterministic rule engine decides CLOSE / CLAIM / STAY → actions execute directly.
 
 **Safety layers:**
 - Token blocklist (pool-memory): blocks tokens with >66% loss rate across prior deploys
 - Circuit breaker: skips all trading if daily loss limit hit; skips new deploys if daily profit target hit
 - Emergency stop-loss: fires immediately on watchdog poll, no LLM needed
 - Duplicate deploy guard: blocks same pool and same base_mint twice
-- Once-per-session: deploy/swap/close limited to one use per session
+- AI boundary: free-form requests cannot invoke trading or configuration tools
 
-**Learning:** every closed position is recorded. After 5+ closes, `evolveThresholds()` adjusts config from actual win/loss patterns. Manual lessons can be added via `/teach add`.
+**Learning:** closed positions retain numeric outcomes in SQLite. After every fifth close, an AI rule proposal can activate only after at least 30 eligible trades and fixed validation checks. Paper results remain labelled and separate from live performance.
 
 **Hive Mind (experimental):** pulls shared lessons from a collective of agents. Pushes individual performance events back. 15-min background sync with disk cache.
 

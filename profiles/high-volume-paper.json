@@ -1,0 +1,69 @@
+{
+  "dryRun": true,
+  "rpcUrl": "https://api.mainnet-beta.solana.com",
+  "decisionRules": {
+    "minOrganic": 75,
+    "maxVolatility": 5,
+    "minFeeTvl": 0.1
+  },
+  "risk": {
+    "maxPositions": 3,
+    "maxPositionsPerToken": 1,
+    "dailyProfitTarget": 10,
+    "dailyLossLimit": -15
+  },
+  "thresholds": {
+    "timeframe": "5m",
+    "category": "trending",
+    "minTvl": 50000,
+    "maxTvl": 5000000,
+    "minVolume": 1000,
+    "minOrganic": 75,
+    "minHolders": 1000,
+    "minMcap": 500000,
+    "maxMcap": 1000000000,
+    "minBinStep": 10,
+    "maxBinStep": 125,
+    "minFeeActiveTvlRatio": 0.01,
+    "minTokenFeesSol": 30,
+    "maxBundlePct": 15,
+    "maxBotHoldersPct": 15,
+    "maxTop10Pct": 25,
+    "minTokenAgeHours": 12,
+    "maxTokenAgeHours": null,
+    "minSmartDegenCount": 0,
+    "minVolume24h": 100000,
+    "minVolumeTvl24h": 2,
+    "requireTokenAudit": true
+  },
+  "management": {
+    "maxDeployAmount": 0.25,
+    "deployAmountSol": 0.25,
+    "gasReserve": 0.5,
+    "stopLossPct": -8,
+    "takeProfitFeePct": 3,
+    "trailingTakeProfit": true,
+    "trailingTriggerPct": 1,
+    "trailingDropPct": 0.5,
+    "minClaimAmount": 1,
+    "outOfRangeWaitMinutes": 10,
+    "outOfRangeBinsToClose": 5,
+    "minFeePerTvl24h": 0.5,
+    "minAgeBeforeYieldCheck": 30,
+    "volatilityAdaptive": {
+      "stopLossHighVol": -8,
+      "stopLossLowVol": -6,
+      "stopLossWideRange": -8
+    }
+  },
+  "strategy": {
+    "strategy": "bid_ask",
+    "binsBelow": 20,
+    "binsAbove": 0
+  },
+  "schedule": {
+    "managementIntervalMin": 1,
+    "screeningIntervalMin": 2,
+    "pnlPollIntervalSec": 15
+  }
+}

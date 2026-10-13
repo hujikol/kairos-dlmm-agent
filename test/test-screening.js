@@ -55,4 +55,6 @@ async function main() {
   console.log("\n=== Screening tests complete ===");
 }
 
-main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
+// Explicit live smoke check; excluded from offline unit execution.
+import { test } from "node:test";
+test("live Pool Discovery API smoke check", { skip: process.env.KAIROS_LIVE_TESTS !== "true" }, main);

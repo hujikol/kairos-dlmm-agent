@@ -11,7 +11,6 @@ if (isHiveMindEnabled()) {
   log("hivemind", "Hive Mind not configured (hive.url / hive.apiKey missing)");
 }
 
-import { agentLoop } from "./agent/index.js";
 import { log } from "./core/logger.js";
 import { config, isDryRun } from "./config.js";
 import {
@@ -92,8 +91,11 @@ Commands:
   /briefing      Show morning briefing
   /candidates    Refresh top pool candidates
   /thresholds    Show screening thresholds
-  /learn [pool]  Study top LPers
-  /evolve        Evolve thresholds from performance data
+  /rules         Show active numeric entry rules
+  /rules update  Validate and activate an AI rule proposal
+  /rules history Show recent rule proposals and validations
+  /rules rollback Restore previous rules
+  /evolve        Alias for /rules update
 `);
 
   rl.prompt();
@@ -105,10 +107,7 @@ Commands:
   (async () => {
     try {
       await startCronJobs(); // ensure DB is ready before any DB calls
-      await agentLoop(`
-STARTUP CHECK
-1. get_wallet_balance. 2. get_my_positions. 3. If SOL >= ${config.management.minSolToOpen}: get_top_candidates then deploy ${config.management.deployAmountSol} SOL. 4. Report.
-      `, config.llm.maxSteps, [], "SCREENER");
+      await runScreeningCycle();
     } catch (e) {
       log("error", "startup", e.message);
     }

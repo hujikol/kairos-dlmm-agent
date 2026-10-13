@@ -1,3 +1,4 @@
+import { isDryRun } from "../config.js";
 import { getDB } from "./db.js";
 import { getMyPositions } from "../integrations/meteora.js";
 import { getWalletBalances } from "../integrations/helius.js";
@@ -11,6 +12,7 @@ export function toJakartaDate() {
 }
 
 export async function captureDailySnapshot() {
+  if (isDryRun()) return; // Paper history lives in paper_positions, never in live daily aggregates.
   const db = getDB();
   const today = toJakartaDate();
 
@@ -30,16 +32,15 @@ export async function captureDailySnapshot() {
   const unrealized = open.reduce((s, p) => s + (p.unrealized_pnl ?? 0), 0);
 
   db.prepare(`
-    INSERT INTO daily_snapshots (snapshot_date, total_positions, open_positions, realized_pnl_usd, unrealized_pnl_usd, sol_balance, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO daily_snapshots (snapshot_date, total_positions, total_pnl_realized, total_pnl_unrealized, sol_balance, snapshot_at)
+    VALUES (?, ?, ?, ?, ?, ?)
   `).run(
     today,
     (positions?.positions || []).length,
-    open.length,
     realized,
     unrealized,
     balance?.sol ?? 0,
-    Date.now()
+    new Date().toISOString()
   );
 
   log("info", "snapshot", `Daily snapshot ${today}: ${open.length} open, realized $${realized.toFixed(2)}, unrealized $${unrealized.toFixed(2)}, SOL ${balance?.sol ?? 0}`);

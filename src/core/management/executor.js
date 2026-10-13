@@ -82,8 +82,8 @@ export async function executeActions(closeActions, claimActions, config, actionM
     Promise.allSettled(closeActions.map(async (p) => {
       const a = actionMap?.get(p.position) || {};
       const reason = a?.reason || "agent decision";
-      const { notification } = await executeClose(p, reason, config);
-      return { position: p, reason, notification };
+      const { notification, result, success } = await executeClose(p, reason, config);
+      return { position: p, reason, notification, result, success };
     })),
     Promise.allSettled(claimActions.map(async (p) => {
       const { notification } = await executeClaim(p);
@@ -95,7 +95,7 @@ export async function executeActions(closeActions, claimActions, config, actionM
   for (const r of closeResultEntries) {
     if (r.status === "fulfilled") {
       mgmtReportAdditions.push(r.value.notification);
-      closeResults.push({ position: r.value.position, reason: r.value.reason });
+      closeResults.push({ position: r.value.position, reason: r.value.reason, result: r.value.result, success: r.value.success });
     } else {
       mgmtReportAdditions.push(`❌ Close error: ${r.reason?.message ?? r.reason}`);
     }

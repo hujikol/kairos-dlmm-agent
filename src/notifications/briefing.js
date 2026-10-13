@@ -1,7 +1,13 @@
+import { isDryRun } from "../config.js";
+import { getPaperPerformanceHistory, listPaperPositions } from "../core/paper-wallet.js";
 import { getDB } from "../core/db.js";
 import { getPerformanceSummary, getPerformanceHistory } from "../core/lessons.js";
 
 export async function generateBriefing() {
+  if (isDryRun()) {
+    const history = getPaperPerformanceHistory();
+    return `<b>Paper Briefing (24h)</b>\nOpen positions: ${listPaperPositions().length}\nClosed: ${history.count}\nSimulated PnL: $${history.total_pnl_usd.toFixed(2)}\nLearning remains in SQLite for live rule proposals.`;
+  }
   const db = getDB();
   const now = new Date();
   const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();

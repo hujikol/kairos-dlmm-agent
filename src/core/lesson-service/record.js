@@ -1,3 +1,5 @@
+import { isDryRun } from "../../config.js";
+import { getPaperPerformanceSummary, getPaperPerformanceHistory } from "../paper-wallet.js";
 /**
  * Lesson record-performance — persistence and auto-evolution orchestration.
  *
@@ -119,41 +121,8 @@ export async function recordPerformance(perf) {
   }
 
   if (allPerformance.length % MIN_EVOLVE_POSITIONS === 0) {
-    const { config, reloadScreeningThresholds } = await import("../../config.js");
-    const { evolveThresholds } = await import("./evolve.js");
-    const result = evolveThresholds(allPerformance, config);
-    if (result?.changes && Object.keys(result.changes).length > 0) {
-      reloadScreeningThresholds();
-      log("info", "evolve", `Auto-evolved thresholds: ${JSON.stringify(result.changes)}`);
-    }
-
-    const { recalculateDarwinWeights } = await import("./evolve.js");
-    await recalculateDarwinWeights(allPerformance, config);
-
-    // ── Evolve sizing matrix ─────────────────────────────────────────────────
-    try {
-      const { evolveSizingMatrix, getEffectiveMatrix } = await import("../sizing-evolver.js");
-      const { registerSizingMatrixLoader } = await import("../../config.js");
-      const sizingResult = evolveSizingMatrix({ windowDays: 60, minSamples: 8 });
-      // Make the evolved matrix available to computeDeployAmount without a restart
-      registerSizingMatrixLoader(() => sizingResult.matrix);
-      if (sizingResult.changes.length > 0) {
-        log("info", "evolve", `Sizing matrix evolved: ${JSON.stringify(sizingResult.changes)}`);
-      }
-    } catch (e) {
-      log("warn", "evolve", `Sizing matrix evolution failed: ${e?.message ?? String(e)}`);
-    }
-
-    // ── Auto filter evolution (MIN=5, analyzes winners vs losers) ─────────────
-    try {
-      const { analyzeFilterPerformance } = await import("../auto-filter-evolver.js");
-      const filterChanges = analyzeFilterPerformance();
-      if (filterChanges?.length > 0) {
-        log("info", "evolver", `Auto-evolved ${filterChanges.length} filter parameters`);
-      }
-    } catch (e) {
-      log("warn", "evolver", `Filter evolution failed: ${e?.message ?? String(e)}`);
-    }
+    const { updateRules } = await import("../rule-memory.js");
+    updateRules().catch(e => log("warn", "rules", `Rule update failed: ${e.message}`));
   }
 
   // Push to Hive Mind — individual lesson + performance event
@@ -171,7 +140,7 @@ export async function recordPerformance(perf) {
     pnl: { usd: entry.pnl_usd, pct: entry.pnl_pct },
     reasoning: `Closed: ${perf.close_reason || "agent decision"}`,
     metadata: {
-      initiated_by: "llm",
+      initiated_by: "rule",
       pool_name: perf.pool_name,
       strategy: perf.strategy,
       bin_step: perf.bin_step,
@@ -322,6 +291,13 @@ export function pruneNearMisses() {
 
 export function getLearningStats() {
   const db = getDB();
+  if (isDryRun()) {
+    const summary = getPaperPerformanceSummary();
+    return { source: "paper", performance_records: summary.total_positions_closed,
+      overall_win_rate: summary.win_rate_pct, total_pnl_usd: summary.total_pnl_usd, avg_pnl_pct: summary.avg_pnl_pct,
+      near_misses: 0, total_lessons: 0, archived_records: 0, pinned_lessons: 0, rated_useful: 0, rated_useless: 0,
+      evolution_cycles: db.prepare("SELECT COUNT(*) AS n FROM rule_updates WHERE source = 'paper' AND activated = 1").get().n };
+  }
 
   const perfCount = db.prepare('SELECT COUNT(*) as c FROM performance').get().c;
   const nearMissCount = db.prepare('SELECT COUNT(*) as c FROM near_misses').get().c;
@@ -373,6 +349,7 @@ export function getLearningStats() {
 // ─── Performance History & Summary ─────────────────────────────
 
 export function getPerformanceSummary() {
+  if (isDryRun()) return getPaperPerformanceSummary();
   const db = getDB();
   const stats = db.prepare(`
     SELECT COUNT(*) as count, SUM(pnl_usd) as total_pnl, SUM(pnl_pct) as pt_sum, SUM(range_efficiency) as eff_sum
@@ -396,6 +373,7 @@ export function getPerformanceSummary() {
 }
 
 export function getPerformanceHistory({ hours = 24, limit = 50 } = {}) {
+  if (isDryRun()) return getPaperPerformanceHistory({ hours, limit });
   const db = getDB();
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 

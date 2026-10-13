@@ -12,16 +12,14 @@ const DATAPI_JUP = process.env.JUPITER_DATAPI_BASE_URL || "https://datapi.jup.ag
 
 const POOL_DISCOVERY_BASE = process.env.POOL_DISCOVERY_API_BASE || "https://pool-discovery-api.datapi.meteora.ag";
 
-/** Wrap a promise with an AbortController timeout. */
-async function withTimeout(fn, ms) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
+/** Bound an already-started enrichment promise and observe late rejections. */
+async function withTimeout(promise, ms) {
+  let timer;
   try {
-    return await fn(controller.signal).then(v => { clearTimeout(timer); return v; });
-  } catch (e) {
-    clearTimeout(timer);
-    throw e;
-  }
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Enrichment deadline exceeded")), ms);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 // ─── Test injection ────────────────────────────────────────────────
@@ -62,10 +60,7 @@ async function fetchDiscordSignalCandidates() {
   const headers = getAgentMeridianHeaders();
 
   try {
-    const res = await Promise.race([
-      fetch(`${base}/signals/discord/candidates`, { headers }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("discord-signal-timeout")), 8_000)),
-    ]);
+    const res = await fetch(`${base}/signals/discord/candidates`, { headers, signal: AbortSignal.timeout(8_000) });
 
     if (!res.ok) {
       log("warn", "screening", `Discord signal candidates ${res.status}`);
@@ -194,7 +189,7 @@ export async function discoverPools({
     `&timeframe=${s.timeframe}` +
     `&category=${s.category}`;
 
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
 
   if (!res.ok) {
     throw new Error(`Pool Discovery API error: ${res.status} ${res.statusText}`);
@@ -450,7 +445,7 @@ export async function getPoolDetail({ pool_address, timeframe = "5m" } = {}) {
     `&filter_by=${encodeURIComponent(`pool_address=${pool_address}`)}` +
     `&timeframe=${timeframe}`;
 
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
 
   if (!res.ok) {
     throw new Error(`Pool detail API error: ${res.status} ${res.statusText}`);

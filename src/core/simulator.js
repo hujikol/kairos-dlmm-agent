@@ -9,7 +9,13 @@ import {
 
 export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
   if (!pool) throw new Error("simulatePoolDeploy: pool is required");
-  const { volume_24h, fee_pct, active_tvl, volatility, age_hours } = pool;
+  const { volume_24h, fee_pct, active_tvl, volatility } = pool;
+  const age_hours = pool.age_hours ?? pool.token_age_hours;
+  if (![volume_24h, fee_pct, active_tvl, volatility, age_hours, deployAmountSol, solPriceUsd].every(Number.isFinite) ||
+      volume_24h < 0 || fee_pct <= 0 || fee_pct > 100 || active_tvl <= 0 || volatility < 0 || age_hours < 0 ||
+      deployAmountSol <= 0 || solPriceUsd <= 0) {
+    return { passes: false, risk_score: 100, confidence: 0, net_daily_usd: 0, reason: "Missing or invalid simulation inputs" };
+  }
 
   // Expected daily fees: volume x fee_tier x your_liquidity_share
   const liquidityShare = (deployAmountSol * solPriceUsd) / (active_tvl || 1);
@@ -23,7 +29,7 @@ export function simulatePoolDeploy(pool, deployAmountSol, solPriceUsd) {
   const gasCost = GAS_COST_PER_TX_SOL * solPriceUsd;
 
   const netDaily = dailyFees - expectedIL / 365 - gasCost;
-  const minRequired = deployAmountSol * solPriceUsd * MIN_DAILY_ROI / 365;
+  const minRequired = deployAmountSol * solPriceUsd * MIN_DAILY_ROI;
 
   // Risk score 0-100
   let riskScore = 0;

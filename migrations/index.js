@@ -7,6 +7,10 @@ import * as m006 from "./006_evolver_state.js";
 import * as m007 from "./007_strategy_library.js";
 import * as m008 from "./008_cycle_outcomes.js";
 
+import * as m009 from "./009_rule_updates.js";
+
+import * as m010 from "./010_paper_positions.js";
+
 export const MIGRATIONS = [
   { id: 1, name: "initial_schema",     fn: m001.migrate },
   { id: 2, name: "add_missing_columns", fn: m002.migrate },
@@ -16,4 +20,6 @@ export const MIGRATIONS = [
   { id: 6, name: "evolver_state",     fn: m006.migrate },
   { id: 7, name: "strategy_library",  fn: m007.migrate },
   { id: 8, name: "cycle_outcomes_and_rejected_and_snapshots", fn: m008.migrate },
+  { id: 9, name: "rule_updates", fn: m009.migrate },
+  { id: 10, name: "paper_positions", fn: m010.migrate },
 ];
