@@ -42,6 +42,9 @@ const SCHEMA = {
   gasReserve:            { type: "number", min: 0,                 coerce: true },
   maxDeployAmount:       { type: "number", min: 0.01,              coerce: true },
   minFeePerTvl24h:       { type: "number", min: 0,                 coerce: true },
+  maxHoldHours:          { type: "number", min: 0,                 coerce: true },
+  fixedDeployAmount:     { type: "number", min: 0,                 coerce: true },
+  minAgeBeforeYieldCheck: { type: "number", min: 0,                coerce: true },
   // ─── Risk ─────────────────────────────────
   maxPositions:          { type: "number", min: 1,    max: 20,      coerce: true },
   dailyProfitTarget:     { type: "number", min: 0,                 coerce: true },
@@ -55,7 +58,9 @@ const SCHEMA = {
   screeningModel:        { type: "string", nullable: true },
   generalModel:          { type: "string", nullable: true },
   // ─── Strategy ────────────────────────────
-  binsBelow:              { type: "number", min: 1,                 coerce: true },
+  binsBelow:              { type: "number", min: 0,                 coerce: true },
+  binsAbove:              { type: "number", min: 0,                 coerce: true },
+  targetRangePct:         { type: "number", min: 0,                 coerce: true },
   // ─── Behavior ─────────────────────────────
   cavemanEnabled:         { type: "boolean" },
 };

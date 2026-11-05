@@ -9,11 +9,11 @@
   "risk": {
     "maxPositions": 3,
     "maxPositionsPerToken": 1,
-    "dailyProfitTarget": 10,
-    "dailyLossLimit": -15
+    "dailyProfitTarget": 8,
+    "dailyLossLimit": -8
   },
   "thresholds": {
-    "timeframe": "5m",
+    "timeframe": "1h",
     "category": "trending",
     "minTvl": 50000,
     "maxTvl": 5000000,
@@ -33,37 +33,40 @@
     "maxTokenAgeHours": null,
     "minSmartDegenCount": 0,
     "minVolume24h": 100000,
-    "minVolumeTvl24h": 2,
+    "minVolumeTvl24h": 0.5,
     "requireTokenAudit": true
   },
   "management": {
-    "maxDeployAmount": 0.25,
-    "deployAmountSol": 0.25,
+    "maxDeployAmount": 3,
+    "deployAmountSol": 3,
+    "fixedDeployAmount": 3,
     "gasReserve": 0.5,
-    "stopLossPct": -8,
-    "takeProfitFeePct": 3,
+    "stopLossPct": -6,
+    "takeProfitFeePct": 4,
     "trailingTakeProfit": true,
-    "trailingTriggerPct": 1,
-    "trailingDropPct": 0.5,
-    "minClaimAmount": 1,
-    "outOfRangeWaitMinutes": 10,
-    "outOfRangeBinsToClose": 5,
-    "minFeePerTvl24h": 0.5,
-    "minAgeBeforeYieldCheck": 30,
+    "trailingTriggerPct": 2,
+    "trailingDropPct": 0.75,
+    "minClaimAmount": 2,
+    "outOfRangeWaitMinutes": 60,
+    "outOfRangeBinsToClose": 8,
+    "minFeePerTvl24h": 1,
+    "minAgeBeforeYieldCheck": 90,
+    "maxHoldHours": 8,
     "volatilityAdaptive": {
-      "stopLossHighVol": -8,
+      "stopLossHighVol": -6,
       "stopLossLowVol": -6,
-      "stopLossWideRange": -8
+      "stopLossWideRange": -6
     }
   },
   "strategy": {
-    "strategy": "bid_ask",
-    "binsBelow": 20,
-    "binsAbove": 0
+    "strategy": "spot",
+    "binsBelow": 1,
+    "binsAbove": 0,
+    "targetRangePct": 0.12
   },
   "schedule": {
-    "managementIntervalMin": 1,
-    "screeningIntervalMin": 2,
-    "pnlPollIntervalSec": 15
+    "managementIntervalMin": 15,
+    "screeningIntervalMin": 30,
+    "pnlPollIntervalSec": 30
   }
 }

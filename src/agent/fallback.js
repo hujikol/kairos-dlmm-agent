@@ -47,6 +47,11 @@ let _callWithRetryImpl = async (client, model, messages, tools, options = {}) =>
         ...(tools?.length ? { tools, tool_choice: options.toolChoice ?? "auto" } : {}),
         temperature: options.temperature,
         max_tokens: options.maxTokens,
+        // Reasoning models (e.g. deepseek-v4.1-flash) spend the max_tokens budget on
+        // reasoning first, then return empty content with finish_reason=length. The
+        // budget expands to fill whatever you give it, so raising max_tokens does not
+        // help — the reasoning must be capped. "none" disables it entirely.
+        ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
       });
     } catch (err) {
       progress("llm_attempt_failed", { attempt: attempt + 1, errorName: err?.name, status: err?.status });

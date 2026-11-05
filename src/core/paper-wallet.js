@@ -103,6 +103,36 @@ export async function deployPaperPosition(args) {
   return { success: true, dry_run: true, position: position.position, pool_name: position.pair, message: "Paper deployment; no transaction signed" };
 }
 
+/**
+ * Value a single-sided QUOTE-token (SOL) position in SOL.
+ *
+ * Verified against live pool state: bins BELOW the active bin hold SOL, bins ABOVE hold the
+ * base token. So a SOL-only position has bins_below > 0 and bins_above = 0, with its range
+ * ending at the entry price:
+ *   price >= entry            -> 100% SOL (no exposure; no fees)
+ *   price <= entry*(1-width)  -> 100% base token (full downside)
+ *   in between                -> partial conversion (IL)
+ * Returns null for any other shape so the caller can fall back.
+ */
+function oneSidedValueSol(pos, price) {
+  const entry = Number(pos.entry_price);
+  const bs = Number(pos.bin_step);
+  const binsBelow = Number(pos.bins_below);
+  const amountSol = Number(pos.amount_sol);
+  if (!(entry > 0) || !(bs > 0) || !(binsBelow > 0) || !(amountSol > 0) || !(price > 0)) return null;
+  if (Number(pos.bins_above) > 0) return null; // base-token side / two-sided — not modelled here
+  const pb = entry;                                   // upper edge = entry price
+  const pa = entry * Math.pow(1 + bs / 10000, -binsBelow); // lower edge, binsBelow steps down
+  if (price >= pb) return amountSol;                  // still 100% SOL
+  const sqPa = Math.sqrt(pa), sqPb = Math.sqrt(pb);
+  const L = amountSol / (sqPb - sqPa);
+  if (price <= pa) return L * (1 / sqPa - 1 / sqPb) * price; // fully converted to base
+  const sqP = Math.sqrt(price);
+  const base = L * (1 / sqP - 1 / sqPb);
+  const quote = L * (sqP - sqPa);
+  return base * price + quote;
+}
+
 export async function markPaperPosition(address) {
   assertPaper();
   const initial = getPaperPosition(address);
@@ -123,8 +153,12 @@ export async function markPaperPosition(address) {
   const now = Date.now();
   const elapsedDays = Math.max(0, now - p.marked_at) / 86_400_000;
   const inRange = bin.binId >= p.lower_bin && bin.binId <= p.upper_bin;
-  // shortcut: constant-product value and pro-rata fees approximate DLMM fills; use exact bin inventory before trusting paper PnL as live evidence.
-  const value = p.amount_sol * prices[config.tokens.SOL] * Math.sqrt(price / p.entry_price);
+  // Price from bin geometry when the position is one-sided quote (SOL); fall back to the
+  // legacy sqrt curve for shapes this model does not cover.
+  const valueSol = oneSidedValueSol(p, price);
+  const value = valueSol != null
+    ? valueSol * prices[config.tokens.SOL]
+    : p.amount_sol * prices[config.tokens.SOL] * Math.sqrt(price / p.entry_price);
   const fees = p.in_range && inRange ? daily.volume * daily.fee_pct / 100 * (value / daily.active_tvl) * elapsedDays : 0;
   p.fees_earned_usd += fees;
   p.unclaimed_fees_usd += fees;

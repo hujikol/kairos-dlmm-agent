@@ -86,6 +86,12 @@ export function computeManagementActions(positionData, exitMap, config, getTrack
       actionMap.set(p.position, { action: "CLOSE", rule: 5, reason: "low yield" });
       continue;
     }
+    // Rule 6: maximum hold time — bounds the strategy to hours, not days.
+    const maxHoldHours = Number(config.management.maxHoldHours) || 0;
+    if (maxHoldHours > 0 && (p.age_minutes ?? 0) >= maxHoldHours * 60) {
+      actionMap.set(p.position, { action: "CLOSE", rule: 6, reason: `max hold ${maxHoldHours}h reached (age ${Math.round(p.age_minutes)}m)` });
+      continue;
+    }
     // Claim rule
     if ((p.unclaimed_fees_usd ?? 0) >= config.management.minClaimAmount) {
       actionMap.set(p.position, { action: "CLAIM" });

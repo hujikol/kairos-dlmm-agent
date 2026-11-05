@@ -78,11 +78,17 @@ export function applyHardFilters(allCandidates, config, prePositions) {
       const audit = ti?.audit;
       const top = Number(audit?.top_holders_pct), bots = Number(audit?.bot_holders_pct);
       const bundle = pool.bundle_pct ?? ti?.bundle_pct;
+      // bundle_pct is supplied only by the OKX enrichment relay. When that relay is
+      // unavailable the value is absent, and failing closed on "absent" rejects every
+      // candidate in the universe — a single enrichment outage silently disables all
+      // trading. Treat unknown as not-failed, but still reject any KNOWN out-of-bounds
+      // value. Every other audit check below stays strict.
+      const bundleKnown = Number.isFinite(bundle);
       if (!audit || audit.mint_disabled !== true || audit.freeze_disabled !== true || audit.suspicious === true ||
           audit.top_holders_pct == null || audit.bot_holders_pct == null ||
           !Number.isFinite(top) || top < 0 || top > config.screening.maxTop10Pct ||
           !Number.isFinite(bots) || bots < 0 || bots > config.screening.maxBotHoldersPct ||
-          !Number.isFinite(bundle) || bundle < 0 || bundle > config.screening.maxBundlePct ||
+          (bundleKnown && (bundle < 0 || bundle > config.screening.maxBundlePct)) ||
           !Number.isFinite(ti?.global_fees_sol) || ti.global_fees_sol < config.screening.minTokenFeesSol ||
           pool.risk_level === "high" || ti?.risk_level === "high" ||
           !Number.isFinite(pool.token_age_hours) || pool.token_age_hours < config.screening.minTokenAgeHours ||

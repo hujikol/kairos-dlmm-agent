@@ -125,11 +125,16 @@ export const config = {
     takeProfitFeePct:      u.management?.takeProfitFeePct      ?? u.takeProfitFeePct      ?? 5,
     minFeePerTvl24h:       u.management?.minFeePerTvl24h       ?? u.minFeePerTvl24h       ?? 7,
     minAgeBeforeYieldCheck: u.management?.minAgeBeforeYieldCheck ?? 60,
+    // Hard time-based exit. 0 disables. Needed because every other exit is
+    // price/yield driven — without this a quietly in-range position can run for days.
+    maxHoldHours:          u.management?.maxHoldHours          ?? 0,
     minSolToOpen:          u.management?.minSolToOpen          ?? u.minSolToOpen          ?? 0.55,
     gasReserve:            u.management?.gasReserve            ?? u.gasReserve            ?? GAS_RESERVE_DEFAULT,
     baseDeployAmount:      u.management?.baseDeployAmount      ?? u.deployAmountSol   ?? BASE_DEPLOY_AMOUNT_DEFAULT,
     deployAmountSol:       u.management?.deployAmountSol       ?? u.deployAmountSol   ?? DEPLOY_AMOUNT_SOL_DEFAULT,
     maxDeployAmount:       u.management?.maxDeployAmount       ?? u.maxDeployAmount       ?? MAX_DEPLOY_AMOUNT_DEFAULT,
+    // Constant stake per deploy, overriding the conviction sizing matrix when > 0.
+    fixedDeployAmount:     u.management?.fixedDeployAmount     ?? 0,
     trailingTakeProfit:    u.management?.trailingTakeProfit    ?? u.trailingTakeProfit    ?? true,
     trailingTriggerPct:    u.management?.trailingTriggerPct    ?? u.trailingTriggerPct    ?? 3,
     trailingDropPct:       u.management?.trailingDropPct       ?? u.trailingDropPct       ?? 1.5,
@@ -182,6 +187,12 @@ export const config = {
     strategy:  u.strategy?.strategy  ?? u.strategy  ?? "bid_ask",
     binsBelow: u.strategy?.binsBelow ?? 69,
     binsAbove: u.strategy?.binsAbove ?? 5,
+    // Optional: express the range as a price percentage instead of a raw bin count.
+    // A fixed bin count spans wildly different price widths across bin steps
+    // (20 bins = 2% at bin_step 10, but 22% at bin_step 100). When set, the gateway
+    // derives bins from the pool's bin_step so every position covers the same width.
+    // 0 / unset = use binsBelow/binsAbove verbatim.
+    targetRangePct: u.strategy?.targetRangePct ?? 0,
   },
 
   // ─── Scheduling ─────────────────────────
@@ -331,7 +342,12 @@ export function computeDeployAmount(walletSol, openPositions = 0, conviction = "
   const SIZING_MATRIX = getActiveMatrix();
   const level = SIZING_MATRIX[conviction] ?? SIZING_MATRIX.normal;
   // For very_high: use 1.05 if 0 positions, otherwise 0.70
-  const target = level[openPositions] ?? level.other ?? level.any;
+  // fixedDeployAmount (when > 0) overrides conviction scaling with a constant stake, so a
+  // paper run produces directly comparable trades. 0 / unset keeps matrix behaviour.
+  const fixed = Number(config.management.fixedDeployAmount);
+  const target = Number.isFinite(fixed) && fixed > 0
+    ? fixed
+    : (level[openPositions] ?? level.other ?? level.any);
 
   const ceil = Math.min(config.management.maxDeployAmount, deployable);
   const amount = Math.min(ceil, target);

@@ -21,11 +21,14 @@ test("high-volume preset requires audited tokens and bounded distinct-token expo
     { ...candidate, ti: { ...candidate.ti, audit: { ...candidate.ti.audit, mint_disabled: false } } },
     { ...candidate, ti: { ...candidate.ti, audit: { ...candidate.ti.audit, suspicious: true } } },
     { ...candidate, ti: { ...candidate.ti, audit: { ...candidate.ti.audit, top_holders_pct: null } } },
-    { ...candidate, pool: { ...candidate.pool, bundle_pct: null } },
+    { ...candidate, pool: { ...candidate.pool, bundle_pct: 99 } },
     { ...candidate, pool: { ...candidate.pool, holders: 10 } },
     { ...candidate, pool: { ...candidate.pool, token_age_hours: 1 } } ]) assert.equal(apply(bad), 0);
+  // bundle_pct is only available from OKX enrichment; an absent value must not reject
+  // every candidate when that relay is down. A KNOWN bad value still rejects (above).
+  assert.equal(apply({ ...candidate, pool: { ...candidate.pool, bundle_pct: null } }), 1, "unknown bundle is tolerated");
   assert.equal(applyHardFilters([candidate], cfg, { positions: [{ base_mint: "TokenA" }] }).length, 0);
   assert.equal(profile.risk.maxPositions, 3);
-  assert.equal(profile.management.maxDeployAmount, 0.25);
+  assert.equal(profile.management.maxDeployAmount, 3);
   assert.equal(profile.dryRun, true);
 });
